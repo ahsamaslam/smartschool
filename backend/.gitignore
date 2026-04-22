@@ -1,0 +1,48 @@
+# ============================================================
+# Smart School Backend .gitignore
+# ============================================================
+
+# ----- Python bytecode / cache -----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+# ----- Virtual environments --------------------------------
+venv/
+env/
+ENV/
+.venv/
+
+# ----- Environment & secrets -------------------------------
+.env
+.env.local
+*.env
+
+# ----- Generated media (runtime-created, not source code) --
+static/videos/
+static/audio/
+static/teacher_faces/
+
+# ----- Logs & temp -----------------------------------------
+*.log
+logs/
+
+# ----- Distribution / packaging ----------------------------
+dist/
+build/
+*.egg-info/
+
+# ----- Tests / coverage ------------------------------------
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ----- IDE / OS --------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

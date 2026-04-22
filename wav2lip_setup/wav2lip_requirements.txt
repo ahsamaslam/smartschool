@@ -1,0 +1,11 @@
+# Wav2Lip dependencies — install into wav2lip_env AFTER PyTorch
+# Run: $pip = "e:\Smart School\wav2lip_env\Scripts\pip.exe"
+#      & $pip install -r wav2lip_setup\wav2lip_requirements.txt
+
+numpy==1.26.4
+opencv-python==4.10.0.84
+librosa==0.10.2
+numba==0.60.0
+scipy==1.13.1
+tqdm==4.66.4
+batch_face==1.5.4
