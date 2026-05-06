@@ -1,8 +1,15 @@
+import path from "node:path";
+import os from "node:os";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// Keep Vite's cache OUT of OneDrive — EPERM often happens when sync locks node_modules/.vite
+const viteCacheDir = path.join(os.tmpdir(), "smartschool-frontend-vite-cache");
+
 // https://vitejs.dev/config/
 export default defineConfig({
+  cacheDir: viteCacheDir,
+
   plugins: [react()],
 
   server: {

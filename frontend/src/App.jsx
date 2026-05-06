@@ -45,8 +45,15 @@ const TeacherReportsMgr = lazy(() => import("./pages/manager/TeacherReports"));
 const AdminDashboard = lazy(() => import("./pages/admin/Dashboard"));
 const AdminUsers = lazy(() => import("./pages/admin/Users"));
 const AdminSchools = lazy(() => import("./pages/admin/Schools"));
+const AdminTeachers = lazy(() => import("./pages/admin/Teachers"));
+const AdminStudents = lazy(() => import("./pages/admin/Students"));
 const AdminCurriculum = lazy(() => import("./pages/admin/Curriculum"));
+const AdminLibrary = lazy(() => import("./pages/admin/Library"));
+const AdminAIParser = lazy(() => import("./pages/admin/AIParser"));
 const AdminVideos = lazy(() => import("./pages/admin/Videos"));
+const AdminSlides = lazy(() => import("./pages/admin/Slides"));
+const AdminRecordLecture = lazy(() => import("./pages/admin/RecordLecture"));
+const AdminLibraryTopicPresent = lazy(() => import("./pages/admin/LibraryTopicPresent"));
 const AdminSettings = lazy(() => import("./pages/admin/Settings"));
 
 // Shared
@@ -123,11 +130,22 @@ export default function App() {
             <Route path="/admin/users" element={<AdminUsers />} />
             <Route path="/admin/schools" element={<AdminSchools />} />
             <Route
+              path="/admin/schools/:schoolId/branches/:branchId"
+              element={<BranchView />}
+            />
+            <Route
               path="/admin/schools/:schoolId"
               element={<SchoolBranches />}
             />
+            <Route path="/admin/teachers" element={<AdminTeachers />} />
+            <Route path="/admin/students" element={<AdminStudents />} />
             <Route path="/admin/curriculum" element={<AdminCurriculum />} />
+            <Route path="/admin/library" element={<AdminLibrary />} />
+            <Route path="/admin/ai-parser" element={<AdminAIParser />} />
             <Route path="/admin/videos" element={<AdminVideos />} />
+            <Route path="/admin/library/topics/:topicId/present" element={<AdminLibraryTopicPresent />} />
+            <Route path="/admin/slides" element={<AdminSlides />} />
+            <Route path="/admin/record-lecture/:libraryTopicId?" element={<AdminRecordLecture />} />
             <Route path="/admin/settings" element={<AdminSettings />} />
 
             {/* Profile — shared across all roles */}

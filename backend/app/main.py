@@ -23,8 +23,11 @@ from app.routers import (
     qa,
     attendance,
     analytics,
-    classes as classes_router
+    classes as classes_router,
+    library
 )
+from app.schemas.slides_ai import GenerateSlidesRequest, GenerateSlidesResponse
+from app.utils.ai_slide_deck import generate_slide_deck as run_generate_slide_deck
 
 # Configure logging
 logging.basicConfig(
@@ -129,6 +132,14 @@ app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"]
 # Classes management
 app.include_router(classes_router.router, prefix="/api/classes", tags=["Classes"])
 
+# Curriculum Library
+app.include_router(library.router, prefix="/api/library", tags=["Library"])
+
+# Spec alias: POST /api/generate-slides (same handler as admin route)
+@app.post("/api/generate-slides", response_model=GenerateSlidesResponse, tags=["AI Slides"])
+async def standalone_generate_slides(body: GenerateSlidesRequest):
+    return await run_generate_slide_deck(body)
+
 # Serve generated audio/video/image files
 os.makedirs("static/audio", exist_ok=True)
 os.makedirs("static/videos", exist_ok=True)
@@ -182,15 +193,94 @@ async def startup_event():
             # Slide deck JSON stored per topic
             "ALTER TABLE topics ADD COLUMN IF NOT EXISTS slides_json TEXT;",
             "ALTER TABLE topics ADD COLUMN IF NOT EXISTS content TEXT;",
+            # Branch city + class section
+            "ALTER TABLE branches ADD COLUMN IF NOT EXISTS city VARCHAR(100);",
+            "ALTER TABLE classes ADD COLUMN IF NOT EXISTS section VARCHAR(50);",
+            "ALTER TABLE classes ADD COLUMN IF NOT EXISTS manual_student_count INTEGER DEFAULT 0;",
+            # User properties for teachers/employees
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS school_id UUID REFERENCES schools(id);",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id UUID REFERENCES branches(id);",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS employee_id VARCHAR(50);",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20);",
+            # Design Templates tables
+            """CREATE TABLE IF NOT EXISTS design_templates (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                name VARCHAR(255) NOT NULL UNIQUE,
+                category VARCHAR(100),
+                description TEXT,
+                is_system BOOLEAN DEFAULT true,
+                created_by UUID REFERENCES users(id),
+                theme_config JSONB NOT NULL,
+                style_config JSONB,
+                preview_image_url TEXT,
+                usage_count INTEGER DEFAULT 0,
+                is_active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            );""",
+            """CREATE TABLE IF NOT EXISTS topic_templates (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                topic_id UUID REFERENCES topics(id) ON DELETE CASCADE,
+                design_template_id UUID REFERENCES design_templates(id) ON DELETE SET NULL,
+                applied_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(topic_id)
+            );""",
+            """CREATE TABLE IF NOT EXISTS ai_slide_generations (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                topic TEXT NOT NULL,
+                content JSONB NOT NULL,
+                template VARCHAR(255),
+                created_at TIMESTAMP DEFAULT NOW()
+            );""",
+            """CREATE TABLE IF NOT EXISTS ai_slide_template_presets (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                name VARCHAR(255) NOT NULL,
+                config JSONB NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            );""",
         ]
         for sql in migrations:
             try:
                 await execute_write(sql)
-            except Exception:
-                pass  # Column may already exist or type matches
+            except Exception as e:
+                pass  # Table may already exist
         logger.info("✅ Schema migrations applied")
     except Exception as e:
         logger.warning(f"⚠️  Schema migration warning: {str(e)}")
+
+    # Seed default design templates
+    try:
+        from app.utils.database import execute_one
+        existing = await execute_one("SELECT COUNT(*) as cnt FROM design_templates WHERE is_system = true")
+        if not existing or existing.get("cnt", 0) == 0:
+            import json
+            default_templates = [
+                {"name": "Ocean Depth", "category": "ocean", "description": "Deep ocean gradient with cyan accents", 
+                 "theme_config": {"bg": "linear-gradient(135deg, #0f172a 0%, #1e3a8a 55%, #0891b2 100%)", "accent": "#38bdf8", "accentDark": "#0369a1", "text": "#ffffff", "subtext": "rgba(255,255,255,0.75)", "card": "rgba(255,255,255,0.08)", "cardBorder": "rgba(56,189,248,0.3)", "bullet": "#38bdf8", "pill": "rgba(56,189,248,0.15)"}},
+                {"name": "Emerald Forest", "category": "nature", "description": "Lush green gradient for biology and ecology",
+                 "theme_config": {"bg": "linear-gradient(135deg, #052e16 0%, #166534 55%, #15803d 100%)", "accent": "#4ade80", "accentDark": "#16a34a", "text": "#ffffff", "subtext": "rgba(255,255,255,0.75)", "card": "rgba(255,255,255,0.08)", "cardBorder": "rgba(74,222,128,0.3)", "bullet": "#86efac", "pill": "rgba(74,222,128,0.15)"}},
+                {"name": "Golden Sunset", "category": "vibrant", "description": "Warm orange-gold gradient, energetic",
+                 "theme_config": {"bg": "linear-gradient(135deg, #431407 0%, #c2410c 55%, #d97706 100%)", "accent": "#fbbf24", "accentDark": "#b45309", "text": "#ffffff", "subtext": "rgba(255,255,255,0.75)", "card": "rgba(255,255,255,0.08)", "cardBorder": "rgba(251,191,36,0.3)", "bullet": "#fde68a", "pill": "rgba(251,191,36,0.15)"}},
+                {"name": "Royal Purple", "category": "elegant", "description": "Purple to magenta, premium presentations",
+                 "theme_config": {"bg": "linear-gradient(135deg, #2e1065 0%, #6d28d9 55%, #c026d3 100%)", "accent": "#e879f9", "accentDark": "#a21caf", "text": "#ffffff", "subtext": "rgba(255,255,255,0.75)", "card": "rgba(255,255,255,0.08)", "cardBorder": "rgba(232,121,249,0.3)", "bullet": "#f0abfc", "pill": "rgba(232,121,249,0.15)"}},
+                {"name": "Midnight", "category": "minimal", "description": "Dark indigo, minimalist and professional",
+                 "theme_config": {"bg": "linear-gradient(135deg, #020617 0%, #1e1b4b 55%, #312e81 100%)", "accent": "#818cf8", "accentDark": "#4338ca", "text": "#ffffff", "subtext": "rgba(255,255,255,0.7)", "card": "rgba(255,255,255,0.06)", "cardBorder": "rgba(129,140,248,0.25)", "bullet": "#a5b4fc", "pill": "rgba(129,140,248,0.12)"}},
+                {"name": "Rose Bloom", "category": "vibrant", "description": "Pink to red, warm and inviting",
+                 "theme_config": {"bg": "linear-gradient(135deg, #4c0519 0%, #be123c 55%, #e11d48 100%)", "accent": "#fda4af", "accentDark": "#be123c", "text": "#ffffff", "subtext": "rgba(255,255,255,0.75)", "card": "rgba(255,255,255,0.08)", "cardBorder": "rgba(253,164,175,0.3)", "bullet": "#fecdd3", "pill": "rgba(253,164,175,0.15)"}},
+                {"name": "Arctic Aurora", "category": "tech", "description": "Bright cyan, modern and tech-focused",
+                 "theme_config": {"bg": "linear-gradient(135deg, #083344 0%, #0e7490 55%, #0891b2 100%)", "accent": "#67e8f9", "accentDark": "#0e7490", "text": "#ffffff", "subtext": "rgba(255,255,255,0.75)", "card": "rgba(255,255,255,0.08)", "cardBorder": "rgba(103,232,249,0.3)", "bullet": "#a5f3fc", "pill": "rgba(103,232,249,0.15)"}},
+                {"name": "Volcano", "category": "vibrant", "description": "Fiery orange-red, dynamic and attention-grabbing",
+                 "theme_config": {"bg": "linear-gradient(135deg, #1c1917 0%, #9a3412 55%, #ea580c 100%)", "accent": "#fb923c", "accentDark": "#c2410c", "text": "#ffffff", "subtext": "rgba(255,255,255,0.75)", "card": "rgba(255,255,255,0.08)", "cardBorder": "rgba(251,146,60,0.3)", "bullet": "#fed7aa", "pill": "rgba(251,146,60,0.15)"}},
+            ]
+            for tmpl in default_templates:
+                await execute_write(
+                    "INSERT INTO design_templates (name, category, description, is_system, theme_config, style_config) VALUES ($1, $2, $3, true, $4, $5)",
+                    tmpl["name"], tmpl["category"], tmpl["description"],
+                    json.dumps(tmpl["theme_config"]), json.dumps({"font": "'Inter', sans-serif", "border_radius": "12px"})
+                )
+            logger.info(f"✅ Seeded {len(default_templates)} design templates")
+    except Exception as e:
+        logger.warning(f"⚠️  Design template seeding warning: {str(e)}")
 
     logger.info("✅ Education Platform API Started Successfully!")
 
@@ -285,5 +375,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=settings.DEBUG,
-        log_level="info" if settings.DEBUG else "warning"
+        log_level="info" if settings.DEBUG else "warning",
+        timeout_keep_alive=300,
+        timeout_graceful_shutdown=300,
     )

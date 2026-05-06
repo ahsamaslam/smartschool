@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useParams, Link, useLocation } from "react-router-dom";
 import managerService from "../../services/managerService";
-import { PageSpinner } from "../../components/common/Spinner";
+import adminService from "../../services/adminService";
+import Spinner from "../../components/common/Spinner";
 import Alert from "../../components/common/Alert";
 import {
   MagnifyingGlassIcon,
@@ -23,22 +24,38 @@ export default function SchoolBranches() {
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    managerService
-      .getSchoolBranches(schoolId)
-      .then((res) => setBranches(res.data || []))
+    setLoading(true);
+    setError("");
+    const req = isAdmin
+      ? adminService.getSchoolBranches(schoolId)
+      : managerService.getSchoolBranches(schoolId);
+    req
+      .then((res) => {
+        const raw = res.data;
+        const list = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : [];
+        setBranches(list);
+      })
       .catch(() => setError("Failed to load branches."))
       .finally(() => setLoading(false));
-  }, [schoolId]);
+  }, [schoolId, isAdmin]);
 
-  const filtered = branches.filter(
-    (b) =>
-      b.name.toLowerCase().includes(search.toLowerCase()) ||
-      (b.address || "").toLowerCase().includes(search.toLowerCase()),
-  );
+  const q = search.toLowerCase();
+  const filtered = branches.filter((b) => {
+    const name = String(b?.name ?? "");
+    const addr = String(b?.address ?? "");
+    return name.toLowerCase().includes(q) || addr.toLowerCase().includes(q);
+  });
 
   const backPath = isAdmin ? "/admin/schools" : "/manager/schools";
 
-  if (loading) return <PageSpinner />;
+  if (loading) {
+    return (
+      <div className="p-6 max-w-5xl mx-auto flex flex-col items-center justify-center min-h-[50vh] gap-4 text-gray-500">
+        <Spinner size="lg" />
+        <p className="text-sm">Loading branches…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -111,7 +128,11 @@ export default function SchoolBranches() {
               </div>
 
               <Link
-                to={`/manager/schools/${schoolId}/branches/${b.id}`}
+                to={
+                  isAdmin
+                    ? `/admin/schools/${schoolId}/branches/${b.id}`
+                    : `/manager/schools/${schoolId}/branches/${b.id}`
+                }
                 className="block w-full text-center text-sm font-medium text-blue-600 border border-blue-200 rounded-xl py-2 hover:bg-blue-50 transition-colors"
               >
                 View Details

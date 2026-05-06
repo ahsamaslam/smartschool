@@ -8,6 +8,7 @@ import Input from "../../components/common/Input";
 import Dropdown from "../../components/common/Dropdown";
 import toast from "react-hot-toast";
 import SlidePresenter, { pickTheme } from "../../components/admin/SlidePresenter";
+import TemplateGallery from "../../components/admin/TemplateGallery";
 import {
   BookOpenIcon,
   SparklesIcon,
@@ -24,6 +25,7 @@ import {
   PencilSquareIcon,
   BuildingOffice2Icon,
   AcademicCapIcon,
+  Squares2X2Icon,
 } from "@heroicons/react/24/outline";
 
 // ─── Topic Studio Modal ───────────────────────────────────────────────────────
@@ -188,6 +190,7 @@ function TopicStudio({ topic, onClose, onUpdated }) {
           {[
             { key: "content", label: "Content", icon: PencilSquareIcon },
             { key: "slides", label: "Slides", icon: PresentationChartBarIcon },
+            { key: "templates", label: "Templates", icon: Squares2X2Icon },
             { key: "record", label: "Record & Mix", icon: VideoCameraIcon },
           ].map(({ key, label, icon: Icon }) => (
             <button
@@ -298,6 +301,19 @@ function TopicStudio({ topic, onClose, onUpdated }) {
                 chapter={chapter}
               />
             )}
+          </div>
+        )}
+
+        {/* ── TEMPLATES TAB ── */}
+        {tab === "templates" && (
+          <div>
+            <TemplateGallery
+              topic={topic}
+              adminService={adminService}
+              onApply={(template) => {
+                toast.success(`✨ Template "${template.name}" applied to this topic!`);
+              }}
+            />
           </div>
         )}
 
