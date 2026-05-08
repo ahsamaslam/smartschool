@@ -59,6 +59,10 @@ const AdminLibraryTopicPresent = lazy(
   () => import("./pages/admin/LibraryTopicPresent"),
 );
 const AdminSettings = lazy(() => import("./pages/admin/Settings"));
+const AdminClassDetail = lazy(() => import("./pages/admin/ClassDetail"));
+const AdminBoardSubjects = lazy(() => import("./pages/admin/BoardSubjects"));
+const AdminBookDetail = lazy(() => import("./pages/admin/BookDetail"));
+const AdminSectionDetail = lazy(() => import("./pages/admin/SectionDetail"));
 
 // Shared
 const ProfilePage = lazy(() => import("./pages/shared/ProfilePage"));
@@ -135,6 +139,7 @@ export default function App() {
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
             <Route path="/admin/users" element={<AdminUsers />} />
             <Route path="/admin/schools" element={<AdminSchools />} />
+            <Route path="/admin/classes/:classId" element={<AdminClassDetail />} />
             <Route
               path="/admin/schools/:schoolId/branches/:branchId"
               element={<BranchView />}
@@ -147,6 +152,9 @@ export default function App() {
             <Route path="/admin/students" element={<AdminStudents />} />
             <Route path="/admin/curriculum" element={<AdminCurriculum />} />
             <Route path="/admin/library" element={<AdminLibrary />} />
+            <Route path="/admin/library/boards/:boardId" element={<AdminBoardSubjects />} />
+            <Route path="/admin/library/books/:bookId" element={<AdminBookDetail />} />
+            <Route path="/admin/sections/:sectionId" element={<AdminSectionDetail />} />
             <Route path="/admin/ai-parser" element={<AdminAIParser />} />
             <Route path="/admin/videos" element={<AdminVideos />} />
             <Route

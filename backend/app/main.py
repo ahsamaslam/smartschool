@@ -314,7 +314,10 @@ async def startup_event():
         from app.utils.auth import hash_password
         from app.utils.database import execute_write, execute_one
 
+        admin_id = settings.ADMIN_ID
         admin_email = settings.ADMIN_EMAIL
+        admin_full_name = settings.ADMIN_FULL_NAME
+        admin_role = settings.ADMIN_ROLE
         admin_password_hash = hash_password(settings.ADMIN_PASSWORD)
 
         # Upsert the admin user
@@ -322,27 +325,33 @@ async def startup_event():
             """
             INSERT INTO users (id, email, full_name, role, password_hash, is_active)
             VALUES (
-                '00000000-0000-0000-0000-000000000001',
-                $1, 'System Admin', 'admin', $2, true
+                $1, $2, $3, $4, $5, true
             )
             ON CONFLICT (id) DO UPDATE
                 SET email         = EXCLUDED.email,
+                    full_name     = EXCLUDED.full_name,
+                    role          = EXCLUDED.role,
                     password_hash = EXCLUDED.password_hash,
                     is_active     = true,
                     updated_at    = NOW();
             """,
+            admin_id,
             admin_email,
+            admin_full_name,
+            admin_role,
             admin_password_hash,
         )
 
-        # Deactivate every other user so they cannot log in
-        await execute_write(
-            """
-            UPDATE users
-            SET is_active = false
-            WHERE id <> '00000000-0000-0000-0000-000000000001';
-            """
-        )
+        # Optionally deactivate every other user so they cannot log in
+        if settings.DEACTIVATE_NON_ADMIN_USERS:
+            await execute_write(
+                """
+                UPDATE users
+                SET is_active = false
+                WHERE id <> $1;
+                """,
+                admin_id,
+            )
 
         logger.info(f"✅ Admin user bootstrapped: {admin_email}")
     except Exception as e:

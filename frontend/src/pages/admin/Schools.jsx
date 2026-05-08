@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
+import { useNavigate, Link } from "react-router-dom";
 import adminService from "../../services/adminService";
+import libraryService from "../../services/libraryService";
 import Spinner from "../../components/common/Spinner";
 import toast from "react-hot-toast";
 import {
@@ -16,6 +18,7 @@ import {
   XMarkIcon,
   PencilSquareIcon,
   TrashIcon,
+  BookOpenIcon,
 } from "@heroicons/react/24/outline";
 
 // ── Constants & Helpers ───────────────────────────────────────────────────────
@@ -94,11 +97,11 @@ function SectionPicker({ value, onChange }) {
 }
 
 // ── Inline Modal ──────────────────────────────────────────────────────────────
-function Modal({ isOpen, onClose, title, children }) {
+function Modal({ isOpen, onClose, title, children, wide }) {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 relative max-h-[90vh] overflow-y-auto">
+      <div className={`bg-white rounded-2xl shadow-xl w-full ${wide ? "max-w-2xl" : "max-w-md"} p-6 relative max-h-[90vh] overflow-y-auto`}>
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-lg font-bold text-gray-900">{title}</h2>
           <button
@@ -142,15 +145,364 @@ function ConfirmDeleteModal({ isOpen, onClose, onConfirm, title, message, deleti
   );
 }
 
+function LinkSectionSubjectsModal({ isOpen, onClose, section, allSections, onSaved }) {
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [catalog, setCatalog] = useState(null);
+  const [selectedBoardId, setSelectedBoardId] = useState("");
+  const [selectedSubjectIds, setSelectedSubjectIds] = useState([]);
+  const [selectedBookIds, setSelectedBookIds] = useState([]);
+  const [subjectBooks, setSubjectBooks] = useState({});
+  const [loadingBooks, setLoadingBooks] = useState(false);
+  const [applyToAll, setApplyToAll] = useState(false);
+  const [bookSearch, setBookSearch] = useState("");
+  const [expandedSubjects, setExpandedSubjects] = useState({});
+
+  const boards = Array.isArray(catalog?.boards) ? catalog.boards : [];
+  const linkedByBoard = catalog?.linked_subjects_by_board || {};
+  const activeBoard = boards.find((b) => b.id === selectedBoardId);
+  const subjects = Array.isArray(activeBoard?.subjects) ? activeBoard.subjects : [];
+
+  // Build a nice title: "Class 9 — Section A" or just "Class 9"
+  const sectionLabel = section
+    ? section.section
+      ? `Class ${section.grade_level} — Section ${section.section}`
+      : `Class ${section.grade_level}`
+    : "Section";
+
+  useEffect(() => {
+    if (!isOpen || !section?.id) return;
+    let mounted = true;
+    setLoading(true);
+    setSubjectBooks({});
+    setSelectedBookIds([]);
+    libraryService
+      .getSectionSubjectCatalog(section.id)
+      .then((res) => {
+        if (!mounted) return;
+        const data = res?.data?.data || res?.data || {};
+        setCatalog(data);
+        const firstBoardId = data?.boards?.[0]?.id || "";
+        setSelectedBoardId(firstBoardId);
+        setSelectedSubjectIds(firstBoardId ? (data?.linked_subjects_by_board?.[firstBoardId] || []) : []);
+      })
+      .catch(() => toast.error("Failed to load curriculum catalog."))
+      .finally(() => mounted && setLoading(false));
+    // Pre-load existing book assignments
+    libraryService.getSectionCurriculum(section.id)
+      .then((res) => {
+        if (!mounted) return;
+        const cur = res?.data?.data || {};
+        setSelectedBookIds((cur.books || []).map((b) => b.id));
+      })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, [isOpen, section?.id]);
+
+  useEffect(() => {
+    if (!selectedBoardId) return;
+    setSelectedSubjectIds(linkedByBoard[selectedBoardId] || []);
+    setSelectedBookIds([]);
+    setSubjectBooks({});
+    setBookSearch("");
+    setExpandedSubjects({});
+  }, [selectedBoardId]); // eslint-disable-line
+
+  // Load books when subject selection changes
+  useEffect(() => {
+    if (!selectedBoardId || selectedSubjectIds.length === 0) {
+      setSubjectBooks({});
+      setExpandedSubjects({});
+      return;
+    }
+    let mounted = true;
+    setLoadingBooks(true);
+    Promise.all(
+      selectedSubjectIds.map((sid) =>
+        libraryService
+          .getBoardSubjectBooks(selectedBoardId, sid)
+          .then((res) => ({ sid, books: res?.data?.data || [] }))
+          .catch(() => ({ sid, books: [] }))
+      )
+    ).then((results) => {
+      if (!mounted) return;
+      const map = {};
+      const expanded = {};
+      results.forEach(({ sid, books }) => {
+        map[sid] = books;
+        expanded[sid] = true;
+      });
+      setSubjectBooks(map);
+      setExpandedSubjects(expanded);
+    }).finally(() => mounted && setLoadingBooks(false));
+    return () => { mounted = false; };
+  }, [selectedBoardId, selectedSubjectIds.join(",")]); // eslint-disable-line
+
+  const toggleSubject = (id) =>
+    setSelectedSubjectIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+
+  const toggleBook = (id) =>
+    setSelectedBookIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+
+  const toggleAllForSubject = (sid, visibleBooks) => {
+    const ids = visibleBooks.map((b) => b.id);
+    const allSelected = ids.every((id) => selectedBookIds.includes(id));
+    setSelectedBookIds((prev) =>
+      allSelected ? prev.filter((id) => !ids.includes(id)) : [...new Set([...prev, ...ids])]
+    );
+  };
+
+  const handleSave = async () => {
+    if (!section?.id || !selectedBoardId) return;
+    setSaving(true);
+    try {
+      if (applyToAll && allSections?.length > 0) {
+        await libraryService.bulkAssignSections({
+          class_ids: allSections.map((s) => s.id),
+          board_id: selectedBoardId,
+          subject_ids: selectedSubjectIds,
+          book_ids: selectedBookIds,
+        });
+        toast.success(`Course applied to all ${allSections.length} sections.`);
+      } else {
+        await libraryService.setSectionSubjects(section.id, {
+          board_id: selectedBoardId,
+          subject_ids: selectedSubjectIds,
+        });
+        await libraryService.setSectionBooks(section.id, {
+          book_ids: selectedBookIds,
+        });
+        toast.success("Course updated.");
+      }
+      onSaved?.();
+      onClose?.();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to update course.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const allBooks = Object.values(subjectBooks).flat();
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={() => !saving && onClose?.()}
+      title={`Assign Course — ${sectionLabel}`}
+      wide
+    >
+      {loading ? (
+        <div className="py-10 text-center text-sm text-gray-500">Loading…</div>
+      ) : boards.length === 0 ? (
+        <div className="py-6 text-center text-sm text-gray-500">
+          No boards configured.{" "}
+          <Link to="/admin/library" className="text-indigo-600 hover:underline">Go to Library →</Link>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {/* Apply to all toggle */}
+          {allSections?.length > 1 && (
+            <label className="flex items-center gap-2 p-3 bg-indigo-50 rounded-xl cursor-pointer border border-indigo-100">
+              <input
+                type="checkbox"
+                checked={applyToAll}
+                onChange={(e) => setApplyToAll(e.target.checked)}
+                className="rounded"
+              />
+              <span className="text-sm font-medium text-indigo-700">
+                Apply to all sections in Class {section?.grade_level} ({allSections.length} sections)
+              </span>
+            </label>
+          )}
+
+          {/* Board */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Board</label>
+            <select
+              value={selectedBoardId}
+              onChange={(e) => setSelectedBoardId(e.target.value)}
+              className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+            >
+              {boards.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Subjects */}
+          <div>
+            <p className="text-sm font-medium text-gray-700 mb-2">Subjects</p>
+            {subjects.length === 0 ? (
+              <div className="text-sm text-gray-500 bg-gray-50 rounded-xl p-3">
+                No subjects for this board.{" "}
+                <Link to="/admin/library" className="text-indigo-600 hover:underline">Add in Library →</Link>
+              </div>
+            ) : (
+              <div className="border border-gray-200 rounded-xl p-2 space-y-1">
+                {subjects.map((s) => (
+                  <label key={s.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedSubjectIds.includes(s.id)}
+                      onChange={() => toggleSubject(s.id)}
+                      className="rounded"
+                    />
+                    <span className="text-sm text-gray-800">{s.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Books */}
+          {selectedSubjectIds.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-medium text-gray-700">Books</p>
+                {selectedBookIds.length > 0 && (
+                  <span className="text-xs text-indigo-600 font-medium">
+                    {selectedBookIds.length} selected
+                  </span>
+                )}
+              </div>
+              {loadingBooks ? (
+                <div className="text-sm text-gray-400 py-3 text-center">Loading books…</div>
+              ) : allBooks.length === 0 ? (
+                <div className="text-sm text-gray-500 bg-gray-50 rounded-xl p-3">
+                  No books found for selected subjects.{" "}
+                  <Link to="/admin/ai-parser" className="text-indigo-600 hover:underline">Add via AI Parser →</Link>
+                </div>
+              ) : (
+                <>
+                  {/* Search */}
+                  <input
+                    type="text"
+                    value={bookSearch}
+                    onChange={(e) => setBookSearch(e.target.value)}
+                    placeholder="Search books…"
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  {/* Accordion */}
+                  <div className="max-h-72 overflow-y-auto border border-gray-200 rounded-xl divide-y divide-gray-100">
+                    {selectedSubjectIds.map((sid) => {
+                      const allSBooks = subjectBooks[sid] || [];
+                      const q = bookSearch.toLowerCase();
+                      const sBooks = q ? allSBooks.filter((b) => b.title.toLowerCase().includes(q)) : allSBooks;
+                      if (allSBooks.length === 0) return null;
+                      const subjectName = subjects.find((s) => s.id === sid)?.name || "";
+                      const selectedCount = allSBooks.filter((b) => selectedBookIds.includes(b.id)).length;
+                      const isOpen = expandedSubjects[sid] !== false;
+                      const allVisibleSelected = sBooks.length > 0 && sBooks.every((b) => selectedBookIds.includes(b.id));
+                      return (
+                        <div key={sid}>
+                          {/* Subject header */}
+                          <div
+                            className="flex items-center gap-2 px-3 py-2.5 bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                            onClick={() => setExpandedSubjects((p) => ({ ...p, [sid]: !isOpen }))}
+                          >
+                            {isOpen
+                              ? <ChevronDownIcon className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                              : <ChevronRightIcon className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                            }
+                            <span className="text-xs font-semibold text-gray-700 uppercase tracking-wide flex-1">{subjectName}</span>
+                            {selectedCount > 0 && (
+                              <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full font-medium flex-shrink-0">
+                                {selectedCount}/{allSBooks.length}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); toggleAllForSubject(sid, sBooks.length > 0 ? sBooks : allSBooks); }}
+                              className="text-xs text-indigo-600 hover:text-indigo-800 font-medium flex-shrink-0 ml-1"
+                            >
+                              {allVisibleSelected ? "Deselect All" : "Select All"}
+                            </button>
+                          </div>
+                          {/* Books list */}
+                          {isOpen && (
+                            <div className="py-1">
+                              {sBooks.length === 0 ? (
+                                <p className="text-xs text-gray-400 px-4 py-2">No books match "{bookSearch}"</p>
+                              ) : (
+                                sBooks.map((book) => (
+                                  <label key={book.id} className="flex items-start gap-2 px-4 py-2 hover:bg-indigo-50 cursor-pointer transition-colors">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedBookIds.includes(book.id)}
+                                      onChange={() => toggleBook(book.id)}
+                                      className="rounded mt-0.5 flex-shrink-0 accent-indigo-600"
+                                    />
+                                    <div className="min-w-0">
+                                      <p className="text-sm text-gray-800 leading-snug">{book.title}</p>
+                                      <p className="text-xs text-gray-400">
+                                        {book.author ? `${book.author} · ` : ""}{book.chapter_count ?? 0} ch · {book.topic_count ?? 0} topics
+                                      </p>
+                                    </div>
+                                  </label>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-700 text-sm font-semibold hover:bg-gray-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || !selectedBoardId}
+              className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-60 transition-colors flex items-center justify-center gap-2"
+            >
+              {saving && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
+              {saving ? "Saving…" : applyToAll ? "Apply to All Sections" : "Save Course"}
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 // ── Class Row ─────────────────────────────────────────────────────────────────
-function ClassRow({ cls, onEdit, onDelete, onUpdateStudents }) {
+function ClassRow({ cls, onEdit, onDelete, onLinkSubjects, branchName, schoolName }) {
+  const navigate = useNavigate();
   const label = cls.section ? `Sec ${cls.section}` : "Main Section";
+
+  const handleClick = () => {
+    navigate(`/admin/classes/${cls.id}`, {
+      state: {
+        branchId: cls.branch_id,
+        gradeLevel: cls.grade_level,
+        branchName,
+        schoolName,
+      },
+    });
+  };
 
   return (
     <div
-      onClick={() => onUpdateStudents(cls)}
+      onClick={handleClick}
       className="group flex items-center gap-3 px-4 py-2.5 rounded-xl bg-white border border-gray-100 hover:border-indigo-300 hover:shadow-sm cursor-pointer transition-all"
-      title="Click to update total students"
+      title="View class sections"
     >
       <div className="w-7 h-7 rounded-lg bg-amber-50 flex items-center justify-center flex-shrink-0">
         <AcademicCapIcon className="h-3.5 w-3.5 text-amber-600" />
@@ -165,13 +517,29 @@ function ClassRow({ cls, onEdit, onDelete, onUpdateStudents }) {
       </span>
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-1">
         <button
-          onClick={(e) => { e.stopPropagation(); onEdit(cls); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (typeof onLinkSubjects === "function") onLinkSubjects(cls);
+          }}
+          className="p-1.5 text-gray-400 hover:text-emerald-600 rounded-md hover:bg-emerald-50"
+          title="Link subjects"
+        >
+          <BookOpenIcon className="h-4 w-4" />
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (typeof onEdit === "function") onEdit(cls);
+          }}
           className="p-1.5 text-gray-400 hover:text-indigo-600 rounded-md hover:bg-indigo-50"
         >
           <PencilSquareIcon className="h-4 w-4" />
         </button>
         <button
-          onClick={(e) => { e.stopPropagation(); onDelete(cls); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (typeof onDelete === "function") onDelete(cls);
+          }}
           className="p-1.5 text-gray-400 hover:text-red-600 rounded-md hover:bg-red-50"
         >
           <TrashIcon className="h-4 w-4" />
@@ -182,7 +550,7 @@ function ClassRow({ cls, onEdit, onDelete, onUpdateStudents }) {
 }
 
 // ── Class Group Panel ─────────────────────────────────────────────────────────
-function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onUpdateStudents, onManageSections, forceOpen }) {
+function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onManageSections, onLinkSubjects, forceOpen, branchName, schoolName }) {
   const [open, setOpen] = useState(false);
   const isOpen = forceOpen || open;
 
@@ -192,9 +560,12 @@ function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onUpdateStuden
 
   return (
     <div className="rounded-xl border border-gray-100 overflow-hidden mb-2 bg-white shadow-sm group/classgroup">
-      <button
+      <div
+        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 transition-colors cursor-pointer select-none"
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 transition-colors text-left"
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => e.key === "Enter" && setOpen(!open)}
       >
         {isOpen ? (
           <ChevronDownIcon className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
@@ -216,7 +587,7 @@ function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onUpdateStuden
         >
           <PlusIcon className="h-3 w-3" /> Section
         </button>
-      </button>
+      </div>
 
       {isOpen && (
         <div className="px-4 py-3 bg-gray-50/50 border-t border-gray-50">
@@ -227,7 +598,9 @@ function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onUpdateStuden
                 cls={cls}
                 onEdit={onEdit}
                 onDelete={onDelete}
-                onUpdateStudents={onUpdateStudents}
+                onLinkSubjects={onLinkSubjects}
+                branchName={branchName}
+                schoolName={schoolName}
               />
             ))}
           </div>
@@ -238,7 +611,7 @@ function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onUpdateStuden
 }
 
 // ── Branch Panel ──────────────────────────────────────────────────────────────
-function BranchPanel({ branch, branchClasses, branchTeacherCount, onEdit, onDelete, onRefresh, forceOpen }) {
+function BranchPanel({ branch, branchClasses, branchTeacherCount, onEdit, onDelete, onRefresh, forceOpen, schoolName }) {
   const [open, setOpen] = useState(false);
 
   // Class Modal state
@@ -255,10 +628,7 @@ function BranchPanel({ branch, branchClasses, branchTeacherCount, onEdit, onDele
   const [deletingClass, setDeletingClass] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Update Students state
-  const [updatingStudentsFor, setUpdatingStudentsFor] = useState(null);
-  const [studentCountVal, setStudentCountVal] = useState("");
-  const [savingStudents, setSavingStudents] = useState(false);
+  const [linkSubjectsFor, setLinkSubjectsFor] = useState(null);
 
   const isOpen = forceOpen || open;
   const handleToggle = () => setOpen(!open);
@@ -378,26 +748,6 @@ function BranchPanel({ branch, branchClasses, branchTeacherCount, onEdit, onDele
     }
   };
 
-  const handleUpdateStudents = async (e) => {
-    e.preventDefault();
-    const count = parseInt(studentCountVal, 10);
-    if (isNaN(count) || count < 0) return toast.error("Please enter a valid number.");
-
-    setSavingStudents(true);
-    try {
-      await adminService.updateClass(updatingStudentsFor.id, {
-        student_count: count
-      });
-      toast.success("Total students updated!");
-      setUpdatingStudentsFor(null);
-      onRefresh?.();
-    } catch {
-      toast.error("Failed to update total students.");
-    } finally {
-      setSavingStudents(false);
-    }
-  };
-
   return (
     <div className="rounded-xl border border-gray-100 overflow-hidden group/branch relative">
       {/* Branch header */}
@@ -467,12 +817,11 @@ function BranchPanel({ branch, branchClasses, branchTeacherCount, onEdit, onDele
                   classes={classes}
                   onEdit={openEditClass}
                   onDelete={setDeletingClass}
-                  onUpdateStudents={(c) => {
-                    setUpdatingStudentsFor(c);
-                    setStudentCountVal(String(c.student_count || 0));
-                  }}
+                  onLinkSubjects={(c) => setLinkSubjectsFor(c)}
                   onManageSections={openManageSections}
                   forceOpen={forceOpen}
+                  branchName={branch.name}
+                  schoolName={schoolName}
                 />
               ))}
             </div>
@@ -600,36 +949,13 @@ function BranchPanel({ branch, branchClasses, branchTeacherCount, onEdit, onDele
         message={`Are you sure you want to delete this class? All associated enrollments and data will be lost.`}
       />
 
-      {/* Update Students Modal */}
-      <Modal
-        isOpen={!!updatingStudentsFor}
-        onClose={() => setUpdatingStudentsFor(null)}
-        title="Update Total Students"
-      >
-        <form onSubmit={handleUpdateStudents} className="space-y-4">
-          <p className="text-sm text-gray-500">
-            Set the total number of students for <strong>{updatingStudentsFor?.name}</strong>.
-          </p>
-          <div>
-            <input
-              type="number"
-              min="0"
-              autoFocus
-              value={studentCountVal}
-              onChange={(e) => setStudentCountVal(e.target.value)}
-              placeholder="e.g. 35"
-              className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-lg font-semibold text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={savingStudents}
-            className="w-full py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-60 transition-colors"
-          >
-            {savingStudents ? "Updating…" : "Save Total"}
-          </button>
-        </form>
-      </Modal>
+      <LinkSectionSubjectsModal
+        isOpen={!!linkSubjectsFor}
+        section={linkSubjectsFor}
+        allSections={linkSubjectsFor ? (branchClasses || []).filter((c) => c.grade_level === linkSubjectsFor.grade_level) : []}
+        onClose={() => setLinkSubjectsFor(null)}
+        onSaved={onRefresh}
+      />
     </div>
   );
 }
@@ -795,6 +1121,7 @@ function SchoolCard({ school, schoolBranches, allClasses, teacherCountsByBranch,
                 onDelete={setDeletingBranch}
                 onRefresh={onRefresh}
                 forceOpen={forceOpen}
+                schoolName={school.name}
               />
             ))
           )}

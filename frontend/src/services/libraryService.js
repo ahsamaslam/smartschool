@@ -25,6 +25,28 @@ const libraryService = {
   removeSubjectFromClass: (classId, subjectId) =>
     api.delete(`/library/classes/${classId}/subjects/${subjectId}`),
 
+  // ==================== BOARDS ====================
+  getBoards: () => api.get("/library/boards"),
+  createBoard: (data) => api.post("/library/boards", data),
+  deleteBoard: (boardId) => api.delete(`/library/boards/${boardId}`),
+  getBoardSubjects: (boardId) => api.get(`/library/boards/${boardId}/subjects`),
+  getBoardSubjectBooks: (boardId, subjectId) =>
+    api.get(`/library/boards/${boardId}/subjects/${subjectId}/books`),
+  setBoardSubjects: (boardId, data) =>
+    api.put(`/library/boards/${boardId}/subjects`, data),
+
+  // ==================== SECTION SUBJECT LINKING ====================
+  getSectionSubjectCatalog: (classId) =>
+    api.get(`/library/sections/${classId}/subjects/catalog`),
+  setSectionSubjects: (classId, data) =>
+    api.put(`/library/sections/${classId}/subjects`, data),
+  getSectionCurriculum: (classId) =>
+    api.get(`/library/sections/${classId}/curriculum`),
+  setSectionBooks: (classId, data) =>
+    api.put(`/library/sections/${classId}/books`, data),
+  bulkAssignSections: (data) =>
+    api.post(`/library/sections/bulk-assign`, data),
+
   // ==================== PDF UPLOAD ====================
   uploadBookPdf: (formData) => api.post("/library/upload-pdf", formData, {
     headers: { "Content-Type": "multipart/form-data" },

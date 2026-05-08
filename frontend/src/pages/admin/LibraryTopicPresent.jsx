@@ -56,6 +56,7 @@ export default function LibraryTopicPresent() {
           if (found) setTemplate(found);
         }
       } catch (e) {
+        if (cancel) return; // StrictMode / unmounted — ignore stale fetch
         const st = e?.response?.status;
         const detail = e?.response?.data?.detail;
         const timedOut = e?.code === "ECONNABORTED" || e?.message?.toLowerCase()?.includes("timeout");

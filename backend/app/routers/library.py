@@ -60,6 +60,31 @@ class CreateSubjectRequest(BaseModel):
     description: Optional[str] = None
 
 
+class CreateBoardRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+class LinkSectionSubjectsRequest(BaseModel):
+    board_id: str
+    subject_ids: List[str]
+
+
+class SetSectionBooksRequest(BaseModel):
+    book_ids: List[str]
+
+
+class BulkAssignSectionsRequest(BaseModel):
+    class_ids: List[str]
+    board_id: str
+    subject_ids: List[str]
+    book_ids: List[str]
+
+
+class SetSubjectsRequest(BaseModel):
+    subject_ids: List[str]
+
+
 class CreateBookRequest(BaseModel):
     class_id: str
     subject_id: str
@@ -88,10 +113,12 @@ class UpdateLibraryTopicRequest(BaseModel):
     content_body: Optional[str] = None
     slides: Optional[List[Dict]] = None
     slide_theme: Optional[str] = None
+    clear_slides: bool = False  # set true to explicitly wipe slides_json
 
 
 class SaveParsedBookRequest(BaseModel):
-    class_id: str
+    class_id: Optional[str] = None
+    board_id: Optional[str] = None
     subject_id: str
     title: str
     author: Optional[str] = None
@@ -108,6 +135,15 @@ class SaveParsedBookRequest(BaseModel):
 async def ensure_library_tables():
     """Create library tables if they don't exist"""
     
+    # Persistent seed flags so defaults are inserted only once ever.
+    await execute_write("""
+        CREATE TABLE IF NOT EXISTS library_seed_flags (
+            key VARCHAR(100) PRIMARY KEY,
+            value BOOLEAN NOT NULL DEFAULT true,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
     # Library Classes (separate from school classes)
     await execute_write("""
         CREATE TABLE IF NOT EXISTS library_classes (
@@ -127,12 +163,23 @@ async def ensure_library_tables():
         ("A-Level 1st Year", 15), ("A-Level 2nd Year", 16)
     ]
     
-    for class_name, order in default_classes:
-        await execute_write("""
-            INSERT INTO library_classes (name, display_order)
-            VALUES ($1, $2)
-            ON CONFLICT (name) DO NOTHING
-        """, class_name, order)
+    classes_seeded = await execute_one(
+        "SELECT value FROM library_seed_flags WHERE key = 'default_library_classes_seeded'"
+    )
+    if not classes_seeded:
+        for class_name, order in default_classes:
+            await execute_write("""
+                INSERT INTO library_classes (name, display_order)
+                VALUES ($1, $2)
+                ON CONFLICT (name) DO NOTHING
+            """, class_name, order)
+        await execute_write(
+            """
+            INSERT INTO library_seed_flags (key, value)
+            VALUES ('default_library_classes_seeded', true)
+            ON CONFLICT (key) DO NOTHING
+            """
+        )
     
     # Subjects (global list)
     await execute_write("""
@@ -141,6 +188,56 @@ async def ensure_library_tables():
             name VARCHAR(255) NOT NULL UNIQUE,
             description TEXT,
             created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+    # Boards (Punjab board, KPK board, Oxford, O/A Levels, etc.)
+    await execute_write("""
+        CREATE TABLE IF NOT EXISTS library_boards (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(255) NOT NULL UNIQUE,
+            description TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+    default_boards = [
+        ("Punjab Board", "Punjab textbook board"),
+        ("KPK Board", "Khyber Pakhtunkhwa textbook board"),
+        ("Oxford", "Oxford curriculum"),
+        ("O-Level", "Cambridge O-Level stream"),
+        ("A-Level", "Cambridge A-Level stream"),
+    ]
+    boards_seeded = await execute_one(
+        "SELECT value FROM library_seed_flags WHERE key = 'default_library_boards_seeded'"
+    )
+    if not boards_seeded:
+        for board_name, board_desc in default_boards:
+            await execute_write(
+                """
+                INSERT INTO library_boards (name, description)
+                VALUES ($1, $2)
+                ON CONFLICT (name) DO NOTHING
+                """,
+                board_name,
+                board_desc,
+            )
+        await execute_write(
+            """
+            INSERT INTO library_seed_flags (key, value)
+            VALUES ('default_library_boards_seeded', true)
+            ON CONFLICT (key) DO NOTHING
+            """
+        )
+
+    # Subject availability per board
+    await execute_write("""
+        CREATE TABLE IF NOT EXISTS library_board_subjects (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            board_id UUID REFERENCES library_boards(id) ON DELETE CASCADE,
+            subject_id UUID REFERENCES library_subjects(id) ON DELETE CASCADE,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(board_id, subject_id)
         )
     """)
     
@@ -192,6 +289,29 @@ async def ensure_library_tables():
             created_at TIMESTAMP DEFAULT NOW()
         )
     """)
+
+    # Section-level subject assignment (class row in classes table acts as section)
+    await execute_write("""
+        CREATE TABLE IF NOT EXISTS section_subjects (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            class_id UUID REFERENCES classes(id) ON DELETE CASCADE,
+            board_id UUID REFERENCES library_boards(id) ON DELETE CASCADE,
+            subject_id UUID REFERENCES library_subjects(id) ON DELETE CASCADE,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(class_id, board_id, subject_id)
+        )
+    """)
+
+    # Section-level book assignment
+    await execute_write("""
+        CREATE TABLE IF NOT EXISTS section_books (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            class_id UUID REFERENCES classes(id) ON DELETE CASCADE,
+            book_id UUID REFERENCES library_books(id) ON DELETE CASCADE,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(class_id, book_id)
+        )
+    """)
     
     # ── FK migration: fix any tables created with class_id → classes instead of library_classes ──
     # Drop the wrong constraints if they exist, then add correct ones
@@ -230,10 +350,17 @@ async def ensure_library_tables():
     # Indexes
     await execute_write("CREATE INDEX IF NOT EXISTS idx_library_class_subjects_class ON library_class_subjects(class_id)")
     await execute_write("CREATE INDEX IF NOT EXISTS idx_library_class_subjects_subject ON library_class_subjects(subject_id)")
+    await execute_write("CREATE INDEX IF NOT EXISTS idx_library_board_subjects_board ON library_board_subjects(board_id)")
+    await execute_write("CREATE INDEX IF NOT EXISTS idx_library_board_subjects_subject ON library_board_subjects(subject_id)")
     await execute_write("CREATE INDEX IF NOT EXISTS idx_library_books_class ON library_books(class_id)")
     await execute_write("CREATE INDEX IF NOT EXISTS idx_library_books_subject ON library_books(subject_id)")
     await execute_write("CREATE INDEX IF NOT EXISTS idx_library_chapters_book ON library_chapters(book_id)")
     await execute_write("CREATE INDEX IF NOT EXISTS idx_library_topics_chapter ON library_topics(chapter_id)")
+    await execute_write("CREATE INDEX IF NOT EXISTS idx_section_subjects_class ON section_subjects(class_id)")
+    await execute_write("CREATE INDEX IF NOT EXISTS idx_section_subjects_board ON section_subjects(board_id)")
+    await execute_write("CREATE INDEX IF NOT EXISTS idx_section_subjects_subject ON section_subjects(subject_id)")
+    await execute_write("CREATE INDEX IF NOT EXISTS idx_section_books_class ON section_books(class_id)")
+    await execute_write("CREATE INDEX IF NOT EXISTS idx_section_books_book ON section_books(book_id)")
     await execute_write(
         "ALTER TABLE library_topics ADD COLUMN IF NOT EXISTS slides_json TEXT"
     )
@@ -315,6 +442,406 @@ async def create_subject(req: CreateSubjectRequest, current_user: dict = Depends
         req.name, req.description
     )
     return {"data": result}
+
+
+# ============================================
+# BOARDS
+# ============================================
+
+@router.get("/boards")
+async def get_all_boards():
+    """Get all boards with subject count."""
+    await ensure_library_tables()
+    boards = await execute_query(
+        """
+        SELECT
+            b.id,
+            b.name,
+            b.description,
+            b.created_at,
+            COUNT(bs.subject_id) AS subject_count
+        FROM library_boards b
+        LEFT JOIN library_board_subjects bs ON bs.board_id = b.id
+        GROUP BY b.id
+        ORDER BY b.name
+        """
+    )
+    return {"data": [dict(b) for b in boards]}
+
+
+@router.post("/boards")
+async def create_board(req: CreateBoardRequest, current_user: dict = Depends(get_user_from_token)):
+    """Create a new board."""
+    await ensure_library_tables()
+    existing = await execute_one("SELECT id FROM library_boards WHERE LOWER(name) = LOWER($1)", req.name)
+    if existing:
+        raise HTTPException(status_code=400, detail="Board already exists")
+    row = await execute_one(
+        "INSERT INTO library_boards (name, description) VALUES ($1, $2) RETURNING *",
+        req.name.strip(),
+        req.description,
+    )
+    return {"data": dict(row)}
+
+
+@router.delete("/boards/{board_id}")
+async def delete_board(board_id: str, current_user: dict = Depends(get_user_from_token)):
+    """Delete board and linked assignments."""
+    await ensure_library_tables()
+    await execute_write("DELETE FROM library_boards WHERE id = $1::uuid", board_id)
+    return {"message": "Board deleted"}
+
+
+@router.get("/boards/{board_id}/subjects")
+async def get_board_subjects(board_id: str):
+    """Get board subject list."""
+    await ensure_library_tables()
+    rows = await execute_query(
+        """
+        SELECT s.id, s.name, s.description
+        FROM library_board_subjects bs
+        JOIN library_subjects s ON s.id = bs.subject_id
+        WHERE bs.board_id = $1::uuid
+        ORDER BY s.name
+        """,
+        board_id,
+    )
+    return {"data": [dict(r) for r in rows]}
+
+
+@router.put("/boards/{board_id}/subjects")
+async def set_board_subjects(
+    board_id: str,
+    req: SetSubjectsRequest,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Replace board subject mapping."""
+    await ensure_library_tables()
+    subject_ids = list(dict.fromkeys(req.subject_ids or []))
+    await execute_write("DELETE FROM library_board_subjects WHERE board_id = $1::uuid", board_id)
+    for sid in subject_ids:
+        await execute_write(
+            """
+            INSERT INTO library_board_subjects (board_id, subject_id)
+            VALUES ($1::uuid, $2::uuid)
+            ON CONFLICT (board_id, subject_id) DO NOTHING
+            """,
+            board_id,
+            sid,
+        )
+    return {"message": "Board subjects updated", "count": len(subject_ids)}
+
+
+# ============================================
+# SECTION SUBJECT LINKING
+# ============================================
+
+def _extract_grade_number(value: Optional[str]) -> Optional[int]:
+    if not value:
+        return None
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    return int(digits) if digits else None
+
+
+@router.get("/sections/{class_id}/subjects/catalog")
+async def get_section_subject_catalog(class_id: str):
+    """
+    Get section's currently linked board/subjects and matching library catalog.
+    """
+    await ensure_library_tables()
+    section = await execute_one(
+        """
+        SELECT id, name, grade_level, section
+        FROM classes
+        WHERE id = $1::uuid
+        """,
+        class_id,
+    )
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    grade_num = _extract_grade_number(section.get("grade_level"))
+    candidate_names = []
+    if grade_num:
+        candidate_names.extend([f"Class {grade_num}", str(grade_num)])
+
+    library_class = None
+    if candidate_names:
+        library_class = await execute_one(
+            """
+            SELECT id, name
+            FROM library_classes
+            WHERE LOWER(name) = ANY($1::text[])
+            ORDER BY display_order
+            LIMIT 1
+            """,
+            [n.lower() for n in candidate_names],
+        )
+
+    boards = await execute_query(
+        """
+        SELECT
+            b.id,
+            b.name,
+            b.description,
+            COALESCE(
+                (
+                    SELECT json_agg(
+                        json_build_object(
+                            'id', s.id,
+                            'name', s.name,
+                            'description', s.description
+                        ) ORDER BY s.name
+                    )
+                    FROM library_board_subjects bs
+                    JOIN library_subjects s ON s.id = bs.subject_id
+                    WHERE bs.board_id = b.id
+                ),
+                '[]'::json
+            ) AS subjects
+        FROM library_boards b
+        ORDER BY b.name
+        """
+    )
+
+    # fallback subjects from matched library class if board-specific mapping is empty
+    fallback_subjects = []
+    if library_class:
+        fallback_subjects_rows = await execute_query(
+            """
+            SELECT s.id, s.name, s.description
+            FROM library_class_subjects lcs
+            JOIN library_subjects s ON s.id = lcs.subject_id
+            WHERE lcs.class_id = $1::uuid
+            ORDER BY s.name
+            """,
+            library_class["id"],
+        )
+        fallback_subjects = [dict(r) for r in fallback_subjects_rows]
+
+    linked = await execute_query(
+        """
+        SELECT ss.board_id, ss.subject_id, b.name AS board_name, s.name AS subject_name
+        FROM section_subjects ss
+        JOIN library_boards b ON b.id = ss.board_id
+        JOIN library_subjects s ON s.id = ss.subject_id
+        WHERE ss.class_id = $1::uuid
+        ORDER BY b.name, s.name
+        """,
+        class_id,
+    )
+    linked_by_board: Dict[str, List[str]] = {}
+    for row in linked:
+        bid = str(row["board_id"])
+        linked_by_board.setdefault(bid, []).append(str(row["subject_id"]))
+
+    board_rows = []
+    for b in boards:
+        board_item = dict(b)
+        subjects = board_item.get("subjects") or []
+        if isinstance(subjects, str):
+            try:
+                subjects = json_std.loads(subjects)
+            except Exception:
+                subjects = []
+        if not isinstance(subjects, list):
+            subjects = []
+        if not subjects:
+            subjects = fallback_subjects
+        # Ensure each subject dict has string UUIDs
+        clean_subjects = []
+        for s in subjects:
+            if isinstance(s, dict):
+                clean_subjects.append({k: str(v) if isinstance(v, uuid.UUID) else v for k, v in s.items()})
+        board_item["subjects"] = clean_subjects
+        # Stringify board UUID
+        if isinstance(board_item.get("id"), uuid.UUID):
+            board_item["id"] = str(board_item["id"])
+        board_rows.append(board_item)
+
+    return {
+        "data": {
+            "section": dict(section),
+            "library_class": dict(library_class) if library_class else None,
+            "boards": board_rows,
+            "linked_subjects_by_board": linked_by_board,
+        }
+    }
+
+
+@router.put("/sections/{class_id}/subjects")
+async def set_section_subjects(
+    class_id: str,
+    req: LinkSectionSubjectsRequest,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Replace subject links for one board inside a section."""
+    await ensure_library_tables()
+    section_exists = await execute_one("SELECT id FROM classes WHERE id = $1::uuid", class_id)
+    if not section_exists:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    board_exists = await execute_one("SELECT id FROM library_boards WHERE id = $1::uuid", req.board_id)
+    if not board_exists:
+        raise HTTPException(status_code=404, detail="Board not found")
+
+    subject_ids = list(dict.fromkeys(req.subject_ids or []))
+    await execute_write(
+        "DELETE FROM section_subjects WHERE class_id = $1::uuid AND board_id = $2::uuid",
+        class_id,
+        req.board_id,
+    )
+    for sid in subject_ids:
+        await execute_write(
+            """
+            INSERT INTO section_subjects (class_id, board_id, subject_id)
+            VALUES ($1::uuid, $2::uuid, $3::uuid)
+            ON CONFLICT (class_id, board_id, subject_id) DO NOTHING
+            """,
+            class_id,
+            req.board_id,
+            sid,
+        )
+
+    return {"message": "Section subjects updated", "count": len(subject_ids)}
+
+
+@router.get("/sections/{class_id}/curriculum")
+async def get_section_curriculum(class_id: str):
+    """Get a section's full curriculum: board, subjects, and assigned books."""
+    await ensure_library_tables()
+
+    # Get linked subjects + board
+    linked = await execute_query(
+        """
+        SELECT ss.board_id, lb.name as board_name, ss.subject_id, ls.name as subject_name
+        FROM section_subjects ss
+        JOIN library_boards lb ON lb.id = ss.board_id
+        JOIN library_subjects ls ON ls.id = ss.subject_id
+        WHERE ss.class_id = $1::uuid
+        ORDER BY ls.name
+        """,
+        class_id,
+    )
+
+    # Get assigned books
+    books = await execute_query(
+        """
+        SELECT sb.book_id, lbk.title, lbk.subject_id, lbk.author
+        FROM section_books sb
+        JOIN library_books lbk ON lbk.id = sb.book_id
+        WHERE sb.class_id = $1::uuid
+        ORDER BY lbk.title
+        """,
+        class_id,
+    )
+
+    board_id = str(linked[0]["board_id"]) if linked else None
+    board_name = linked[0]["board_name"] if linked else None
+    subjects = []
+    seen = set()
+    for row in linked:
+        sid = str(row["subject_id"])
+        if sid not in seen:
+            seen.add(sid)
+            subjects.append({"id": sid, "name": row["subject_name"]})
+
+    # Get section name
+    section_row = await execute_one(
+        "SELECT name, grade_level, section FROM classes WHERE id = $1::uuid", class_id
+    )
+    section_name = ""
+    if section_row:
+        sec = section_row.get("section") or ""
+        section_name = f"Section {sec}" if sec else "Main Section"
+
+    return {
+        "data": {
+            "board_id": board_id,
+            "board_name": board_name,
+            "section_name": section_name,
+            "subjects": subjects,
+            "books": [
+                {
+                    "id": str(b["book_id"]),
+                    "title": b["title"],
+                    "subject_id": str(b["subject_id"]),
+                    "author": b["author"],
+                }
+                for b in books
+            ],
+        }
+    }
+
+
+@router.put("/sections/{class_id}/books")
+async def set_section_books(
+    class_id: str,
+    req: SetSectionBooksRequest,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Replace the book list assigned to a section."""
+    await ensure_library_tables()
+    section_exists = await execute_one("SELECT id FROM classes WHERE id = $1::uuid", class_id)
+    if not section_exists:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    book_ids = list(dict.fromkeys(req.book_ids or []))
+    await execute_write("DELETE FROM section_books WHERE class_id = $1::uuid", class_id)
+    for bid in book_ids:
+        await execute_write(
+            """
+            INSERT INTO section_books (class_id, book_id)
+            VALUES ($1::uuid, $2::uuid)
+            ON CONFLICT (class_id, book_id) DO NOTHING
+            """,
+            class_id,
+            bid,
+        )
+    return {"message": "Section books updated", "count": len(book_ids)}
+
+
+@router.post("/sections/bulk-assign")
+async def bulk_assign_sections(
+    req: BulkAssignSectionsRequest,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Assign the same board + subjects + books to multiple sections at once."""
+    await ensure_library_tables()
+    subject_ids = list(dict.fromkeys(req.subject_ids or []))
+    book_ids = list(dict.fromkeys(req.book_ids or []))
+
+    for cid in req.class_ids:
+        section_exists = await execute_one("SELECT id FROM classes WHERE id = $1::uuid", cid)
+        if not section_exists:
+            continue
+        # Set subjects
+        await execute_write(
+            "DELETE FROM section_subjects WHERE class_id = $1::uuid AND board_id = $2::uuid",
+            cid, req.board_id,
+        )
+        for sid in subject_ids:
+            await execute_write(
+                """
+                INSERT INTO section_subjects (class_id, board_id, subject_id)
+                VALUES ($1::uuid, $2::uuid, $3::uuid)
+                ON CONFLICT (class_id, board_id, subject_id) DO NOTHING
+                """,
+                cid, req.board_id, sid,
+            )
+        # Set books
+        await execute_write("DELETE FROM section_books WHERE class_id = $1::uuid", cid)
+        for bid in book_ids:
+            await execute_write(
+                """
+                INSERT INTO section_books (class_id, book_id)
+                VALUES ($1::uuid, $2::uuid)
+                ON CONFLICT (class_id, book_id) DO NOTHING
+                """,
+                cid, bid,
+            )
+
+    return {"message": "Bulk assignment complete", "sections": len(req.class_ids)}
 
 
 @router.delete("/subjects/{subject_id}")
@@ -420,6 +947,51 @@ async def get_books(class_id: str, subject_id: str):
     return {"data": [dict(b) for b in books]}
 
 
+@router.get("/boards/{board_id}/subjects/{subject_id}/books")
+async def get_board_subject_books(board_id: str, subject_id: str):
+    """Get books for a specific board + subject."""
+    await ensure_library_tables()
+    board = await execute_one("SELECT id, name FROM library_boards WHERE id = $1::uuid", board_id)
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+
+    rows = await execute_query(
+        """
+        SELECT
+            b.*,
+            s.name AS subject_name,
+            (
+                SELECT COUNT(*)
+                FROM library_chapters ch
+                WHERE ch.book_id = b.id
+            ) AS chapter_count,
+            (
+                SELECT COUNT(*)
+                FROM library_topics t
+                JOIN library_chapters ch2 ON ch2.id = t.chapter_id
+                WHERE ch2.book_id = b.id
+            ) AS topic_count
+        FROM library_books b
+        JOIN library_subjects s ON s.id = b.subject_id
+        ORDER BY b.created_at DESC, b.title
+        """
+    )
+    board_name = (board["name"] or "").strip().lower()
+    sid = (subject_id or "").strip()
+    books = []
+    for r in rows:
+        item = dict(r)
+        if str(item.get("subject_id")) != sid:
+            continue
+        # Match board by name (case-insensitive, partial match)
+        book_board = (item.get("board_name") or "").strip().lower()
+        if book_board and board_name and book_board != board_name:
+            if board_name not in book_board and book_board not in board_name:
+                continue
+        books.append(item)
+    return {"data": books}
+
+
 @router.post("/library/books")
 async def create_book(req: CreateBookRequest, current_user: dict = Depends(get_user_from_token)):
     """Create a book (validates subject is linked to class first)"""
@@ -477,8 +1049,8 @@ async def get_book_details(book_id: str):
         """
         SELECT b.*, lc.name as class_name, s.name as subject_name
         FROM library_books b
-        JOIN library_classes lc ON b.class_id = lc.id
-        JOIN library_subjects s ON b.subject_id = s.id
+        LEFT JOIN library_classes lc ON b.class_id = lc.id
+        LEFT JOIN library_subjects s ON b.subject_id = s.id
         WHERE b.id = $1
         """,
         book_id
@@ -546,32 +1118,72 @@ async def save_parsed_book(req: SaveParsedBookRequest, current_user: dict = Depe
     await ensure_library_tables()
     
     try:
-        # Validate that this subject is linked to this class
-        link = await execute_one("""
-            SELECT id FROM library_class_subjects 
-            WHERE class_id = $1 AND subject_id = $2
-        """, req.class_id, req.subject_id)
-        
-        if not link:
-            class_data = await execute_one("SELECT name FROM library_classes WHERE id = $1", req.class_id)
-            subject_data = await execute_one("SELECT name FROM library_subjects WHERE id = $1", req.subject_id)
-            
-            class_name = class_data["name"] if class_data else "this class"
-            subject_name = subject_data["name"] if subject_data else "this subject"
-            
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Please add '{subject_name}' to '{class_name}' first before uploading books."
+        if not req.subject_id:
+            raise HTTPException(status_code=400, detail="subject_id is required")
+        if not req.title or not req.title.strip():
+            raise HTTPException(status_code=400, detail="title is required")
+        if not req.chapters:
+            raise HTTPException(status_code=400, detail="At least one chapter is required")
+
+        if not req.class_id and not req.board_id:
+            raise HTTPException(status_code=400, detail="Either class_id or board_id is required")
+
+        board_name = req.board_name
+        if req.board_id:
+            board = await execute_one("SELECT id, name FROM library_boards WHERE id = $1::uuid", req.board_id)
+            if not board:
+                raise HTTPException(status_code=404, detail="Board not found")
+            board_name = board_name or board["name"]
+
+            board_subject_link = await execute_one(
+                """
+                SELECT id
+                FROM library_board_subjects
+                WHERE board_id = $1::uuid AND subject_id = $2::uuid
+                """,
+                req.board_id,
+                req.subject_id,
             )
+            if not board_subject_link:
+                raise HTTPException(status_code=400, detail="Selected subject is not linked to selected board")
+
+        if req.class_id:
+            # Validate class-subject link for legacy class-based library path.
+            link = await execute_one(
+                """
+                SELECT id FROM library_class_subjects
+                WHERE class_id = $1::uuid AND subject_id = $2::uuid
+                """,
+                req.class_id,
+                req.subject_id,
+            )
+            if not link:
+                class_data = await execute_one("SELECT name FROM library_classes WHERE id = $1::uuid", req.class_id)
+                subject_data = await execute_one("SELECT name FROM library_subjects WHERE id = $1::uuid", req.subject_id)
+                class_name = class_data["name"] if class_data else "this class"
+                subject_name = subject_data["name"] if subject_data else "this subject"
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Please add '{subject_name}' to '{class_name}' first before uploading books.",
+                )
         
         # Check duplicate
         existing = await execute_one(
             """
-            SELECT id FROM library_books 
-            WHERE class_id = $1 AND subject_id = $2 
-            AND LOWER(title) = LOWER($3) AND LOWER(COALESCE(author, '')) = LOWER($4)
+            SELECT id FROM library_books
+            WHERE subject_id = $1::uuid
+              AND LOWER(title) = LOWER($2)
+              AND LOWER(COALESCE(author, '')) = LOWER($3)
+              AND (
+                ($4::text IS NOT NULL AND LOWER(COALESCE(board_name, '')) = LOWER($4))
+                OR ($4::text IS NULL AND $5::uuid IS NOT NULL AND class_id = $5::uuid)
+              )
             """,
-            req.class_id, req.subject_id, req.title, req.author or ""
+            req.subject_id,
+            req.title,
+            req.author or "",
+            board_name,
+            req.class_id,
         )
         
         if existing:
@@ -581,10 +1193,16 @@ async def save_parsed_book(req: SaveParsedBookRequest, current_user: dict = Depe
         book = await execute_one(
             """
             INSERT INTO library_books (class_id, subject_id, title, author, board_name, edition_year, pdf_url)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7)
             RETURNING id, title
             """,
-            req.class_id, req.subject_id, req.title, req.author, req.board_name, req.edition_year, req.pdf_url
+            req.class_id,
+            req.subject_id,
+            req.title,
+            req.author,
+            board_name,
+            req.edition_year,
+            req.pdf_url,
         )
         
         chapters_created = 0
@@ -640,9 +1258,12 @@ async def get_library_topic(topic_id: str):
     """Single library topic (includes slides_json when present)."""
     await ensure_library_tables()
     topic_id = (topic_id or "").strip()
-    row = await execute_one("SELECT * FROM library_topics WHERE id = $1::uuid", topic_id)
+    try:
+        row = await execute_one("SELECT * FROM library_topics WHERE id = $1::uuid", topic_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid topic id format: {topic_id!r} — {e}")
     if not row:
-        raise HTTPException(status_code=404, detail="Topic not found")
+        raise HTTPException(status_code=404, detail=f"Topic not found (id={topic_id!r})")
     return {"data": _library_topic_row_json(dict(row))}
 
 
@@ -670,14 +1291,22 @@ async def update_library_topic(
         fields.append(f"content_body = ${n}")
         args.append(body.content_body)
         n += 1
-    if body.slides is not None:
+    if body.clear_slides:
         fields.append(f"slides_json = ${n}")
-        args.append(_serialize_slides(body.slides))
+        args.append(None)
         n += 1
-    if body.slide_theme is not None:
         fields.append(f"slide_theme = ${n}")
-        args.append(body.slide_theme[:160] if body.slide_theme else None)
+        args.append(None)
         n += 1
+    else:
+        if body.slides is not None:
+            fields.append(f"slides_json = ${n}")
+            args.append(_serialize_slides(body.slides))
+            n += 1
+        if body.slide_theme is not None:
+            fields.append(f"slide_theme = ${n}")
+            args.append(body.slide_theme[:160] if body.slide_theme else None)
+            n += 1
 
     if not fields:
         row = await execute_one("SELECT * FROM library_topics WHERE id = $1::uuid", topic_id)
