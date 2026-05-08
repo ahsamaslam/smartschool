@@ -238,6 +238,8 @@ async def startup_event():
                 config JSONB NOT NULL,
                 created_at TIMESTAMP DEFAULT NOW()
             );""",
+            # Ensure theme_config column exists on older design_templates tables
+            "ALTER TABLE design_templates ADD COLUMN IF NOT EXISTS theme_config JSONB;",
         ]
         for sql in migrations:
             try:
