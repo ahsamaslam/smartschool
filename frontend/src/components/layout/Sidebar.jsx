@@ -57,7 +57,8 @@ export default function Sidebar({ role, isOpen, onClose }) {
               );
             }
             const { label, to, icon: iconName } = item;
-            const Icon = HeroIcons[iconName] || HeroIcons.QuestionMarkCircleIcon;
+            const Icon =
+              HeroIcons[iconName] || HeroIcons.QuestionMarkCircleIcon;
             return (
               <NavLink
                 key={to}
@@ -148,26 +149,58 @@ const NAV_BY_ROLE = {
     { label: "Dashboard", to: "/admin/dashboard", icon: "HomeIcon" },
     { label: "Users", to: "/admin/users", icon: "UsersIcon" },
     { label: "Schools", to: "/admin/schools", icon: "BuildingOfficeIcon" },
-    { label: "Teachers", to: "/admin/teachers", icon: "AcademicCapIcon" },
-    { label: "Students", to: "/admin/students", icon: "UserGroupIcon" },
     { label: "Library", to: "/admin/library", icon: "BookOpenIcon" },
     { label: "AI Book Parser", to: "/admin/ai-parser", icon: "SparklesIcon" },
+    { label: "Teachers", to: "/admin/teachers", icon: "AcademicCapIcon" },
+    { label: "Students", to: "/admin/students", icon: "UserGroupIcon" },
     { label: "Videos", to: "/admin/videos", icon: "VideoCameraIcon" },
     { label: "Slides", to: "/admin/slides", icon: "PresentationChartBarIcon" },
     { label: "Record Lecture", to: "/admin/record-lecture", icon: "FilmIcon" },
     { label: "Settings", to: "/admin/settings", icon: "CogIcon" },
     { divider: true, label: "Teacher" },
     { label: "My Classes", to: "/teacher/classes", icon: "AcademicCapIcon" },
-    { label: "Attendance", to: "/teacher/attendance", icon: "ClipboardDocumentListIcon" },
-    { label: "Publish Video", to: "/teacher/publish-video", icon: "VideoCameraIcon" },
-    { label: "My Avatar Videos", to: "/teacher/avatar-videos", icon: "UserCircleIcon" },
-    { label: "Lecture Viewer", to: "/teacher/lecture-viewer", icon: "PlayCircleIcon" },
+    {
+      label: "Attendance",
+      to: "/teacher/attendance",
+      icon: "ClipboardDocumentListIcon",
+    },
+    {
+      label: "Publish Video",
+      to: "/teacher/publish-video",
+      icon: "VideoCameraIcon",
+    },
+    {
+      label: "My Avatar Videos",
+      to: "/teacher/avatar-videos",
+      icon: "UserCircleIcon",
+    },
+    {
+      label: "Lecture Viewer",
+      to: "/teacher/lecture-viewer",
+      icon: "PlayCircleIcon",
+    },
     { label: "Exam", to: "/teacher/exams", icon: "DocumentTextIcon" },
     { label: "Teacher Reports", to: "/teacher/reports", icon: "ChartBarIcon" },
     { divider: true, label: "Manager" },
-    { label: "Manager Schools", to: "/manager/schools", icon: "BuildingOffice2Icon" },
-    { label: "Student Reports", to: "/manager/student-reports", icon: "UserGroupIcon" },
-    { label: "Class Reports", to: "/manager/class-reports", icon: "TableCellsIcon" },
-    { label: "Mgr Teacher Reports", to: "/manager/teacher-reports", icon: "PresentationChartLineIcon" },
+    {
+      label: "Manager Schools",
+      to: "/manager/schools",
+      icon: "BuildingOffice2Icon",
+    },
+    {
+      label: "Student Reports",
+      to: "/manager/student-reports",
+      icon: "UserGroupIcon",
+    },
+    {
+      label: "Class Reports",
+      to: "/manager/class-reports",
+      icon: "TableCellsIcon",
+    },
+    {
+      label: "Mgr Teacher Reports",
+      to: "/manager/teacher-reports",
+      icon: "PresentationChartLineIcon",
+    },
   ],
 };

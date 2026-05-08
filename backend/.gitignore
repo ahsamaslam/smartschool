@@ -39,6 +39,19 @@ build/
 htmlcov/
 .pytest_cache/
 
+# ----- Local DB / temp ------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+*.tmp
+*.bak
+*.pid
+
+# ----- Python version / env managers ----------------------
+.python-version
+pip-wheel-metadata/
+__pypackages__/
+
 # ----- IDE / OS --------------------------------------------
 .vscode/
 .idea/
