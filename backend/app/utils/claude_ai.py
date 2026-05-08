@@ -478,6 +478,119 @@ Make it ready to print."""
 
 
 # ============================================
+# STRUCTURED EXAM GENERATION (for Exam module)
+# ============================================
+
+async def generate_exam_structured(
+    topics_info: List[Dict],
+    subject_name: str,
+    class_name: str,
+    exam_format: Dict[str, int],
+    complexity: str,
+    syllabus_context: str,
+    previous_questions: List[str]
+) -> List[Dict]:
+    """
+    Generate a structured exam as a JSON array of question objects.
+    Questions are strictly grounded in the provided syllabus_context (RAG).
+
+    Args:
+        topics_info: [{"title": "...", "content": "..."}]
+        subject_name: e.g. "Physics"
+        class_name: e.g. "Class 10-A"
+        exam_format: {"mcq": 10, "short_answer": 5, "long_answer": 3, "fill_in_blank": 4}
+        complexity: "easy" | "medium" | "hard"
+        syllabus_context: Full text of topic content to ground questions in
+        previous_questions: List of question_text strings to avoid repeating
+
+    Returns:
+        List of dicts: [{question_type, question_text, options, correct_answer, marks}]
+    """
+    if not any(v > 0 for v in exam_format.values()):
+        return []
+
+    topic_titles = ", ".join(t["title"] for t in topics_info)
+
+    avoid_section = ""
+    if previous_questions:
+        avoid_list = "\n".join(f"- {q}" for q in previous_questions[:30])
+        avoid_section = f"""
+DO NOT repeat or closely paraphrase any of these previously used questions:
+{avoid_list}
+"""
+
+    format_lines = []
+    for qtype, count in exam_format.items():
+        if count > 0:
+            label_map = {
+                "mcq": "Multiple Choice (MCQ)",
+                "short_answer": "Short Answer",
+                "long_answer": "Long Answer / Essay",
+                "fill_in_blank": "Fill in the Blank",
+            }
+            format_lines.append(f"- {count} × {label_map.get(qtype, qtype)}")
+
+    system_prompt = f"""You are an expert exam paper generator for {subject_name}, {class_name}.
+
+STRICT RULES:
+1. ONLY create questions based on the provided syllabus content below. Do not go beyond this material.
+2. Generate questions at {complexity} difficulty level.
+3. Each question must be answerable from the syllabus content.
+{avoid_section}
+IMPORTANT: Return ONLY a valid JSON array. No markdown fences, no explanation, no extra text.
+
+JSON array format — each element must have:
+{{
+  "question_type": "mcq" | "short_answer" | "long_answer" | "fill_in_blank",
+  "question_text": "...",
+  "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}} (only for mcq, else null),
+  "correct_answer": "...",
+  "marks": <integer — mcq=1, short_answer=3, fill_in_blank=2, long_answer=5>
+}}
+
+For fill_in_blank: write the sentence with a blank as "___" in question_text, put the correct word/phrase in correct_answer.
+For mcq: exactly 4 options A-D, correct_answer is the letter e.g. "A".
+For short_answer: correct_answer is a concise model answer.
+For long_answer: correct_answer is a detailed model answer / marking rubric.
+
+SYLLABUS CONTENT (base all questions on this):
+{syllabus_context[:6000]}"""
+
+    user_prompt = f"""Generate an exam paper for topics: {topic_titles}
+
+Required questions:
+{chr(10).join(format_lines)}
+
+Return ONLY the JSON array."""
+
+    try:
+        message = await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4000,
+            temperature=0.8,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}]
+        )
+
+        response_text = message.content[0].text.strip()
+
+        # Strip markdown fences if model adds them anyway
+        if response_text.startswith("```"):
+            response_text = re.sub(r"^```[a-z]*\n?", "", response_text)
+            response_text = re.sub(r"\n?```$", "", response_text)
+
+        questions = json.loads(response_text)
+        if not isinstance(questions, list):
+            raise ValueError("Expected JSON array")
+
+        return questions
+
+    except Exception as e:
+        logger.error(f"Error generating structured exam: {str(e)}")
+        return []
+
+
+# ============================================
 # CURRICULUM PARSING
 # ============================================
 

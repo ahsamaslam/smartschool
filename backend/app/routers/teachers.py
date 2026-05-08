@@ -55,29 +55,51 @@ class ExamGenerationRequest(BaseModel):
 @router.get("/classes/{teacher_id}")
 async def get_teacher_classes(teacher_id: str):
     """
-    Get all classes managed by teacher
+    Get all classes managed by teacher (or all classes for admin)
     """
-    
-    query = """
-        SELECT 
-            c.id,
-            c.name,
-            c.grade_level,
-            b.name as branch_name,
-            s.name as school_name,
-            COUNT(DISTINCT e.student_id) as student_count,
-            COUNT(DISTINCT cs.subject_id) as subject_count
-        FROM classes c
-        JOIN branches b ON c.branch_id = b.id
-        JOIN schools s ON b.school_id = s.id
-        LEFT JOIN enrollments e ON c.id = e.class_id AND e.is_active = true
-        LEFT JOIN class_subjects cs ON c.id = cs.class_id
-        WHERE c.teacher_id = $1
-        GROUP BY c.id, c.name, c.grade_level, b.name, s.name
-        ORDER BY c.name
-    """
-    
-    classes = await execute_query(query, teacher_id)
+    # Check if requester is admin — return all classes
+    user_row = await execute_one("SELECT role FROM users WHERE id = $1", teacher_id)
+    is_admin = user_row and user_row["role"] == "admin"
+
+    if is_admin:
+        query = """
+            SELECT
+                c.id,
+                c.name,
+                c.grade_level,
+                b.name as branch_name,
+                s.name as school_name,
+                COUNT(DISTINCT e.student_id) as student_count,
+                COUNT(DISTINCT cs.subject_id) as subject_count
+            FROM classes c
+            JOIN branches b ON c.branch_id = b.id
+            JOIN schools s ON b.school_id = s.id
+            LEFT JOIN enrollments e ON c.id = e.class_id AND e.is_active = true
+            LEFT JOIN class_subjects cs ON c.id = cs.class_id
+            GROUP BY c.id, c.name, c.grade_level, b.name, s.name
+            ORDER BY c.name
+        """
+        classes = await execute_query(query)
+    else:
+        query = """
+            SELECT
+                c.id,
+                c.name,
+                c.grade_level,
+                b.name as branch_name,
+                s.name as school_name,
+                COUNT(DISTINCT e.student_id) as student_count,
+                COUNT(DISTINCT cs.subject_id) as subject_count
+            FROM classes c
+            JOIN branches b ON c.branch_id = b.id
+            JOIN schools s ON b.school_id = s.id
+            LEFT JOIN enrollments e ON c.id = e.class_id AND e.is_active = true
+            LEFT JOIN class_subjects cs ON c.id = cs.class_id
+            WHERE c.teacher_id = $1
+            GROUP BY c.id, c.name, c.grade_level, b.name, s.name
+            ORDER BY c.name
+        """
+        classes = await execute_query(query, teacher_id)
     return [dict(cls) for cls in classes]
 
 

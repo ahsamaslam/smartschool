@@ -11,7 +11,28 @@ export const API_ROUTES = {
   ANALYTICS: "/analytics",
   ATTENDANCE: "/attendance",
   CLASSES: "/classes",
+  EXAMS: "/exams",
 };
+
+// Exam module constants
+export const EXAM_QUESTION_TYPES = [
+  { value: "mcq", label: "Multiple Choice (MCQ)" },
+  { value: "short_answer", label: "Short Answer" },
+  { value: "fill_in_blank", label: "Fill in the Blank" },
+  { value: "long_answer", label: "Long Question" },
+];
+
+export const EXAM_COMPLEXITY_OPTIONS = [
+  { value: "easy", label: "Easy" },
+  { value: "medium", label: "Medium" },
+  { value: "hard", label: "Hard" },
+];
+
+export const EXAM_FONT_SIZE_OPTIONS = [
+  { value: "sm", label: "Small" },
+  { value: "base", label: "Normal" },
+  { value: "lg", label: "Large" },
+];
 
 // User roles
 export const ROLES = {

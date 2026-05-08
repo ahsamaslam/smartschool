@@ -24,7 +24,8 @@ from app.routers import (
     attendance,
     analytics,
     classes as classes_router,
-    library
+    library,
+    exams
 )
 from app.schemas.slides_ai import GenerateSlidesRequest, GenerateSlidesResponse
 from app.utils.ai_slide_deck import generate_slide_deck as run_generate_slide_deck
@@ -135,6 +136,9 @@ app.include_router(classes_router.router, prefix="/api/classes", tags=["Classes"
 # Curriculum Library
 app.include_router(library.router, prefix="/api/library", tags=["Library"])
 
+# Exam Module
+app.include_router(exams.router, prefix="/api/exams", tags=["Exams"])
+
 # Spec alias: POST /api/generate-slides (same handler as admin route)
 @app.post("/api/generate-slides", response_model=GenerateSlidesResponse, tags=["AI Slides"])
 async def standalone_generate_slides(body: GenerateSlidesRequest):
@@ -238,8 +242,25 @@ async def startup_event():
                 config JSONB NOT NULL,
                 created_at TIMESTAMP DEFAULT NOW()
             );""",
-            # Ensure theme_config column exists on older design_templates tables
+            # Ensure theme_config / style_config columns exist on older design_templates tables
             "ALTER TABLE design_templates ADD COLUMN IF NOT EXISTS theme_config JSONB;",
+            "ALTER TABLE design_templates ADD COLUMN IF NOT EXISTS style_config JSONB;",
+            # Exam module — extend teacher_exams and add exam_questions
+            "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'draft';",
+            "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();",
+            "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS subject_id UUID REFERENCES subjects(id);",
+            """CREATE TABLE IF NOT EXISTS exam_questions (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                exam_id UUID REFERENCES teacher_exams(id) ON DELETE CASCADE,
+                question_type VARCHAR(50) NOT NULL,
+                question_text TEXT NOT NULL,
+                options JSONB,
+                correct_answer TEXT,
+                marks INTEGER DEFAULT 1,
+                order_index INTEGER DEFAULT 0,
+                is_manual BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT NOW()
+            );""",
         ]
         for sql in migrations:
             try:
@@ -276,9 +297,10 @@ async def startup_event():
             ]
             for tmpl in default_templates:
                 await execute_write(
-                    "INSERT INTO design_templates (name, category, description, is_system, theme_config, style_config) VALUES ($1, $2, $3, true, $4, $5)",
+                    "INSERT INTO design_templates (name, category, description, is_system, theme_config, style_config, layout_definitions) VALUES ($1, $2, $3, true, $4, $5, $6)",
                     tmpl["name"], tmpl["category"], tmpl["description"],
-                    json.dumps(tmpl["theme_config"]), json.dumps({"font": "'Inter', sans-serif", "border_radius": "12px"})
+                    json.dumps(tmpl["theme_config"]), json.dumps({"font": "'Inter', sans-serif", "border_radius": "12px"}),
+                    json.dumps([])
                 )
             logger.info(f"✅ Seeded {len(default_templates)} design templates")
     except Exception as e:

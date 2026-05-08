@@ -30,6 +30,8 @@ const PublishVideo = lazy(() => import("./pages/teacher/PublishVideo"));
 const AvatarVideos = lazy(() => import("./pages/teacher/AvatarVideos"));
 const LectureViewer = lazy(() => import("./pages/teacher/LectureViewerPage"));
 const GenerateExam = lazy(() => import("./pages/teacher/GenerateExam"));
+const ExamsPage = lazy(() => import("./pages/teacher/Exams"));
+const ExamEditor = lazy(() => import("./pages/teacher/ExamEditor"));
 const TeacherReports = lazy(() => import("./pages/teacher/Reports"));
 
 // Manager
@@ -53,7 +55,9 @@ const AdminAIParser = lazy(() => import("./pages/admin/AIParser"));
 const AdminVideos = lazy(() => import("./pages/admin/Videos"));
 const AdminSlides = lazy(() => import("./pages/admin/Slides"));
 const AdminRecordLecture = lazy(() => import("./pages/admin/RecordLecture"));
-const AdminLibraryTopicPresent = lazy(() => import("./pages/admin/LibraryTopicPresent"));
+const AdminLibraryTopicPresent = lazy(
+  () => import("./pages/admin/LibraryTopicPresent"),
+);
 const AdminSettings = lazy(() => import("./pages/admin/Settings"));
 
 // Shared
@@ -102,6 +106,8 @@ export default function App() {
             <Route path="/teacher/avatar-videos" element={<AvatarVideos />} />
             <Route path="/teacher/lecture-viewer" element={<LectureViewer />} />
             <Route path="/teacher/generate-exam" element={<GenerateExam />} />
+            <Route path="/teacher/exams" element={<ExamsPage />} />
+            <Route path="/teacher/exams/:examId" element={<ExamEditor />} />
             <Route path="/teacher/reports" element={<TeacherReports />} />
 
             {/* ── MANAGER ── */}
@@ -143,9 +149,15 @@ export default function App() {
             <Route path="/admin/library" element={<AdminLibrary />} />
             <Route path="/admin/ai-parser" element={<AdminAIParser />} />
             <Route path="/admin/videos" element={<AdminVideos />} />
-            <Route path="/admin/library/topics/:topicId/present" element={<AdminLibraryTopicPresent />} />
+            <Route
+              path="/admin/library/topics/:topicId/present"
+              element={<AdminLibraryTopicPresent />}
+            />
             <Route path="/admin/slides" element={<AdminSlides />} />
-            <Route path="/admin/record-lecture/:libraryTopicId?" element={<AdminRecordLecture />} />
+            <Route
+              path="/admin/record-lecture/:libraryTopicId?"
+              element={<AdminRecordLecture />}
+            />
             <Route path="/admin/settings" element={<AdminSettings />} />
 
             {/* Profile — shared across all roles */}
