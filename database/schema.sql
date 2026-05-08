@@ -440,8 +440,8 @@ CREATE POLICY "Teachers can view their class students"
 -- ============================================
 
 -- Insert default admin user (password will be set via Supabase Auth)
-INSERT INTO users (id, email, full_name, role) VALUES
-    ('00000000-0000-0000-0000-000000000001', 'admin@education.com', 'System Admin', 'admin');
+-- Admin user is bootstrapped from ADMIN_EMAIL / ADMIN_PASSWORD env vars on application startup.
+-- Do not add users here.
 
 COMMENT ON TABLE users IS 'All system users: students, teachers, managers, admins';
 COMMENT ON TABLE published_videos IS 'Videos with avatars ready for student viewing';

@@ -192,6 +192,48 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️  Schema migration warning: {str(e)}")
 
+    # Bootstrap the sole admin user from env vars.
+    # If the user already exists it is updated to match the env values;
+    # every other user in the table is deactivated so only this admin
+    # can log in until additional users are explicitly created.
+    try:
+        from app.utils.auth import hash_password
+        from app.utils.database import execute_write, execute_one
+
+        admin_email = settings.ADMIN_EMAIL
+        admin_password_hash = hash_password(settings.ADMIN_PASSWORD)
+
+        # Upsert the admin user
+        await execute_write(
+            """
+            INSERT INTO users (id, email, full_name, role, password_hash, is_active)
+            VALUES (
+                '00000000-0000-0000-0000-000000000001',
+                $1, 'System Admin', 'admin', $2, true
+            )
+            ON CONFLICT (id) DO UPDATE
+                SET email         = EXCLUDED.email,
+                    password_hash = EXCLUDED.password_hash,
+                    is_active     = true,
+                    updated_at    = NOW();
+            """,
+            admin_email,
+            admin_password_hash,
+        )
+
+        # Deactivate every other user so they cannot log in
+        await execute_write(
+            """
+            UPDATE users
+            SET is_active = false
+            WHERE id <> '00000000-0000-0000-0000-000000000001';
+            """
+        )
+
+        logger.info(f"✅ Admin user bootstrapped: {admin_email}")
+    except Exception as e:
+        logger.error(f"❌ Admin bootstrap failed: {str(e)}")
+
     logger.info("✅ Education Platform API Started Successfully!")
 
 @app.on_event("shutdown")
