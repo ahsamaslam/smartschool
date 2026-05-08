@@ -15,10 +15,14 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     ENVIRONMENT: str = "development"
     
+    # Admin bootstrap user (sourced from env; upserted on startup)
+    ADMIN_EMAIL: str = "admin@mail.com"
+    ADMIN_PASSWORD: str = "Admin@123"
+
     # Supabase
-    SUPABASE_URL: str
-    SUPABASE_KEY: str
-    SUPABASE_SERVICE_KEY: str
+    SUPABASE_URL: str = ""
+    SUPABASE_KEY: str = ""
+    SUPABASE_SERVICE_KEY: str = ""
     
     # Database
     DATABASE_URL: str

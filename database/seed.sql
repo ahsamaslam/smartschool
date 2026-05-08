@@ -1,28 +1,20 @@
 -- ============================================
 -- SEED DATA
--- Only the default admin user is created here.
--- All other users (managers, teachers, students)
--- must be created through the application.
+-- ============================================
+-- The database starts empty.
+-- The sole admin account is created automatically at application
+-- startup using the ADMIN_EMAIL and ADMIN_PASSWORD env vars.
+-- All other users (managers, teachers, students) must be created
+-- through the Admin portal once the admin has logged in.
 -- ============================================
 
--- ============================================
--- ADMIN PASSWORD HASH
--- ============================================
-
--- Requires pgcrypto
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
--- Set password for the default admin account (created in schema.sql)
-UPDATE users
-SET password_hash = crypt('Admin@123', gen_salt('bf', 12))
-WHERE role = 'admin';
-
-/*
-DEFAULT ADMIN ACCOUNT:
-  Email:    admin@education.com
-  Password: Admin@123
-
-All other schools, branches, managers, teachers, and students
-must be created through the Admin portal.
-Change the admin password after first login.
-*/
+-- Ensure no leftover non-admin data from any previous seed runs.
+DELETE FROM enrollments;
+DELETE FROM video_templates;
+DELETE FROM topics;
+DELETE FROM class_subjects;
+DELETE FROM subjects;
+DELETE FROM classes;
+DELETE FROM branches;
+DELETE FROM schools;
+DELETE FROM users;

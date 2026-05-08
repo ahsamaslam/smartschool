@@ -1,31 +1,36 @@
 """
 Authentication utilities — JWT token creation/verification and password hashing.
-Uses python-jose for JWT and passlib[bcrypt] for password hashing.
-Both are already in requirements.txt.
+Uses python-jose for JWT and bcrypt directly for password hashing.
 """
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.config import settings
 
 # ---------------------------------------------------------------------------
-# Password hashing context — bcrypt is compatible with PostgreSQL pgcrypto
-# crypt(..., gen_salt('bf', 12)) hashes used in seed.sql
+# Password hashing — use bcrypt directly (passlib 1.7.4 is incompatible
+# with bcrypt >= 4.x).
 # ---------------------------------------------------------------------------
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_password(plain_password: str) -> str:
     """Return bcrypt hash of plain_password."""
-    return _pwd_context.hash(plain_password)
+    return bcrypt.hashpw(
+        plain_password.encode("utf-8"), bcrypt.gensalt(rounds=12)
+    ).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Return True if plain_password matches hashed_password."""
-    return _pwd_context.verify(plain_password, hashed_password)
+    try:
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8"), hashed_password.encode("utf-8")
+        )
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
