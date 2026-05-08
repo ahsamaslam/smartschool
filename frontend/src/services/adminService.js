@@ -3,10 +3,26 @@ import { API_ROUTES } from "../utils/constants";
 
 const adminService = {
   // Users
-  getUsers: (role) =>
-    api.get(`${API_ROUTES.ADMINS}/users`, { params: role ? { role } : {} }),
+  getUsers: (role, axiosConfig = {}) =>
+    api.get(`${API_ROUTES.ADMINS}/users`, {
+      ...(axiosConfig || {}),
+      params: {
+        ...(role ? { role } : {}),
+        ...(axiosConfig.params || {}),
+      },
+    }),
+  getStudentsLedger: () => api.get(`${API_ROUTES.ADMINS}/students`),
+  getStudentDetail: (studentId) => api.get(`${API_ROUTES.ADMINS}/students/${studentId}`),
+  createStudent: (data) => api.post(`${API_ROUTES.ADMINS}/students`, data),
+  promoteStudent: (studentId, data) => api.post(`${API_ROUTES.ADMINS}/students/${studentId}/promote`, data),
+  repeatStudent: (studentId, data) => api.post(`${API_ROUTES.ADMINS}/students/${studentId}/repeat`, data),
+  changeStudentSection: (studentId, data) => api.post(`${API_ROUTES.ADMINS}/students/${studentId}/change-section`, data),
+  getStudentSectionOptions: (studentId) => api.get(`${API_ROUTES.ADMINS}/students/${studentId}/section-options`),
+  setCurrentEnrollment: (studentId, data) => api.post(`${API_ROUTES.ADMINS}/students/${studentId}/set-current-enrollment`, data),
+  archiveStudent: (studentId) => api.delete(`${API_ROUTES.ADMINS}/students/${studentId}`),
 
   createUser: (data) => api.post(`${API_ROUTES.ADMINS}/users`, data),
+  updateUser: (userId, data) => api.put(`${API_ROUTES.ADMINS}/users/${userId}`, data),
 
   assignRole: (userId, newRole) =>
     api.put(`${API_ROUTES.ADMINS}/users/${userId}/role`, {
@@ -18,11 +34,29 @@ const adminService = {
     api.delete(`${API_ROUTES.ADMINS}/users/${userId}`),
 
   // Schools
-  getSchools: () => api.get(`${API_ROUTES.MANAGERS}/schools`),
+  getSchools: () => api.get(`${API_ROUTES.ADMINS}/schools`),
+  getAllSchoolData: (axiosConfig = {}) =>
+    api.get(`${API_ROUTES.ADMINS}/schools/all-data`, axiosConfig),
 
   createSchool: (data) => api.post(`${API_ROUTES.ADMINS}/schools`, data),
+  updateSchool: (schoolId, data) => api.put(`${API_ROUTES.ADMINS}/schools/${schoolId}`, data),
+  deleteSchool: (schoolId) => api.delete(`${API_ROUTES.ADMINS}/schools/${schoolId}`),
+
+  getSchoolBranches: (schoolId) =>
+    api.get(`${API_ROUTES.ADMINS}/schools/${schoolId}/branches`),
 
   createBranch: (data) => api.post(`${API_ROUTES.ADMINS}/branches`, data),
+  updateBranch: (branchId, data) => api.put(`${API_ROUTES.ADMINS}/branches/${branchId}`, data),
+  deleteBranch: (branchId) => api.delete(`${API_ROUTES.ADMINS}/branches/${branchId}`),
+
+  getBranchClasses: (branchId) =>
+    api.get(`${API_ROUTES.ADMINS}/branches/${branchId}/classes`),
+
+  getClasses: () => api.get(`${API_ROUTES.ADMINS}/classes`),
+
+  createClass: (data) => api.post(`${API_ROUTES.ADMINS}/classes`, data),
+  updateClass: (classId, data) => api.put(`${API_ROUTES.ADMINS}/classes/${classId}`, data),
+  deleteClass: (classId) => api.delete(`${API_ROUTES.ADMINS}/classes/${classId}`),
 
   // Curriculum
   getSubjects: () => api.get(`${API_ROUTES.ADMINS}/subjects`),
@@ -49,7 +83,7 @@ const adminService = {
   parseCurriculumBook: (formData) =>
     api.post(`${API_ROUTES.ADMINS}/curriculum/parse-book`, formData, {
       headers: { "Content-Type": "multipart/form-data" },
-      timeout: 120000,
+      timeout: 300000, // 5 minutes — AI parsing can be slow for large PDFs
     }),
 
   saveParsedCurriculum: (data) =>
@@ -113,6 +147,36 @@ const adminService = {
   updateVideoTemplate: (templateId, data) =>
     api.put(`${API_ROUTES.ADMINS}/videos/templates/${templateId}`, null, {
       params: data,
+    }),
+
+  // Design Templates
+  getDesignTemplates: (category = null, activeOnly = true) =>
+    api.get(`${API_ROUTES.ADMINS}/templates`, {
+      params: { category, active_only: activeOnly },
+    }),
+
+  createDesignTemplate: (data) =>
+    api.post(`${API_ROUTES.ADMINS}/templates`, data),
+
+  updateDesignTemplate: (templateId, data) =>
+    api.put(`${API_ROUTES.ADMINS}/templates/${templateId}`, data),
+
+  deleteDesignTemplate: (templateId) =>
+    api.delete(`${API_ROUTES.ADMINS}/templates/${templateId}`),
+
+  applyTemplateToTopic: (templateId, topicId) =>
+    api.post(`${API_ROUTES.ADMINS}/templates/${templateId}/apply`, {
+      topic_id: topicId,
+      design_template_id: templateId,
+    }),
+
+  seedDefaultTemplates: () =>
+    api.post(`${API_ROUTES.ADMINS}/templates/seed`),
+
+  /** Structured slide deck (Claude when configured, mock fallback). */
+  generateAISlides: (data) =>
+    api.post(`${API_ROUTES.ADMINS}/generate-slides`, data, {
+      timeout: 120000,
     }),
 
   // Train Model (pushes curriculum context to Claude)

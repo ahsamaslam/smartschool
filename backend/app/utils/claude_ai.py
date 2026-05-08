@@ -5,6 +5,7 @@ from anthropic import AsyncAnthropic
 from typing import List, Dict, Optional
 import logging
 import json
+import re
 
 from app.config import settings
 from app.utils.cache import get_cached_answer, cache_answer
@@ -489,7 +490,7 @@ async def parse_curriculum_document(
     Parse a curriculum book (PDF or text) and extract structured hierarchy.
     Returns: { book_title, grade_level, subjects: [{ name, description, chapters: [{ number, name, topics: [{ title, description }] }] }] }
     """
-    system_prompt = """You are a curriculum analysis expert. Parse educational curriculum books and extract a complete structured hierarchy.
+    system_prompt = """You are a curriculum extraction expert. Your job is to extract EVERY piece of content from educational textbooks and return it as structured JSON.
 
 ALWAYS return valid JSON with this EXACT structure — no extra text outside the JSON:
 {
@@ -498,15 +499,15 @@ ALWAYS return valid JSON with this EXACT structure — no extra text outside the
   "subjects": [
     {
       "name": "string (e.g. Mathematics, Physics, Biology)",
-      "description": "string (1-2 sentence overview)",
+      "description": "string (1-2 sentence overview of the subject)",
       "chapters": [
         {
           "number": 1,
-          "name": "string (chapter title)",
+          "name": "string (chapter title exactly as in book)",
           "topics": [
             {
-              "title": "string (concise topic name)",
-              "description": "string (2-3 sentence educational description of what students will learn)"
+              "title": "string (topic/section heading exactly as in book)",
+              "content_body": "string (COPY the full text content of this topic from the book — all paragraphs, definitions, examples, formulas, lists. Do NOT summarize. Extract verbatim or near-verbatim. Minimum 100 words per topic if content exists.)"
             }
           ]
         }
@@ -515,11 +516,14 @@ ALWAYS return valid JSON with this EXACT structure — no extra text outside the
   ]
 }
 
-Rules:
-- Extract ALL subjects, ALL chapters, and ALL topics — be exhaustive
-- If grade level is not explicit, infer it from context
-- Topic titles should be concise and searchable
-- Topic descriptions should clearly explain the learning objective"""
+CRITICAL RULES:
+- Extract ALL chapters and ALL topics/sections — be 100% exhaustive
+- content_body must contain the ACTUAL TEXT from the book for that topic, not a generated description
+- Include definitions, explanations, examples, key points, formulas — everything under that heading
+- If a topic has sub-sections, combine all sub-section text into content_body
+- Do NOT generate or invent content — only extract what is physically present in the document
+- If grade level is not explicit, infer from context
+- Topic titles should match the book headings exactly"""
 
     MAX_CHARS = 80_000  # ~20k tokens — stays well under Claude's context limit
 
@@ -527,6 +531,7 @@ Rules:
         if media_type == "application/pdf" or file_name.lower().endswith(".pdf"):
             import io
             text = ""
+            pages_text = []
 
             # Try pdfplumber first — best for complex layouts, tables, multi-column
             try:
@@ -642,7 +647,7 @@ Rules:
 
         message = await client.messages.create(
             model="claude-opus-4-5",
-            max_tokens=8000,
+            max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": content}],
         )
@@ -802,6 +807,66 @@ Write the absolute best possible script for this topic."""
     except Exception as e:
         logger.error(f"Error generating topic script for '{topic_title}': {e}")
         raise
+
+
+# ============================================
+# AI SLIDE DECK (structured JSON)
+# ============================================
+
+
+async def generate_educational_slide_deck_json(
+    topic: str,
+    content: str,
+    audience: str,
+    tone: str,
+    slide_count: int,
+) -> List[Dict]:
+    """
+    Ask Claude to return JSON { "slides": [ { title, content[], layout, animation } ] }.
+    Caller normalizes / clips results.
+    """
+    n = max(4, min(int(slide_count), 28))
+    sys = """You generate premium presentation slide decks for teachers (Canva/Gamma-quality structure).
+
+Rules:
+1. Respond with JSON ONLY — no markdown, no prose.
+2. Schema: {"slides":[{"title":"","content":[],"layout":"","animation":""}, ...]}
+3. Allowed layout values: title-only | title-bullets | two-column | steps | highlight | quote
+4. Allowed animation values: fade | slide-up | slide-left | zoom | stagger | none
+   - Prefer: title-only → zoom; steps → slide-up; title-bullets & two-column → stagger; highlight → slide-left.
+5. content is ALWAYS an array of strings (0 items for title-only title slide; 1 string for highlight/quote; 3-5 for bullets).
+6. Vary layouts across the deck. First slide must be title-only with topic as title and 0-1 short subtitle strings in content.
+7. If source notes are provided, ground bullets in them; otherwise invent accurate, classroom-ready teaching points.
+8. Keep titles punchy (<= 80 chars). Bullets concise (<= 160 chars each).
+9. Match audience: "students" → simple language; "advanced" → richer vocabulary.
+10. Match tone: "simple" vs "professional" for formality."""
+
+    user = f"""Topic: {topic}
+Desired slide count: {n}
+Audience: {audience}
+Tone: {tone}
+Source notes (may be empty):
+---
+{content or "(none — infer a sensible lesson arc)"}
+---
+Return exactly JSON with ~{n} slides in the slides array."""
+
+    message = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=6000,
+        system=sys,
+        messages=[{"role": "user", "content": user}],
+    )
+    text = message.content[0].text.strip()
+    # Strip accidental fences
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```\s*$", "", text)
+
+    parsed = json.loads(text)
+    slides = parsed.get("slides") if isinstance(parsed, dict) else parsed
+    if not isinstance(slides, list):
+        raise ValueError("Claude slide response missing slides array")
+    return slides
 
 
 # ============================================

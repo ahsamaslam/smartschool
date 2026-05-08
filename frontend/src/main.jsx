@@ -7,11 +7,27 @@ import App from "./App";
 import { AuthProvider } from "./context/AuthContext";
 import "./index.css";
 
+// React prints a dev-only hint to install browser DevTools — not an error or "loading".
+if (import.meta.env.DEV) {
+  const swallow = (fn) => (...args) => {
+    const s = typeof args[0] === "string" ? args[0] : "";
+    if (s.includes("Download the React DevTools") && s.includes("reactjs.org")) return;
+    fn.apply(console, args);
+  };
+  console.info = swallow(console.info.bind(console));
+  console.log = swallow(console.log.bind(console));
+}
+
 const root = createRoot(document.getElementById("root"));
 
 root.render(
   <React.StrictMode>
-    <BrowserRouter>
+    <BrowserRouter
+      future={{
+        v7_startTransition: true,
+        v7_relativeSplatPath: true,
+      }}
+    >
       <AuthProvider>
         <App />
         <Toaster

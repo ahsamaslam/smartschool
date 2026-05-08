@@ -123,6 +123,35 @@ CREATE TABLE video_templates (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Design Templates (Pre-built presentation templates with slide layouts)
+CREATE TABLE design_templates (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL UNIQUE,
+    category VARCHAR(100), -- 'science', 'computer', 'math', 'language', 'social_studies', 'arts', 'general', etc.
+    description TEXT,
+    is_system BOOLEAN DEFAULT true,
+    created_by UUID REFERENCES users(id),
+    
+    -- Template configuration (JSON schema)
+    layout_definitions JSONB NOT NULL, -- Array of slide layout types with styling rules
+    
+    preview_image_url TEXT,
+    usage_count INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT true,
+    
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Relationship: Topics using a specific template
+CREATE TABLE topic_templates (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    topic_id UUID REFERENCES topics(id) ON DELETE CASCADE,
+    design_template_id UUID REFERENCES design_templates(id) ON DELETE SET NULL,
+    applied_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(topic_id)
+);
+
 -- Avatar Profiles
 CREATE TABLE avatar_profiles (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

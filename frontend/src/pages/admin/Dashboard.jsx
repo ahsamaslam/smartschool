@@ -116,7 +116,7 @@ export default function AdminDashboard() {
         />
         <QuickAction
           to="/admin/curriculum"
-          label="Curriculum"
+          label="Book Parser"
           icon={<BookOpenIcon className="h-5 w-5" />}
         />
         <QuickAction

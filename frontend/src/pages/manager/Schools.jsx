@@ -19,11 +19,12 @@ export default function ManagerSchools() {
       .finally(() => setLoading(false));
   }, []);
 
-  const filtered = schools.filter(
-    (s) =>
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      (s.address || "").toLowerCase().includes(search.toLowerCase()),
-  );
+  const q = search.toLowerCase();
+  const filtered = schools.filter((s) => {
+    const name = String(s?.name ?? "");
+    const addr = String(s?.address ?? "");
+    return name.toLowerCase().includes(q) || addr.toLowerCase().includes(q);
+  });
 
   if (loading) return <PageSpinner />;
 
