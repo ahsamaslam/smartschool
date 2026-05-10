@@ -8,6 +8,14 @@ const examService = {
   getClassCurriculum: (classId) =>
     api.get(`${BASE}/class/${classId}/curriculum`),
 
+  /** Board → subject → book → chapter → topics, or flat legacy subjects */
+  getClassExamScope: (classId) =>
+    api.get(`${BASE}/class/${classId}/exam-scope`),
+
+  /** Teacher/admin: enrolled student count + sample names for exam broadcast preview */
+  getEnrollmentPreview: (classId) =>
+    api.get(`${BASE}/class/${classId}/enrollment-preview`),
+
   // List all exams for a teacher
   getExams: (teacherId) =>
     api.get(`${BASE}/`, { params: { teacher_id: teacherId } }),

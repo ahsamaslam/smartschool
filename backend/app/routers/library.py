@@ -5,7 +5,7 @@ Simple structure: Books directly link to class + subject
 import os
 import uuid
 import json as json_std
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Header, status
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Header, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict
@@ -14,6 +14,22 @@ from app.utils.database import execute_query, execute_one, execute_write
 from app.routers.auth import get_user_from_token
 
 router = APIRouter()
+
+
+def _form_float_relaxed(value: Optional[str], default: float = 0.0) -> float:
+    """Parse multipart form numbers without Pydantic rejecting odd client strings."""
+    if value is None or (isinstance(value, str) and value.strip() == ""):
+        return default
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _form_bool_relaxed(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _library_topic_row_json(row: dict) -> dict:
@@ -34,6 +50,8 @@ def _library_topic_for_book_detail(row: dict) -> dict:
     """Nested topics under GET book: omit heavy slides_json; expose has_slides."""
     d = _library_topic_row_json(dict(row))
     sj = d.pop("slides_json", None)
+    lecture_video_url = d.get("lecture_video_url")
+    lecture_metadata_json = d.get("lecture_metadata_json")
     has_slides = False
     if sj is not None:
         if isinstance(sj, str):
@@ -42,8 +60,33 @@ def _library_topic_for_book_detail(row: dict) -> dict:
                 has_slides = True
         elif isinstance(sj, (list, dict)):
             has_slides = bool(sj)
+    has_lecture = False
+    if lecture_video_url:
+        has_lecture = True
+    elif lecture_metadata_json:
+        if isinstance(lecture_metadata_json, str):
+            t = lecture_metadata_json.strip()
+            has_lecture = bool(t and t not in ("null", "[]", "{}", ""))
+        elif isinstance(lecture_metadata_json, (list, dict)):
+            has_lecture = bool(lecture_metadata_json)
     d["has_slides"] = has_slides
+    d["has_lecture"] = has_lecture
     return d
+
+
+def _remove_local_static_file(file_url: Optional[str]) -> None:
+    """Best effort cleanup for /static/... files stored on local disk."""
+    if not file_url or not isinstance(file_url, str):
+        return
+    try:
+        if not file_url.startswith("/static/"):
+            return
+        rel = file_url.lstrip("/").replace("/", os.sep)
+        file_path = os.path.abspath(rel)
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+    except Exception:
+        return
 
 
 # ============================================
@@ -114,6 +157,8 @@ class UpdateLibraryTopicRequest(BaseModel):
     slides: Optional[List[Dict]] = None
     slide_theme: Optional[str] = None
     clear_slides: bool = False  # set true to explicitly wipe slides_json
+    lecture_metadata: Optional[Dict] = None
+    clear_lecture: bool = False
 
 
 class SaveParsedBookRequest(BaseModel):
@@ -366,6 +411,18 @@ async def ensure_library_tables():
     )
     await execute_write(
         "ALTER TABLE library_topics ADD COLUMN IF NOT EXISTS slide_theme VARCHAR(160)"
+    )
+    await execute_write(
+        "ALTER TABLE library_topics ADD COLUMN IF NOT EXISTS lecture_video_url TEXT"
+    )
+    await execute_write(
+        "ALTER TABLE library_topics ADD COLUMN IF NOT EXISTS lecture_metadata_json TEXT"
+    )
+    await execute_write(
+        "ALTER TABLE library_topics ADD COLUMN IF NOT EXISTS lecture_saved_at TIMESTAMP"
+    )
+    await execute_write(
+        "ALTER TABLE library_topics ADD COLUMN IF NOT EXISTS lecture_duration_seconds DOUBLE PRECISION"
     )
 
 
@@ -1253,6 +1310,214 @@ def _serialize_slides(slides: Optional[List[Dict]]) -> Optional[str]:
         return "[]"
 
 
+def _parse_slides_json(slides_json: Optional[str]) -> List[Dict]:
+    if not slides_json:
+        return []
+    try:
+        parsed = json_std.loads(slides_json) if isinstance(slides_json, str) else slides_json
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict) and isinstance(parsed.get("slides"), list):
+            return parsed.get("slides")
+    except Exception:
+        return []
+    return []
+
+
+def _safe_lecture_metadata_dict(raw) -> Optional[Dict]:
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, str):
+            t = raw.strip()
+            if not t or t in ("null", "{}", "[]"):
+                return None
+            parsed = json_std.loads(raw)
+            return parsed if isinstance(parsed, dict) else None
+        if isinstance(raw, dict):
+            return raw
+        return None
+    except Exception:
+        return None
+
+
+def _normalize_recorded_lectures_row(rec: dict) -> dict:
+    out = dict(rec)
+    for key, val in list(out.items()):
+        if isinstance(val, uuid.UUID):
+            out[key] = str(val)
+        elif hasattr(val, "isoformat"):
+            try:
+                out[key] = val.isoformat()
+            except Exception:
+                out[key] = str(val)
+    md = _safe_lecture_metadata_dict(out.pop("lecture_metadata_json", None))
+    out["lecture_metadata"] = md or {}
+    return out
+
+
+@router.get("/library/recorded-lectures")
+async def list_library_recorded_lectures(
+    q: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Paginated list of curriculum topics that have a saved lecture video (admin hub)."""
+    await ensure_library_tables()
+    lim = max(1, min(int(limit or 50), 100))
+    off = max(0, int(offset or 0))
+    search = (q or "").strip() or None
+
+    sql = """
+    WITH base AS (
+      SELECT
+        t.id AS topic_id,
+        t.title AS topic_title,
+        t.lecture_video_url,
+        t.lecture_metadata_json,
+        t.lecture_duration_seconds,
+        t.lecture_saved_at,
+        t.created_at AS topic_created_at,
+        ch.id AS chapter_id,
+        ch.chapter_number,
+        ch.title AS chapter_title,
+        b.id AS book_id,
+        b.title AS book_title,
+        b.board_name AS book_board_name,
+        lc.id AS library_class_id,
+        lc.name AS library_class_name,
+        s.id AS subject_id,
+        s.name AS subject_name,
+        dep.schools_catalog,
+        dep.branches_catalog,
+        dep.sections_catalog
+      FROM library_topics t
+      LEFT JOIN library_chapters ch ON ch.id = t.chapter_id
+      LEFT JOIN library_books b ON b.id = ch.book_id
+      LEFT JOIN library_classes lc ON lc.id = b.class_id
+      LEFT JOIN library_subjects s ON s.id = b.subject_id
+      LEFT JOIN LATERAL (
+        SELECT
+          (
+            SELECT string_agg(x.sn, ' · ' ORDER BY x.sn)
+            FROM (
+              SELECT DISTINCT trim(sch.name)::text AS sn
+              FROM section_books sb
+              JOIN classes sec ON sec.id = sb.class_id
+              JOIN branches br ON br.id = sec.branch_id
+              JOIN schools sch ON sch.id = br.school_id
+              WHERE sb.book_id = b.id AND sch.name IS NOT NULL AND trim(sch.name) <> ''
+            ) x
+          ) AS schools_catalog,
+          (
+            SELECT string_agg(x.bn, ' · ' ORDER BY x.bn)
+            FROM (
+              SELECT DISTINCT trim(br.name)::text AS bn
+              FROM section_books sb
+              JOIN classes sec ON sec.id = sb.class_id
+              JOIN branches br ON br.id = sec.branch_id
+              WHERE sb.book_id = b.id AND br.name IS NOT NULL AND trim(br.name) <> ''
+            ) x
+          ) AS branches_catalog,
+          (
+            SELECT string_agg(raw.label, E' • ' ORDER BY raw.label)
+            FROM (
+              SELECT DISTINCT
+                CASE
+                  WHEN NULLIF(trim(COALESCE(sec.name::text, '')), '') IS NOT NULL
+                    THEN trim(sec.name::text)
+                  ELSE trim(
+                    concat_ws(
+                      ' · ',
+                      NULLIF(trim(COALESCE(sec.grade_level::text, '')), ''),
+                      CASE
+                        WHEN NULLIF(trim(COALESCE(sec.section::text, '')), '') IS NOT NULL
+                          THEN 'Sec ' || trim(sec.section::text)
+                        ELSE NULL
+                      END
+                    )
+                  )
+                END AS label
+              FROM section_books sb
+              JOIN classes sec ON sec.id = sb.class_id
+              WHERE sb.book_id = b.id
+            ) raw
+            WHERE trim(COALESCE(raw.label, '')) <> ''
+          ) AS sections_catalog
+      ) dep ON TRUE
+      WHERE t.lecture_video_url IS NOT NULL
+        AND trim(t.lecture_video_url) <> ''
+        AND ($1::text IS NULL
+             OR t.title ILIKE ('%' || $1 || '%')
+             OR COALESCE(ch.title, '') ILIKE ('%' || $1 || '%')
+             OR COALESCE(b.title, '') ILIKE ('%' || $1 || '%')
+             OR COALESCE(b.board_name, '') ILIKE ('%' || $1 || '%')
+             OR COALESCE(s.name, '') ILIKE ('%' || $1 || '%')
+             OR COALESCE(lc.name, '') ILIKE ('%' || $1 || '%')
+             OR COALESCE(dep.schools_catalog, '') ILIKE ('%' || $1 || '%')
+             OR COALESCE(dep.branches_catalog, '') ILIKE ('%' || $1 || '%')
+             OR COALESCE(dep.sections_catalog, '') ILIKE ('%' || $1 || '%')
+             OR EXISTS (
+                  SELECT 1
+                  FROM section_books sb2
+                  JOIN classes sec2 ON sec2.id = sb2.class_id
+                  JOIN branches br2 ON br2.id = sec2.branch_id
+                  JOIN schools sch2 ON sch2.id = br2.school_id
+                  WHERE sb2.book_id = b.id
+                    AND (
+                      sch2.name ILIKE ('%' || $1 || '%')
+                      OR br2.name ILIKE ('%' || $1 || '%')
+                      OR COALESCE(sec2.name::text, '') ILIKE ('%' || $1 || '%')
+                      OR COALESCE(sec2.grade_level::text, '') ILIKE ('%' || $1 || '%')
+                      OR COALESCE(sec2.section::text, '') ILIKE ('%' || $1 || '%')
+                    )
+               )
+               OR lower(regexp_replace(concat_ws(' ',
+                       COALESCE(t.title::text, ''),
+                       COALESCE(ch.title::text, ''),
+                       COALESCE(b.title::text, ''),
+                       COALESCE(lc.name::text, ''),
+                       COALESCE(s.name::text, ''),
+                       COALESCE(b.board_name::text, ''),
+                       COALESCE(dep.schools_catalog::text, ''),
+                       COALESCE(dep.branches_catalog::text, ''),
+                       COALESCE(dep.sections_catalog::text, '')
+                     ), E'\\s+', ' ', 'g'))
+                  LIKE ('%' ||
+                        regexp_replace(lower(trim($1::text)), E'\\s+', '%', 'g')
+                        || '%')
+               )
+    ),
+    counted AS (
+      SELECT
+        b.*,
+        COALESCE((SELECT COUNT(*)::int FROM base), 0) AS total_count
+      FROM base b
+    )
+    SELECT * FROM counted
+    ORDER BY lecture_saved_at DESC NULLS LAST, topic_created_at DESC
+    LIMIT $2 OFFSET $3
+    """
+    rows = await execute_query(sql, search, lim, off)
+    items = []
+    total = 0
+    for raw in rows or []:
+        row = dict(raw)
+        total = int(row.pop("total_count", 0) or 0)
+        items.append(_normalize_recorded_lectures_row(row))
+
+    return {
+        "data": {
+            "items": items,
+            "total": total,
+            "limit": lim,
+            "offset": off,
+            "query": (q or "").strip(),
+        }
+    }
+
+
 @router.get("/library/topics/{topic_id}")
 async def get_library_topic(topic_id: str):
     """Single library topic (includes slides_json when present)."""
@@ -1275,7 +1540,10 @@ async def update_library_topic(
 ):
     await ensure_library_tables()
     topic_id = (topic_id or "").strip()
-    existing = await execute_one("SELECT id FROM library_topics WHERE id = $1::uuid", topic_id)
+    existing = await execute_one(
+        "SELECT id, lecture_video_url FROM library_topics WHERE id = $1::uuid",
+        topic_id,
+    )
     if not existing:
         raise HTTPException(status_code=404, detail="Topic not found")
 
@@ -1298,6 +1566,21 @@ async def update_library_topic(
         fields.append(f"slide_theme = ${n}")
         args.append(None)
         n += 1
+        # Business rule: deleting slides must also remove lecture + metadata.
+        if existing.get("lecture_video_url"):
+            _remove_local_static_file(existing.get("lecture_video_url"))
+        fields.append(f"lecture_video_url = ${n}")
+        args.append(None)
+        n += 1
+        fields.append(f"lecture_metadata_json = ${n}")
+        args.append(None)
+        n += 1
+        fields.append(f"lecture_saved_at = ${n}")
+        args.append(None)
+        n += 1
+        fields.append(f"lecture_duration_seconds = ${n}")
+        args.append(None)
+        n += 1
     else:
         if body.slides is not None:
             fields.append(f"slides_json = ${n}")
@@ -1308,6 +1591,26 @@ async def update_library_topic(
             args.append(body.slide_theme[:160] if body.slide_theme else None)
             n += 1
 
+    if body.clear_lecture:
+        if existing.get("lecture_video_url"):
+            _remove_local_static_file(existing.get("lecture_video_url"))
+        fields.append(f"lecture_video_url = ${n}")
+        args.append(None)
+        n += 1
+        fields.append(f"lecture_metadata_json = ${n}")
+        args.append(None)
+        n += 1
+        fields.append(f"lecture_saved_at = ${n}")
+        args.append(None)
+        n += 1
+        fields.append(f"lecture_duration_seconds = ${n}")
+        args.append(None)
+        n += 1
+    elif body.lecture_metadata is not None:
+        fields.append(f"lecture_metadata_json = ${n}")
+        args.append(json_std.dumps(body.lecture_metadata, ensure_ascii=False))
+        n += 1
+
     if not fields:
         row = await execute_one("SELECT * FROM library_topics WHERE id = $1::uuid", topic_id)
         return {"data": _library_topic_row_json(dict(row))}
@@ -1316,6 +1619,154 @@ async def update_library_topic(
     q = f"UPDATE library_topics SET {', '.join(fields)} WHERE id = ${n}::uuid RETURNING *"
     row = await execute_one(q, *args)
     return {"data": _library_topic_row_json(dict(row))}
+
+
+@router.post("/library/topics/{topic_id}/lecture")
+async def upload_library_topic_lecture(
+    topic_id: str,
+    video: UploadFile = File(...),
+    quality: str = Form(default="720p"),
+    duration_seconds: str = Form(default="0"),
+    has_camera: str = Form(default="false"),
+    has_microphone: str = Form(default="false"),
+    slide_timestamps_json: Optional[str] = Form(default=None),
+    transcript: Optional[str] = Form(default=None),
+    captions_json: Optional[str] = Form(default=None),
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Upload/replace a topic lecture video and attach metadata to that topic."""
+    await ensure_library_tables()
+    topic_id = (topic_id or "").strip()
+    row = await execute_one(
+        "SELECT id, slides_json, lecture_video_url FROM library_topics WHERE id = $1::uuid",
+        topic_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    # Business rule: lecture cannot exist without slides.
+    slides = _parse_slides_json(row.get("slides_json"))
+    if not slides:
+        raise HTTPException(status_code=400, detail="Cannot save lecture: topic has no slides")
+
+    filename = (video.filename or "").lower()
+    if not filename.endswith((".webm", ".mp4", ".mov", ".mkv")):
+        raise HTTPException(status_code=400, detail="Unsupported video format")
+
+    content = await video.read()
+    max_bytes = 800 * 1024 * 1024  # 800 MB
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=413, detail="Lecture file too large (max 800 MB)")
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty video upload")
+
+    lectures_dir = os.path.join("static", "lectures")
+    os.makedirs(lectures_dir, exist_ok=True)
+    ext = os.path.splitext(filename)[1] or ".webm"
+    safe_name = f"{topic_id}_{uuid.uuid4().hex}{ext}"
+    abs_path = os.path.join(lectures_dir, safe_name)
+    with open(abs_path, "wb") as f:
+        f.write(content)
+
+    video_url = f"/static/lectures/{safe_name}"
+    slide_timestamps = []
+    if slide_timestamps_json:
+        try:
+            parsed = json_std.loads(slide_timestamps_json)
+            if isinstance(parsed, list):
+                slide_timestamps = parsed
+        except Exception:
+            slide_timestamps = []
+
+    captions = []
+    if captions_json:
+        try:
+            parsed = json_std.loads(captions_json)
+            if isinstance(parsed, list):
+                captions = parsed
+        except Exception:
+            captions = []
+
+    dur_from_form = max(0.0, _form_float_relaxed(duration_seconds, 0.0))
+    has_cam = _form_bool_relaxed(has_camera)
+    has_mic = _form_bool_relaxed(has_microphone)
+    dur_from_ts = 0.0
+    for item in slide_timestamps or []:
+        if isinstance(item, dict):
+            try:
+                dur_from_ts = max(dur_from_ts, float(item.get("time") or 0))
+            except (TypeError, ValueError):
+                pass
+    stored_dur = max(dur_from_form, dur_from_ts)
+
+    lecture_metadata = {
+        "lectureId": uuid.uuid4().hex,
+        "topicId": topic_id,
+        "videoUrl": video_url,
+        "duration": stored_dur,
+        "quality": str(quality or "720p"),
+        "hasCamera": has_cam,
+        "hasMicrophone": has_mic,
+        "slideTimestamps": slide_timestamps,
+        "transcript": transcript or "",
+        "captions": captions,
+        "createdBy": str(current_user.get("id") or ""),
+    }
+
+    if row.get("lecture_video_url"):
+        _remove_local_static_file(row.get("lecture_video_url"))
+
+    dur_column = stored_dur if stored_dur > 0 else None
+
+    updated = await execute_one(
+        """
+        UPDATE library_topics
+        SET lecture_video_url = $1,
+            lecture_metadata_json = $2,
+            lecture_saved_at = NOW(),
+            lecture_duration_seconds = $4
+        WHERE id = $3::uuid
+        RETURNING *
+        """,
+        video_url,
+        json_std.dumps(lecture_metadata, ensure_ascii=False),
+        topic_id,
+        dur_column,
+    )
+    return {"data": _library_topic_row_json(dict(updated))}
+
+
+@router.delete("/library/topics/{topic_id}/lecture")
+async def delete_library_topic_lecture(
+    topic_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Delete lecture video + metadata, keep slides intact."""
+    await ensure_library_tables()
+    topic_id = (topic_id or "").strip()
+    row = await execute_one(
+        "SELECT id, lecture_video_url FROM library_topics WHERE id = $1::uuid",
+        topic_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    if row.get("lecture_video_url"):
+        _remove_local_static_file(row.get("lecture_video_url"))
+
+    updated = await execute_one(
+        """
+        UPDATE library_topics
+        SET lecture_video_url = NULL,
+            lecture_metadata_json = NULL,
+            lecture_saved_at = NULL,
+            lecture_duration_seconds = NULL
+        WHERE id = $1::uuid
+        RETURNING *
+        """,
+        topic_id,
+    )
+    return {"data": _library_topic_row_json(dict(updated))}
 
 
 @router.post("/library/chapters/{chapter_id}/topics")

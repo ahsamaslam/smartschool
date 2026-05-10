@@ -1,0 +1,686 @@
+{
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\status_check.py": {
+    "mtime": 1778241142.6023269,
+    "hash": "ec3dec14a049e6c2c735ce4c6cd7baff"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\config.py": {
+    "mtime": 1778317892.5608792,
+    "hash": "786e8846cdda08a6fae1fb8c2b1890c6"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\main.py": {
+    "mtime": 1778317892.5608792,
+    "hash": "2daaa5f5ddc0d7a27a830a81ca098ce7"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\__init__.py": {
+    "mtime": 1778241142.5658853,
+    "hash": "e8180bbd15a9b1ee967dff66f7d42bcc"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\admins.py": {
+    "mtime": 1778317892.5633876,
+    "hash": "8e0cf37f9e19f7fed8ef50d09f2b63d9"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\analytics.py": {
+    "mtime": 1778241142.5688846,
+    "hash": "d6dedb89070f9d5f7e6aad932d07136c"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\attendance.py": {
+    "mtime": 1778241142.5688846,
+    "hash": "aff205c529e44e1e1f3b0ab074673aee"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\auth.py": {
+    "mtime": 1778241142.5688846,
+    "hash": "99f04001e582c584dc261949dd5fb43e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\classes.py": {
+    "mtime": 1778241142.5688846,
+    "hash": "f96e08594038c0aacc7f89ce0885a97e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\exams.py": {
+    "mtime": 1778241142.5688846,
+    "hash": "e316315752d069977bbbd8f54052b5f7"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\library.py": {
+    "mtime": 1778317892.5723214,
+    "hash": "5b34522660e04d99be1349895ef3723f"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\managers.py": {
+    "mtime": 1778241142.570962,
+    "hash": "50cde9e447d1518eb52e1cb7c0ba156d"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\qa.py": {
+    "mtime": 1778241142.570962,
+    "hash": "726d4a7ca3a7aa28a95f11ef3e629c18"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\quizzes.py": {
+    "mtime": 1778241142.570962,
+    "hash": "20f8bb30638fbc9923013d997fe772d6"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\students.py": {
+    "mtime": 1778241142.570962,
+    "hash": "9934296c25a1ee2e17f87333a3be51bc"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\teachers.py": {
+    "mtime": 1778241142.570962,
+    "hash": "74bd9cca634856b620ede5f21f428430"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\videos.py": {
+    "mtime": 1778241142.570962,
+    "hash": "57a9bb08ff53659c3148999c55cb14c0"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\__init__.py": {
+    "mtime": 1778241142.5658853,
+    "hash": "189e933901987da9b853759daa80c5cb"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\schemas\\slides_ai.py": {
+    "mtime": 1778241142.570962,
+    "hash": "8d7635ac0d09f38b0bc1aab0909922e5"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\schemas\\__init__.py": {
+    "mtime": 1778241142.570962,
+    "hash": "d96c09d5d780b77e24d91379c174d1bf"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\ai_slide_deck.py": {
+    "mtime": 1778241142.570962,
+    "hash": "162609ee97b998c4d0afd075f76438d1"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\auth.py": {
+    "mtime": 1778241142.570962,
+    "hash": "7df1278a29878099a2e8aa9c9278f433"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\cache.py": {
+    "mtime": 1778241142.570962,
+    "hash": "1c5ed38238c58692c2c4b4a90880a29e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\claude_ai.py": {
+    "mtime": 1778317892.5643964,
+    "hash": "d7507c73e05f906e3a48d61b7667b28e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\database.py": {
+    "mtime": 1778241142.5764432,
+    "hash": "aed120ac3ae2cac8dbfa1d9f0064fd35"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\did_client.py": {
+    "mtime": 1778241142.5764432,
+    "hash": "c8908dcab4eb88f5d6a4258607e06873"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\helpers.py": {
+    "mtime": 1778241142.5764432,
+    "hash": "8703e25a01f510580bac47d269e581e4"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\security.py": {
+    "mtime": 1778241142.5764432,
+    "hash": "9f367899cdde6b2c748a6dc8eafae709"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\slide_generator.py": {
+    "mtime": 1778241142.5764432,
+    "hash": "fabc233295cb4de72ac110ca1836b3f0"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\validators.py": {
+    "mtime": 1778241142.5764432,
+    "hash": "cf96df6b9283ba38d1bb4922eac6286e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\video_compositor.py": {
+    "mtime": 1778241142.5791001,
+    "hash": "e2a265cad80188cb7b4e461b8439cdab"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\wav2lip_client.py": {
+    "mtime": 1778241142.5791001,
+    "hash": "050c83efd1f344ed66cbb9a1b2a58d0a"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\utils\\__init__.py": {
+    "mtime": 1778241142.570962,
+    "hash": "e9c0f2552a769ce2ee65e493f6d38034"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\database\\schema.docker.sql": {
+    "mtime": 1778241142.6023269,
+    "hash": "df808af7c01dbb7c686d32853343bff4"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\database\\schema.sql": {
+    "mtime": 1778241142.6023269,
+    "hash": "0ded1814c85cdda71da4813a964f1079"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\database\\seed.sql": {
+    "mtime": 1778241142.607816,
+    "hash": "31a00c2841b284078310345297b76d85"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\postcss.config.js": {
+    "mtime": 1778241142.6123369,
+    "hash": "33fad9c02cb0ec6d6030369ef6347d57"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\tailwind.config.js": {
+    "mtime": 1778241142.6540267,
+    "hash": "574d17a19f9e2bc70a61b710e4721243"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\vite.config.js": {
+    "mtime": 1778241142.6540267,
+    "hash": "7462d2496d8e11cc653f74b22de49af1"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\App.jsx": {
+    "mtime": 1778258346.923161,
+    "hash": "58bade52a120f31d3740d3f3eb5ec9ee"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\main.jsx": {
+    "mtime": 1778241142.631136,
+    "hash": "94f7e9c694bd00fb9e9930a0c826f353"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\admin\\CreateUserModal.jsx": {
+    "mtime": 1778241142.6123369,
+    "hash": "2361c7f0a07ab07f03894c4187aa2d5c"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\admin\\ModelTrainer.jsx": {
+    "mtime": 1778241142.6123369,
+    "hash": "88cf4b3dd5230c8e15cd2b479607466f"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\admin\\SlidePresenter.jsx": {
+    "mtime": 1778241142.6123369,
+    "hash": "7ac37b516e91bcd2bafb579c12626fd1"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\admin\\TeacherProfileModal.jsx": {
+    "mtime": 1778241142.6123369,
+    "hash": "1333c3e3bf7cb03f1fcdfbcf90b37bd7"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\admin\\TemplateGallery.jsx": {
+    "mtime": 1778241142.6123369,
+    "hash": "063800eb999ce92da2b4461a9afece05"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\admin\\UserTable.jsx": {
+    "mtime": 1778241142.6123369,
+    "hash": "550bf6c277eb29e3a20c4846f6bf32bc"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\common\\Alert.jsx": {
+    "mtime": 1778241142.6123369,
+    "hash": "163984bebe03825f74203c4f3537119f"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\common\\Button.jsx": {
+    "mtime": 1778241142.6123369,
+    "hash": "1809d40fe1ba7d910afd294a14792301"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\common\\Card.jsx": {
+    "mtime": 1778241142.61759,
+    "hash": "cadc00a0dd5673320e9e5f982c05e1df"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\common\\Dropdown.jsx": {
+    "mtime": 1778241142.61759,
+    "hash": "3f298ae1c5079d49bdcf0c37ab81af46"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\common\\Input.jsx": {
+    "mtime": 1778241142.61759,
+    "hash": "6662ef24f16eaeb87d5b7335ab1e1529"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\common\\Modal.jsx": {
+    "mtime": 1778241142.61759,
+    "hash": "538d9c66662eb9a9e1c0f0284dd4899e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\common\\Navbar.jsx": {
+    "mtime": 1778241142.61759,
+    "hash": "e2d039a5bd1a4f7f225277e4649bea32"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\common\\Spinner.jsx": {
+    "mtime": 1778241142.61759,
+    "hash": "98e24ea5b4cc927339512d8c2d190754"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\layout\\Footer.jsx": {
+    "mtime": 1778241142.620281,
+    "hash": "ff665cb899fec82ff1ec15165b7613ba"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\layout\\Header.jsx": {
+    "mtime": 1778241142.620281,
+    "hash": "b444e1fcf32c709c938cb6cea2fd819b"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\layout\\Layout.jsx": {
+    "mtime": 1778241142.6207929,
+    "hash": "ea2ea57fa9d95815973bb8047f2a4dac"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\layout\\Sidebar.jsx": {
+    "mtime": 1778317892.5694056,
+    "hash": "8ee0a79449c2708c2acf83a0ab55a63b"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\manager\\ReportFilters.jsx": {
+    "mtime": 1778241142.6207929,
+    "hash": "c75b8ab7b4943e99c9953cb4fdf8c8b9"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\manager\\ReportTable.jsx": {
+    "mtime": 1778241142.6207929,
+    "hash": "4bec8b12f02a44cdd89086c6afb63046"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\manager\\SchoolCard.jsx": {
+    "mtime": 1778241142.6207929,
+    "hash": "b86bcac9b9b4508d4d731f9f2f883fbf"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\slides\\SaveSlidesLibraryModal.jsx": {
+    "mtime": 1778258888.4608698,
+    "hash": "1ddd8ebb965c9ca3c28fb120fdb062be"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\slides\\SlideRenderer.jsx": {
+    "mtime": 1778241142.6228032,
+    "hash": "678a0aded4bd256418e9e4ef6f36782f"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\slides\\SlideThumbnail.jsx": {
+    "mtime": 1778241142.6228032,
+    "hash": "e1f979cd5dadbd633194b2f6333d3194"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\student\\PerformanceChart.jsx": {
+    "mtime": 1778241142.6228032,
+    "hash": "bb43096067f0e822ba21ec70419ef047"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\student\\QABot.jsx": {
+    "mtime": 1778241142.6228032,
+    "hash": "6276b85ff24bc7b59665fbad41e786a2"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\student\\QuizInterface.jsx": {
+    "mtime": 1778241142.6228032,
+    "hash": "3b0ec82f312d1d76c15ea9a182c9e619"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\student\\SubjectCard.jsx": {
+    "mtime": 1778241142.6228032,
+    "hash": "6bd3464fad0487d3b5dc2ff95ef88392"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\student\\TopicList.jsx": {
+    "mtime": 1778241142.6228032,
+    "hash": "d8b988d561133d379631ff12fa376d94"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\student\\VideoPlayer.jsx": {
+    "mtime": 1778241142.6228032,
+    "hash": "260621e6914ba8562f6177a94aa68963"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\teacher\\AttendanceForm.jsx": {
+    "mtime": 1778241142.6228032,
+    "hash": "368a4073b3f22e7f281749b825a85e89"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\teacher\\ExamCreateModal.jsx": {
+    "mtime": 1778241142.6228032,
+    "hash": "c9338e6c2bdf7129c2952c91d9058040"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\teacher\\ExamGenerator.jsx": {
+    "mtime": 1778241142.6228032,
+    "hash": "a1b749e6fc50a08b98fb230bb2fb06a7"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\teacher\\LectureViewer.jsx": {
+    "mtime": 1778241142.627917,
+    "hash": "1faf0a505dab9b0223ab8039dde37453"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\teacher\\PerformanceTable.jsx": {
+    "mtime": 1778241142.627917,
+    "hash": "f19412f754ab7cd4f5926cf7246e6b3f"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\teacher\\PublishVideoForm.jsx": {
+    "mtime": 1778241142.627917,
+    "hash": "a98f030aaae49fbb314d0710adff7fdd"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\components\\teacher\\StudentList.jsx": {
+    "mtime": 1778241142.627917,
+    "hash": "2421d011187a848e39e3072a6f2ae757"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\context\\AuthContext.jsx": {
+    "mtime": 1778241142.627917,
+    "hash": "0044c10f0a43a551862a757882bb9b0b"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\data\\slideTemplates.js": {
+    "mtime": 1778241142.627917,
+    "hash": "f3f5928952cc6c61ad5b406389979648"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\hooks\\useApi.js": {
+    "mtime": 1778241142.6306212,
+    "hash": "2d363e032e66608098735b723616f69c"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\hooks\\useAuth.js": {
+    "mtime": 1778241142.631136,
+    "hash": "58a7c53c313b032b340d28fb2665ad20"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\hooks\\useDebounce.js": {
+    "mtime": 1778241142.631136,
+    "hash": "a9bd342b38cda28e924ebf8ef5c8ac81"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\hooks\\useLocalStorage.js": {
+    "mtime": 1778241142.631136,
+    "hash": "50f6ae276df3b2319187a6b8131aef1f"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\AIParser.jsx": {
+    "mtime": 1778317892.5684042,
+    "hash": "c9b84613301849c916e3a9b752d526f5"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\BoardSubjects.jsx": {
+    "mtime": 1778317892.5633876,
+    "hash": "841290e4242c015e5553c33272b614f1"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\BookDetail.jsx": {
+    "mtime": 1778260152.1454725,
+    "hash": "795af290fc126119c76c5eb4ded1e844"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\ClassDetail.jsx": {
+    "mtime": 1778258295.6411443,
+    "hash": "3df56b38df5bb15fe88d264009fd0be2"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\Curriculum.jsx": {
+    "mtime": 1778241142.6331463,
+    "hash": "3fa680607665b47fe4e04789c8bd0690"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\Dashboard.jsx": {
+    "mtime": 1778241142.6331463,
+    "hash": "a95e7fac4cee9996ab496ff51f5bc534"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\Library.jsx": {
+    "mtime": 1778317892.5684042,
+    "hash": "b6bcb48c56142ebcb60afe9fbd633f55"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\LibraryTest.jsx": {
+    "mtime": 1778241142.6341498,
+    "hash": "b55e5feeef40a9d3e36618101cae8eb1"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\LibraryTopicPresent.jsx": {
+    "mtime": 1778260144.8254075,
+    "hash": "e0663e002bc6b6164e2e92dacb91e525"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\RecordLecture.jsx": {
+    "mtime": 1778241142.6341498,
+    "hash": "0c5cf2bcfa5b91cd3fda779a164c1c45"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\Schools.jsx": {
+    "mtime": 1778317892.56188,
+    "hash": "58e09d96e456230199472411d9a88a4d"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\SectionDetail.jsx": {
+    "mtime": 1778258989.8618145,
+    "hash": "551ba4da97af2a2d1f363fd3a0f4f870"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\Settings.jsx": {
+    "mtime": 1778317892.5608792,
+    "hash": "dc9ab2acb4d226626704b071839db415"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\Slides.jsx": {
+    "mtime": 1778241142.6341498,
+    "hash": "03b9bb82e25c1da5794609403b71813d"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\Students.jsx": {
+    "mtime": 1778241142.6341498,
+    "hash": "9640bcc6097220c81f59a5784edf63f5"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\Teachers.jsx": {
+    "mtime": 1778241142.6341498,
+    "hash": "12dc9c3b41d520235d989dd43b0b0281"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\Users.jsx": {
+    "mtime": 1778241142.6341498,
+    "hash": "caec726f31bd6c1daaeff35fe8e57e39"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\admin\\Videos.jsx": {
+    "mtime": 1778241142.6381555,
+    "hash": "4a7dbb8b378cab69aea7165248c1116e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\auth\\ForgotPassword.jsx": {
+    "mtime": 1778241142.6381555,
+    "hash": "850ff2a25a15cf6dbceb3ee08f001944"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\auth\\Login.jsx": {
+    "mtime": 1778241142.6381555,
+    "hash": "af226cfd4c95fa1a9ac03f0a5ca24e42"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\auth\\ResetPassword.jsx": {
+    "mtime": 1778241142.6381555,
+    "hash": "0e735a76c0ff38c8b0deb3f4031882d3"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\manager\\BranchDetail.jsx": {
+    "mtime": 1778241142.6381555,
+    "hash": "c710aa38727988d36a203d3c5c024920"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\manager\\ClassReports.jsx": {
+    "mtime": 1778241142.6381555,
+    "hash": "17e74f8346b441019414c276dab95506"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\manager\\Dashboard.jsx": {
+    "mtime": 1778241142.6381555,
+    "hash": "43e86bb80c91604b8c5180f66d34da0a"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\manager\\SchoolBranches.jsx": {
+    "mtime": 1778241142.6381555,
+    "hash": "74b04b713fdc02a7f08ecadc5cc8982e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\manager\\Schools.jsx": {
+    "mtime": 1778241142.6381555,
+    "hash": "e488740aa45234b3ba9008672a07650e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\manager\\StudentReports.jsx": {
+    "mtime": 1778241142.6381555,
+    "hash": "803bf37f607753c44ca3a5477ea81fdb"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\manager\\TeacherReports.jsx": {
+    "mtime": 1778241142.6414294,
+    "hash": "8b9d337301e57e6ae811630df3627af8"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\shared\\ProfilePage.jsx": {
+    "mtime": 1778241142.6414294,
+    "hash": "609a58eaeb8ba694df130f91b17779df"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\student\\Dashboard.jsx": {
+    "mtime": 1778241142.6414294,
+    "hash": "5b3f77364eef125a0c3c94261dbdf6e5"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\student\\Profile.jsx": {
+    "mtime": 1778241142.6414294,
+    "hash": "c861a3f5d10788e6240c08c67ab3677e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\student\\QuizPage.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "a1a8725f1276e48adbdbccdb9082066f"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\student\\QuizResults.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "91ad890b651f73c25d0c84fdb8c6a1b7"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\student\\SubjectView.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "4a6d05ffd1bfe4d8666596e14c418025"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\student\\VideoLesson.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "748d0321ad3d69d24db668157080d89e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\Attendance.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "71d622e4d5213a91612818f9f1921a79"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\AvatarVideos.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "608ea15428efae26716d27209ca7039c"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\ClassDetail.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "d671239c8efd67fabfb42f093f3ffaf9"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\Classes.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "62d64eb28bfb1eb4a016512672bda67f"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\Dashboard.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "aebc6937d777ea59980f03917bb42c86"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\ExamEditor.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "796c4e962aac2a5779d8026458a0b388"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\Exams.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "fd53cfd5bfdabf1e31b717920a1c00f4"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\GenerateExam.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "5c4c1b5ae5ac4e93d1650ab7ae529721"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\LectureViewerPage.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "b70d0397e345121e46a2e17fd62fac4d"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\PublishVideo.jsx": {
+    "mtime": 1778241142.643177,
+    "hash": "f9d21a002a0f62e48c31e145d60ca419"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\Reports.jsx": {
+    "mtime": 1778241142.6486409,
+    "hash": "7e86424fa9880a39e473e6cf84a38baf"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\StudentDetail.jsx": {
+    "mtime": 1778241142.6486409,
+    "hash": "5828ccf383971935a78c5c152f271d1d"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\routes\\ProtectedRoute.jsx": {
+    "mtime": 1778241142.6486409,
+    "hash": "cc04d112e89468f6ad95f840fd2c73b0"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\routes\\RoleBasedRoute.jsx": {
+    "mtime": 1778241142.6486409,
+    "hash": "393d7e262f892d217e4cf5d54b872cf7"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\services\\adminService.js": {
+    "mtime": 1778248638.7662032,
+    "hash": "ea48cff22c1814a9ce5f9ee87f30ccd6"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\services\\api.js": {
+    "mtime": 1778241142.6486409,
+    "hash": "24b6f5e0d5ce07d18e34588cf8fd9d6a"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\services\\examService.js": {
+    "mtime": 1778241142.6486409,
+    "hash": "4ad5e7733a4330664120a7dc19c0d267"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\services\\libraryService.js": {
+    "mtime": 1778317892.5643964,
+    "hash": "ea7062468a9a9e8d951f2da8e3c14b9a"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\services\\managerService.js": {
+    "mtime": 1778241142.6486409,
+    "hash": "8808e1c11409537a78b8e24b8cc2bf40"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\services\\quizService.js": {
+    "mtime": 1778241142.6518638,
+    "hash": "80c6ab8c1a3def7fa853e40c17c235f0"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\services\\studentService.js": {
+    "mtime": 1778241142.6518638,
+    "hash": "b5e49f3fb87c67f1c7da17ddfc32a49b"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\services\\teacherService.js": {
+    "mtime": 1778241142.6518638,
+    "hash": "644eb49c769962a26e5c687e85f0fc9e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\services\\videoService.js": {
+    "mtime": 1778241142.6518638,
+    "hash": "db48f49fcafba1fae0d2e54b56f5c6af"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\utils\\constants.js": {
+    "mtime": 1778241142.6518638,
+    "hash": "f99da253b8847f6bdb153a15c5d2cfd4"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\utils\\dateUtils.js": {
+    "mtime": 1778241142.6518638,
+    "hash": "bcea4311303f70da2ad04412d39fdd5c"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\utils\\formatters.js": {
+    "mtime": 1778241142.6518638,
+    "hash": "de910c2f50a4c7c65b58b67c432e8370"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\utils\\helpers.js": {
+    "mtime": 1778241142.6540267,
+    "hash": "2481f42dea9726407771256b67503245"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\utils\\libraryNavigation.js": {
+    "mtime": 1778241142.6540267,
+    "hash": "b0cca1457bf4b9e2b31ed98289219495"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\utils\\libraryTopicSlides.js": {
+    "mtime": 1778241142.6540267,
+    "hash": "64867f3b16108d15545818db1b2c885e"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\wav2lip_setup\\download_weights.py": {
+    "mtime": 1778241142.6591966,
+    "hash": "32ac65058f0384c5483ed4024137e1c2"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\wav2lip_setup\\setup_wav2lip.ps1": {
+    "mtime": 1778241142.662122,
+    "hash": "cf6f01e084bdfafdb6ee02f0a45f518c"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\wav2lip_setup\\wav2lip_infer.py": {
+    "mtime": 1778241142.662122,
+    "hash": "92195bcc49986aeeb861c5f73eafe3e5"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\BusinesIdea_Guide.md": {
+    "mtime": 1778241142.5608344,
+    "hash": "4fe7025b4bec2d7e24fbeae92bda7664"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\DEPLOYMENT_GUIDE.md": {
+    "mtime": 1778241142.5608344,
+    "hash": "c8b58b168f225d8c1a19140d52736e34"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\docker-compose.yml": {
+    "mtime": 1778241142.607816,
+    "hash": "b14e5f1bad5f17f46d88515ac92eecc8"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\DOWNLOAD_INSTRUCTIONS.md": {
+    "mtime": 1778241142.5608344,
+    "hash": "d1ad814dcd6e57242ec1348f452d128c"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\EXTRACTION_GUIDE.md": {
+    "mtime": 1778241142.5608344,
+    "hash": "01262ddb290824d50dfbd28a63a6acf6"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\Plan.md": {
+    "mtime": 1778241142.5608344,
+    "hash": "a7638185ca6032d2a8e072f580e53ce1"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\PROJECT_SUMMARY.md": {
+    "mtime": 1778241142.5608344,
+    "hash": "dc5d7e0f7041489d6e8ca2b14eb71042"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\README.md": {
+    "mtime": 1778241142.5608344,
+    "hash": "4013fb9e4040261df5fb54e2a63f0d41"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\requirements.txt": {
+    "mtime": 1778317892.56188,
+    "hash": "aef19c04981f5b4c1c0dd1bb28d7bdc4"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\test_dummy.txt": {
+    "mtime": 1778249752.472119,
+    "hash": "8792345150f8ac052d69fbd2af33ff7b"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\index.html": {
+    "mtime": 1778241142.6098228,
+    "hash": "fd1cab09cfd62c1b464c28127cb8dce6"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\wav2lip_setup\\wav2lip_requirements.txt": {
+    "mtime": 1778241142.662122,
+    "hash": "c4b79a3ab40e287481b882a2f07ad923"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\static\\books\\4ed2413e06bc4a079192e5443c3e0bbf_pride-and-prejudice-jane-austen.pdf": {
+    "mtime": 1778241142.5866513,
+    "hash": "d19d9bfa3570414515e700c989b763e7"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\static\\books\\5b21d1db0a0e411f95a36811e9950f05_pride-and-prejudice-jane-austen.pdf": {
+    "mtime": 1778241142.5928113,
+    "hash": "d19d9bfa3570414515e700c989b763e7"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\static\\books\\6349fdbdfebb4700a01edadfdc0b01b1_pride-and-prejudice-jane-austen.pdf": {
+    "mtime": 1778241142.599607,
+    "hash": "d19d9bfa3570414515e700c989b763e7"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\static\\books\\6ae9e85ac771464eb7bb809d8808bf1f_pride-and-prejudice-jane-austen.pdf": {
+    "mtime": 1778241142.6023269,
+    "hash": "d19d9bfa3570414515e700c989b763e7"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\static\\teacher_face.jpg": {
+    "mtime": 1778241142.6540267,
+    "hash": "d33dc646351dc1f305aa0c4296430e5c"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\static\\test_audio.mp3": {
+    "mtime": 1778241142.6540267,
+    "hash": "b57d3af0bee8efeb954444189288a99d"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\static\\test_audio.wav": {
+    "mtime": 1778241142.6540267,
+    "hash": "bc08b904800f2b8f8521d94c08e39067"
+  },
+  "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\static\\test_audio_wav2lip.wav": {
+    "mtime": 1778241142.6591966,
+    "hash": "bc08b904800f2b8f8521d94c08e39067"
+  }
+}

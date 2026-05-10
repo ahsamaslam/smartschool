@@ -57,6 +57,7 @@ export default function StudentList({ students = [], classId }) {
             <th className="text-center py-3 px-4">Video %</th>
             <th className="text-center py-3 px-4">Attendance %</th>
             <th className="text-center py-3 px-4">Quiz Avg</th>
+            <th className="text-center py-3 px-4">Homework</th>
             <th className="text-center py-3 px-4">Overall</th>
             <th className="text-center py-3 px-4">Rank</th>
             <th className="py-3 px-4" />
@@ -90,6 +91,11 @@ export default function StudentList({ students = [], classId }) {
                 </td>
                 <td className="py-3 px-4 text-center text-xs font-medium text-gray-700">
                   {Math.round(s.average_quiz_score || 0)}%
+                </td>
+                <td className="py-3 px-4 text-center text-xs font-medium text-gray-700">
+                  {s.homework_avg != null
+                    ? `${Math.round(s.homework_avg)}%`
+                    : "—"}
                 </td>
                 <td className="py-3 px-4 text-center">
                   <span

@@ -66,6 +66,7 @@ export default function AdminSlides() {
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
   const [filmstripCollapsed, setFilmstripCollapsed] = useState(false);
   const [deckEditorOpen, setDeckEditorOpen] = useState(false);
+  const [postSavePrompt, setPostSavePrompt] = useState(null);
 
   const openDeckEditor = useCallback((slideIndex) => {
     if (slideIndex != null && slideIndex >= 0) setCurrentIndex(slideIndex);
@@ -74,6 +75,38 @@ export default function AdminSlides() {
   }, []);
 
   const closeDeckEditor = useCallback(() => setDeckEditorOpen(false), []);
+
+  const navigateBackToLibrary = useCallback((loc) => {
+    if (!loc) return;
+    navigate("/admin/library", {
+      state: {
+        libraryFocus: {
+          bookId: loc.bookId,
+          chapterId: loc.chapterId,
+          topicId: loc.topicId,
+        },
+      },
+    });
+  }, [navigate]);
+
+  const openRecordLectureNow = useCallback((loc) => {
+    const topicId = loc?.topicId;
+    if (!topicId) {
+      toast.error("Topic ID missing for recording.");
+      return;
+    }
+    const w = window.open(`/admin/record-lecture/${topicId}`, "_blank");
+    if (!w) {
+      toast.error("Pop-up blocked. Allow pop-ups and try again.");
+      return;
+    }
+    try {
+      w.focus();
+    } catch {
+      /* ignore */
+    }
+    navigateBackToLibrary(loc);
+  }, [navigateBackToLibrary]);
 
   const currentSlide = slides[currentIndex] || null;
 
@@ -986,18 +1019,43 @@ export default function AdminSlides() {
         initialContext={libraryContextFromNav}
         existingLibraryTopicId={topicFromLibrary?.id}
         topicHint={topicFromLibrary}
-        onComplete={(loc) => {
-          navigate("/admin/library", {
-            state: {
-              libraryFocus: {
-                bookId: loc.bookId,
-                chapterId: loc.chapterId,
-                topicId: loc.topicId,
-              },
-            },
-          });
-        }}
+        onComplete={(loc) => setPostSavePrompt(loc)}
       />
+
+      {postSavePrompt && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/45 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl bg-white border border-gray-200 shadow-2xl p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-1">Slides saved successfully</h3>
+            <p className="text-sm text-gray-500 mb-5">
+              Do you want to record a lecture for this topic now?
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  const loc = postSavePrompt;
+                  setPostSavePrompt(null);
+                  openRecordLectureNow(loc);
+                }}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700"
+              >
+                Record Lecture Now
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const loc = postSavePrompt;
+                  setPostSavePrompt(null);
+                  navigateBackToLibrary(loc);
+                }}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-gray-700 text-sm font-semibold hover:bg-gray-50"
+              >
+                Skip For Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

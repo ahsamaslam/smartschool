@@ -80,6 +80,12 @@ const adminService = {
     }),
 
   // AI Curriculum
+  parseBookMetadata: (formData) =>
+    api.post(`${API_ROUTES.ADMINS}/curriculum/parse-metadata`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 60000,
+    }),
+
   parseCurriculumBook: (formData) =>
     api.post(`${API_ROUTES.ADMINS}/curriculum/parse-book`, formData, {
       headers: { "Content-Type": "multipart/form-data" },

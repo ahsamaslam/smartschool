@@ -93,6 +93,9 @@ export default function Sidebar({ role, isOpen, onClose }) {
 const NAV_BY_ROLE = {
   student: [
     { label: "Dashboard", to: "/student/dashboard", icon: "HomeIcon" },
+    { label: "My Courses", to: "/student/courses", icon: "BookOpenIcon" },
+    { label: "My Homework", to: "/student/homework", icon: "ClipboardDocumentListIcon" },
+    { label: "My Exams", to: "/student/exams", icon: "ClipboardDocumentCheckIcon" },
     { label: "Profile", to: "/student/profile", icon: "UserCircleIcon" },
   ],
   teacher: [
@@ -147,7 +150,6 @@ const NAV_BY_ROLE = {
   admin: [
     { divider: true, label: "Admin" },
     { label: "Dashboard", to: "/admin/dashboard", icon: "HomeIcon" },
-    { label: "Users", to: "/admin/users", icon: "UsersIcon" },
     { label: "Schools", to: "/admin/schools", icon: "BuildingOfficeIcon" },
     { label: "Library", to: "/admin/library", icon: "BookOpenIcon" },
     { label: "AI Book Parser", to: "/admin/ai-parser", icon: "SparklesIcon" },
@@ -155,7 +157,7 @@ const NAV_BY_ROLE = {
     { label: "Students", to: "/admin/students", icon: "UserGroupIcon" },
     { label: "Videos", to: "/admin/videos", icon: "VideoCameraIcon" },
     { label: "Slides", to: "/admin/slides", icon: "PresentationChartBarIcon" },
-    { label: "Record Lecture", to: "/admin/record-lecture", icon: "FilmIcon" },
+    { label: "Recorded lectures", to: "/admin/recorded-lectures", icon: "FilmIcon" },
     { label: "Settings", to: "/admin/settings", icon: "CogIcon" },
     { divider: true, label: "Teacher" },
     { label: "My Classes", to: "/teacher/classes", icon: "AcademicCapIcon" },

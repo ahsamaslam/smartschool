@@ -76,9 +76,18 @@ const libraryService = {
     }
     return api.get(`library/library/topics/${id}`, axiosConfig);
   },
+
+  listRecordedLectures: (params = {}) =>
+    api.get("library/library/recorded-lectures", { params }),
   
   updateTopic: (topicId, data) =>
     api.put(`/library/library/topics/${topicId}`, data),
+
+  uploadTopicLecture: (topicId, formData) =>
+    api.post(`library/library/topics/${topicId}/lecture`, formData),
+
+  deleteTopicLecture: (topicId) =>
+    api.delete(`/library/library/topics/${topicId}/lecture`),
 
   createChapterTopic: (chapterId, data) =>
     api.post(`/library/library/chapters/${chapterId}/topics`, data),

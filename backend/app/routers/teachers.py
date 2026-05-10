@@ -1,13 +1,15 @@
 """
 Teacher Portal Routes
 """
-from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form, Depends
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional, Dict
 from datetime import datetime, date
 
-from app.utils.database import execute_query, execute_one, execute_write
+from app.routers.auth import get_user_from_token
+from app.routers.homework import ensure_homework_schema, teacher_can_manage_class
 from app.utils.claude_ai import generate_teacher_exam
+from app.utils.database import execute_one, execute_query, execute_write
 
 router = APIRouter()
 
@@ -55,52 +57,109 @@ class ExamGenerationRequest(BaseModel):
 @router.get("/classes/{teacher_id}")
 async def get_teacher_classes(teacher_id: str):
     """
-    Get all classes managed by teacher (or all classes for admin)
+    Classes where the user is the primary teacher or is assigned in teacher_class_assignments.
+    Returns [] for admin user IDs (teachers should use a teacher account for this list).
     """
-    # Check if requester is admin — return all classes
+    try:
+        from app.routers.homework import ensure_homework_schema
+
+        await ensure_homework_schema()
+    except Exception:
+        pass
+
+    # Check if requester is admin — not a class roster
     user_row = await execute_one("SELECT role FROM users WHERE id = $1", teacher_id)
     is_admin = user_row and user_row["role"] == "admin"
 
     if is_admin:
-        query = """
+        # Admin accounts are not class-assigned; use a teacher login for My Classes.
+        return []
+
+    query = """
             SELECT
                 c.id,
                 c.name,
                 c.grade_level,
+                c.section,
                 b.name as branch_name,
                 s.name as school_name,
                 COUNT(DISTINCT e.student_id) as student_count,
-                COUNT(DISTINCT cs.subject_id) as subject_count
+                COUNT(DISTINCT cs.subject_id) as subject_count,
+                COALESCE((
+                    SELECT json_agg(
+                        json_build_object(
+                            'library_subject_id', tsa.library_subject_id,
+                            'subject_name', ls.name,
+                            'library_book_id', tsa.library_book_id,
+                            'book_title', lb.title,
+                            'library_board_id', tsa.library_board_id,
+                            'board_name', lbo.name
+                        ) ORDER BY ls.name
+                    )
+                    FROM teacher_class_subject_assignments tsa
+                    JOIN library_subjects ls ON ls.id = tsa.library_subject_id
+                    JOIN library_books lb ON lb.id = tsa.library_book_id
+                    LEFT JOIN library_boards lbo ON lbo.id = tsa.library_board_id
+                    WHERE tsa.teacher_id = $1::uuid AND tsa.class_id = c.id
+                ), '[]'::json) AS section_assignments
             FROM classes c
             JOIN branches b ON c.branch_id = b.id
             JOIN schools s ON b.school_id = s.id
             LEFT JOIN enrollments e ON c.id = e.class_id AND e.is_active = true
             LEFT JOIN class_subjects cs ON c.id = cs.class_id
-            GROUP BY c.id, c.name, c.grade_level, b.name, s.name
+            WHERE c.teacher_id = $1::uuid
+               OR EXISTS (
+                   SELECT 1 FROM teacher_class_assignments tca
+                   WHERE tca.class_id = c.id AND tca.teacher_id = $1::uuid
+               )
+            GROUP BY c.id, c.name, c.grade_level, c.section, b.name, s.name
             ORDER BY c.name
         """
-        classes = await execute_query(query)
-    else:
-        query = """
-            SELECT
-                c.id,
-                c.name,
-                c.grade_level,
-                b.name as branch_name,
-                s.name as school_name,
-                COUNT(DISTINCT e.student_id) as student_count,
-                COUNT(DISTINCT cs.subject_id) as subject_count
-            FROM classes c
-            JOIN branches b ON c.branch_id = b.id
-            JOIN schools s ON b.school_id = s.id
-            LEFT JOIN enrollments e ON c.id = e.class_id AND e.is_active = true
-            LEFT JOIN class_subjects cs ON c.id = cs.class_id
-            WHERE c.teacher_id = $1
-            GROUP BY c.id, c.name, c.grade_level, b.name, s.name
-            ORDER BY c.name
-        """
-        classes = await execute_query(query, teacher_id)
+    classes = await execute_query(query, teacher_id)
     return [dict(cls) for cls in classes]
+
+
+@router.get("/classes/{class_id}/teaching-assignments")
+async def get_class_teaching_assignments(
+    class_id: str,
+    for_teacher_id: Optional[str] = None,
+    user: dict = Depends(get_user_from_token),
+):
+    """Subject + book (+ board) assigned to the teacher for this section."""
+    await ensure_homework_schema()
+    role = user.get("role")
+    uid = str(user["user_id"])
+    if role == "admin":
+        tid = for_teacher_id or uid
+    else:
+        tid = uid
+        if for_teacher_id and str(for_teacher_id) != uid:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+    if role != "admin":
+        if not await teacher_can_manage_class(uid, class_id):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+    rows = await execute_query(
+        """
+        SELECT
+            t.library_subject_id,
+            ls.name AS subject_name,
+            t.library_book_id,
+            lb.title AS book_title,
+            t.library_board_id,
+            lbo.name AS board_name
+        FROM teacher_class_subject_assignments t
+        JOIN library_subjects ls ON ls.id = t.library_subject_id
+        JOIN library_books lb ON lb.id = t.library_book_id
+        LEFT JOIN library_boards lbo ON lbo.id = t.library_board_id
+        WHERE t.teacher_id = $1::uuid AND t.class_id = $2::uuid
+        ORDER BY ls.name, lb.title
+        """,
+        tid,
+        class_id,
+    )
+    return {"assignments": [dict(r) for r in rows]}
 
 
 @router.post("/classes")
@@ -190,7 +249,8 @@ async def get_class_students(class_id: str):
             sp.average_quiz_score,
             sp.highest_quiz_score,
             sp.overall_score,
-            sp.ranking
+            sp.ranking,
+            hw.homework_avg_pct AS homework_avg
         FROM enrollments e
         JOIN users u ON e.student_id = u.id
         LEFT JOIN student_performance sp ON (
@@ -198,6 +258,21 @@ async def get_class_students(class_id: str):
             AND e.class_id = sp.class_id
             AND sp.date = CURRENT_DATE
         )
+        LEFT JOIN (
+            SELECT
+                hs.student_id,
+                AVG(
+                    CASE
+                        WHEN h.total_marks IS NOT NULL AND h.total_marks > 0 AND hs.marks_awarded IS NOT NULL
+                        THEN (hs.marks_awarded * 100.0 / h.total_marks)
+                        ELSE NULL
+                    END
+                ) AS homework_avg_pct
+            FROM homework_submissions hs
+            INNER JOIN homeworks h ON h.id = hs.homework_id AND h.class_id = $1::uuid
+            WHERE hs.submission_status IN ('reviewed', 'returned')
+            GROUP BY hs.student_id
+        ) hw ON hw.student_id = u.id
         WHERE e.class_id = $1 AND e.is_active = true
         ORDER BY sp.ranking NULLS LAST, u.full_name
     """

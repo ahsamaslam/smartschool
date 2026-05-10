@@ -1,5 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import adminService from "../../services/adminService";
+import examService from "../../services/examService";
+import { summarizeScope, formatHistoryClass } from "../../utils/studentPreviewScope";
 import { PageSpinner } from "../../components/common/Spinner";
 import Modal from "../../components/common/Modal";
 import Input from "../../components/common/Input";
@@ -52,6 +55,8 @@ const EMPTY_FORM = {
 };
 
 export default function AdminStudents() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -78,6 +83,9 @@ export default function AdminStudents() {
   const [editingSectionId, setEditingSectionId] = useState("");
   const [sectionForm, setSectionForm] = useState({ grade_level: "", section: "" });
   const [form, setForm] = useState(EMPTY_FORM);
+  const [curriculumPreview, setCurriculumPreview] = useState(null);
+  /** Loaded when viewing a student: curriculum inherited via active enrollment → section */
+  const [accessPreview, setAccessPreview] = useState(null);
 
   const loadStudents = async () => {
     setLoading(true);
@@ -113,6 +121,111 @@ export default function AdminStudents() {
     adminService.getBranchClasses(form.branch_id).then((res) => setClasses(res.data || []));
   }, [form.branch_id]);
 
+  useEffect(() => {
+    if (!form.class_id) {
+      setCurriculumPreview(null);
+      return;
+    }
+    examService
+      .getClassExamScope(form.class_id)
+      .then((res) => {
+        const body = res.data;
+        let subjects = 0;
+        let books = 0;
+        let topics = 0;
+        if (body.mode === "flat_legacy") {
+          subjects = body.subjects?.length || 0;
+          (body.subjects || []).forEach((s) => {
+            topics += (s.topics || []).length;
+          });
+        } else if (body.mode === "library_tree") {
+          for (const board of body.boards || []) {
+            for (const sub of board.subjects || []) {
+              subjects += 1;
+              for (const bk of sub.books || []) {
+                books += 1;
+                for (const ch of bk.chapters || []) {
+                  topics += (ch.topics || []).length;
+                }
+              }
+            }
+          }
+        }
+        setCurriculumPreview({
+          subjects,
+          books,
+          topics,
+          mode: body.mode || "",
+        });
+      })
+      .catch(() => setCurriculumPreview(null));
+  }, [form.class_id]);
+
+  useEffect(() => {
+    if (!detail) {
+      setAccessPreview(null);
+      return;
+    }
+    const active = detail.history?.find((h) => h.is_active);
+    if (!active?.class_id) {
+      setAccessPreview({
+        loading: false,
+        error:
+          "No active enrollment — assign a section (enrollment repair / create student with class) to see curriculum.",
+        activeEnrollment: null,
+        summary: null,
+      });
+      return;
+    }
+    let cancelled = false;
+    setAccessPreview({
+      loading: true,
+      error: null,
+      activeEnrollment: active,
+      summary: null,
+    });
+    examService
+      .getClassExamScope(active.class_id)
+      .then((res) => {
+        if (cancelled) return;
+        setAccessPreview({
+          loading: false,
+          error: null,
+          activeEnrollment: active,
+          summary: summarizeScope(res.data),
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAccessPreview({
+          loading: false,
+          error: "Could not load curriculum for this section.",
+          activeEnrollment: active,
+          summary: null,
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detail]);
+
+  const openDetail = useCallback(async (student) => {
+    setSelectedStudent(student);
+    setDetail(null);
+    const res = await adminService.getStudentDetail(student.id);
+    setDetail(res.data);
+  }, []);
+
+  useEffect(() => {
+    const openId = location.state?.openStudentId;
+    if (!openId || loading || students.length === 0) return;
+    const st = students.find((s) => String(s.id) === String(openId));
+    if (st) {
+      openDetail(st);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, students, loading, openDetail, navigate, location.pathname]);
+
   const filtered = students.filter(
     (s) =>
       s.full_name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -120,13 +233,6 @@ export default function AdminStudents() {
   );
 
   if (loading) return <PageSpinner />;
-
-  const openDetail = async (student) => {
-    setSelectedStudent(student);
-    setDetail(null);
-    const res = await adminService.getStudentDetail(student.id);
-    setDetail(res.data);
-  };
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -441,7 +547,19 @@ export default function AdminStudents() {
             </thead>
             <tbody className="divide-y divide-gray-50">
               {filtered.map((student) => (
-                <tr key={student.id} className="hover:bg-gray-50 transition-colors">
+                <tr
+                  key={student.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate(`/admin/students/${student.id}/view`)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      navigate(`/admin/students/${student.id}/view`);
+                    }
+                  }}
+                  className="hover:bg-gray-50 transition-colors cursor-pointer"
+                >
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-sm">
@@ -476,11 +594,15 @@ export default function AdminStudents() {
                   </td>
                   <td className="px-5 py-3 text-right">
                     <button
-                      onClick={() => openDetail(student)}
-                      className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openDetail(student);
+                      }}
+                      className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 bg-white"
                     >
                       <EyeIcon className="h-3.5 w-3.5" />
-                      Student Info
+                      Manage
                     </button>
                   </td>
                 </tr>
@@ -497,6 +619,24 @@ export default function AdminStudents() {
           <Dropdown label="School" options={schoolOptions} value={form.school_id} onChange={(v) => setForm((f) => ({ ...f, school_id: v, branch_id: "", class_id: "" }))} required />
           <Dropdown label="Branch" options={branchOptions} value={form.branch_id} onChange={(v) => setForm((f) => ({ ...f, branch_id: v, class_id: "" }))} required />
           <Dropdown label="Class & Section" options={classOptions} value={form.class_id} onChange={(v) => setForm((f) => ({ ...f, class_id: v }))} required />
+          {curriculumPreview && (
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/80 px-4 py-3 text-sm text-emerald-900">
+              <p className="font-semibold mb-1">Section curriculum preview</p>
+              <p className="text-emerald-800">
+                This section has approximately{" "}
+                <strong>{curriculumPreview.subjects}</strong> subject
+                {curriculumPreview.subjects !== 1 ? "s" : ""},{" "}
+                <strong>{curriculumPreview.books}</strong> book
+                {curriculumPreview.books !== 1 ? "s" : ""},{" "}
+                <strong>{curriculumPreview.topics}</strong> topic
+                {curriculumPreview.topics !== 1 ? "s" : ""}{" "}
+                {curriculumPreview.mode === "flat_legacy"
+                  ? "(legacy curriculum)"
+                  : "(library)"}
+                .
+              </p>
+            </div>
+          )}
           <div className="flex justify-end">
             <button
               type="button"
@@ -616,16 +756,142 @@ export default function AdminStudents() {
         </div>
       </Modal>
 
-      <Modal isOpen={Boolean(selectedStudent)} onClose={() => setSelectedStudent(null)} title="Student Detail" size="xl">
+      <Modal
+        isOpen={Boolean(selectedStudent)}
+        onClose={() => {
+          setSelectedStudent(null);
+          setDetail(null);
+          setAccessPreview(null);
+        }}
+        title="Student detail & access (testing)"
+        size="xl"
+      >
         {!detail ? (
           <p className="text-sm text-gray-500">Loading...</p>
         ) : (
           <div className="space-y-4">
+            <p className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">
+              For testing: below is what this student&apos;s <strong>active enrollment</strong> ties them to — same
+              section curriculum the student app uses (My Courses), independent of login status.
+            </p>
+
+            <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-indigo-800">
+                Section access & curriculum
+              </p>
+              {accessPreview?.loading && (
+                <p className="text-sm text-indigo-900">Loading curriculum for enrolled section…</p>
+              )}
+              {accessPreview?.error && (
+                <p className="text-sm text-amber-800">{accessPreview.error}</p>
+              )}
+              {!accessPreview?.loading && accessPreview?.activeEnrollment && (
+                <>
+                  <div className="text-sm text-indigo-950 space-y-1">
+                    <p>
+                      <span className="text-indigo-700">School:</span>{" "}
+                      {accessPreview.activeEnrollment.school_name || "—"}
+                    </p>
+                    <p>
+                      <span className="text-indigo-700">Branch:</span>{" "}
+                      {accessPreview.activeEnrollment.branch_name || "—"}
+                    </p>
+                    <p>
+                      <span className="text-indigo-700">Class / section:</span>{" "}
+                      {formatHistoryClass(accessPreview.activeEnrollment)}
+                      {accessPreview.activeEnrollment.class_name &&
+                        accessPreview.activeEnrollment.class_name !==
+                          `Class ${accessPreview.activeEnrollment.grade_level}` && (
+                          <span className="text-indigo-600">
+                            {" "}
+                            ({accessPreview.activeEnrollment.class_name})
+                          </span>
+                        )}
+                    </p>
+                    <p>
+                      <span className="text-indigo-700">Academic session:</span>{" "}
+                      {accessPreview.activeEnrollment.academic_session || "—"}
+                    </p>
+                    <p className="text-xs font-mono text-indigo-600 break-all">
+                      class_id: {String(accessPreview.activeEnrollment.class_id)}
+                    </p>
+                  </div>
+                  {accessPreview.summary && (
+                    <div className="rounded-xl bg-white/90 border border-indigo-100 px-3 py-2 text-sm text-gray-800">
+                      <p className="font-semibold text-gray-900 mb-1">Curriculum linked to this section</p>
+                      <p>
+                        Approximately{" "}
+                        <strong>{accessPreview.summary.subjects}</strong> subject
+                        {accessPreview.summary.subjects !== 1 ? "s" : ""},{" "}
+                        <strong>{accessPreview.summary.books}</strong> book
+                        {accessPreview.summary.books !== 1 ? "s" : ""},{" "}
+                        <strong>{accessPreview.summary.topics}</strong> topic
+                        {accessPreview.summary.topics !== 1 ? "s" : ""}{" "}
+                        <span className="text-gray-500">
+                          (
+                          {accessPreview.summary.mode === "flat_legacy"
+                            ? "legacy flat curriculum"
+                            : "library tree"}
+                          )
+                        </span>
+                      </p>
+                      {accessPreview.summary.boardsDetail?.length > 0 && (
+                        <details className="mt-2 group">
+                          <summary className="cursor-pointer text-xs font-medium text-indigo-700 hover:underline">
+                            Expand structure (boards → subjects → books)
+                          </summary>
+                          <div className="mt-2 max-h-52 overflow-y-auto text-xs space-y-2 border-t border-indigo-100 pt-2">
+                            {accessPreview.summary.mode === "library_tree" &&
+                              accessPreview.summary.boardsDetail.map((board, bi) => (
+                                <div key={`board-${bi}`} className="pl-1">
+                                  <p className="font-semibold text-gray-800">Board: {board.name}</p>
+                                  <ul className="mt-1 ml-3 space-y-1.5 text-gray-700">
+                                    {(board.subjects || []).map((sub, si) => (
+                                      <li key={`sub-${bi}-${si}`}>
+                                        <span className="font-medium">{sub.name}</span>
+                                        <ul className="ml-3 mt-0.5 text-gray-600">
+                                          {(sub.books || []).map((bk, bki) => (
+                                            <li key={`bk-${bi}-${si}-${bki}`}>
+                                              {bk.title}{" "}
+                                              <span className="text-gray-400">
+                                                ({bk.topicCount} topics
+                                                {bk.chapters ? `, ${bk.chapters} ch.` : ""})
+                                              </span>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ))}
+                            {accessPreview.summary.mode === "flat_legacy" &&
+                              accessPreview.summary.boardsDetail.map((row, ri) => (
+                                <div key={`leg-${ri}`} className="text-gray-800">
+                                  <span className="font-medium">{row.name}</span>{" "}
+                                  <span className="text-gray-500">
+                                    — {row.topicCount} topic{row.topicCount !== 1 ? "s" : ""}
+                                  </span>
+                                </div>
+                              ))}
+                          </div>
+                        </details>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
               <Info label="Name" value={detail.profile.full_name} />
               <Info label="Email" value={detail.profile.email} />
-              <Info label="School" value={detail.profile.school_name} />
-              <Info label="Branch" value={detail.profile.branch_name} />
+              <Info
+                label="Account status"
+                value={detail.profile.is_active ? "Active (can log in)" : "Inactive"}
+              />
+              <Info label="Profile school (record)" value={detail.profile.school_name} />
+              <Info label="Profile branch (record)" value={detail.profile.branch_name} />
               <Info label="Guardian" value={detail.profile.guardian_name} />
               <Info label="Primary Contact" value={detail.profile.primary_contact} />
               <Info label="Emergency Contact" value={detail.profile.emergency_contact} />
@@ -652,9 +918,28 @@ export default function AdminStudents() {
               <h3 className="text-sm font-semibold text-gray-800 mb-2">Enrollment History</h3>
               <div className="space-y-2">
                 {detail.history.map((h) => (
-                  <div key={h.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-700">
-                    <p className="font-medium">{h.school_name} / {h.branch_name} / {formatHistoryClass(h)}</p>
-                    <p>Session: {h.academic_session || "—"} | Status: {h.status} | Result: {h.promotion_result || "—"}</p>
+                  <div
+                    key={h.id}
+                    className={`rounded-lg border p-3 text-xs text-gray-700 ${
+                      h.is_active
+                        ? "border-green-200 bg-green-50/40"
+                        : "border-gray-200 bg-gray-50"
+                    }`}
+                  >
+                    <p className="font-medium flex flex-wrap items-center gap-2">
+                      {h.is_active && (
+                        <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-green-800">
+                          Active enrollment
+                        </span>
+                      )}
+                      <span>
+                        {h.school_name} / {h.branch_name} / {formatHistoryClass(h)}
+                      </span>
+                    </p>
+                    <p>
+                      Session: {h.academic_session || "—"} | Status: {h.status} | Result:{" "}
+                      {h.promotion_result || "—"}
+                    </p>
                   </div>
                 ))}
               </div>
@@ -738,10 +1023,6 @@ function onlyDigits(value) {
 
 function formatClass(cls) {
   return `Class ${cls.grade_level || "—"}${cls.section ? ` - ${cls.section}` : ""}`;
-}
-
-function formatHistoryClass(h) {
-  return `Class ${h.grade_level || h.class_name || "—"}${h.section ? ` - ${h.section}` : ""}`;
 }
 
 function normalizeSession(value) {

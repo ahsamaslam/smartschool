@@ -488,8 +488,10 @@ function ClassRow({ cls, onEdit, onDelete, onLinkSubjects, branchName, schoolNam
   const label = cls.section ? `Sec ${cls.section}` : "Main Section";
 
   const handleClick = () => {
-    navigate(`/admin/classes/${cls.id}`, {
+    navigate(`/admin/sections/${cls.id}`, {
       state: {
+        classId: cls.id,
+        returnToClassPath: `/admin/classes/${cls.id}`,
         branchId: cls.branch_id,
         gradeLevel: cls.grade_level,
         branchName,
@@ -502,7 +504,7 @@ function ClassRow({ cls, onEdit, onDelete, onLinkSubjects, branchName, schoolNam
     <div
       onClick={handleClick}
       className="group flex items-center gap-3 px-4 py-2.5 rounded-xl bg-white border border-gray-100 hover:border-indigo-300 hover:shadow-sm cursor-pointer transition-all"
-      title="View class sections"
+      title="View section details"
     >
       <div className="w-7 h-7 rounded-lg bg-amber-50 flex items-center justify-center flex-shrink-0">
         <AcademicCapIcon className="h-3.5 w-3.5 text-amber-600" />
@@ -514,6 +516,9 @@ function ClassRow({ cls, onEdit, onDelete, onLinkSubjects, branchName, schoolNam
       <span className="inline-flex items-center gap-1.5 px-2 py-1 bg-gray-50 rounded-md text-xs font-medium text-gray-600 flex-shrink-0 group-hover:bg-indigo-50 group-hover:text-indigo-700 transition-colors">
         <UsersIcon className="h-3.5 w-3.5" />
         {cls.student_count ?? 0}
+      </span>
+      <span className="text-xs font-medium text-indigo-600 flex-shrink-0 hidden sm:inline">
+        Open section
       </span>
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-1">
         <button
@@ -552,11 +557,26 @@ function ClassRow({ cls, onEdit, onDelete, onLinkSubjects, branchName, schoolNam
 // ── Class Group Panel ─────────────────────────────────────────────────────────
 function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onManageSections, onLinkSubjects, forceOpen, branchName, schoolName }) {
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
   const isOpen = forceOpen || open;
 
   const groupStudentTotal = useMemo(() => {
     return classes.reduce((sum, c) => sum + (c.student_count || 0), 0);
   }, [classes]);
+
+  const openAllSections = (e) => {
+    e.stopPropagation();
+    const classRef = classes[0];
+    if (!classRef) return;
+    navigate(`/admin/classes/${classRef.id}`, {
+      state: {
+        branchId: classRef.branch_id,
+        gradeLevel,
+        branchName,
+        schoolName,
+      },
+    });
+  };
 
   return (
     <div className="rounded-xl border border-gray-100 overflow-hidden mb-2 bg-white shadow-sm group/classgroup">
@@ -580,13 +600,22 @@ function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onManageSectio
             {groupStudentTotal}
           </span>
         </div>
-        <button
-          onClick={(e) => { e.stopPropagation(); onManageSections(gradeLevel); }}
-          className="opacity-0 group-hover/classgroup:opacity-100 transition-opacity inline-flex items-center gap-1 px-2 py-1 rounded-md bg-amber-50 text-amber-700 hover:bg-amber-100 text-xs font-semibold"
-          title="Manage sections for this class"
-        >
-          <PlusIcon className="h-3 w-3" /> Section
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={openAllSections}
+            className="opacity-0 group-hover/classgroup:opacity-100 transition-opacity inline-flex items-center gap-1 px-2 py-1 rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-semibold"
+            title="See all sections for this class"
+          >
+            All Sections
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onManageSections(gradeLevel); }}
+            className="opacity-0 group-hover/classgroup:opacity-100 transition-opacity inline-flex items-center gap-1 px-2 py-1 rounded-md bg-amber-50 text-amber-700 hover:bg-amber-100 text-xs font-semibold"
+            title="Manage sections for this class"
+          >
+            <PlusIcon className="h-3 w-3" /> Section
+          </button>
+        </div>
       </div>
 
       {isOpen && (

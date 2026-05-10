@@ -1,5 +1,6 @@
 
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import api from "../../services/api";
 import { PageSpinner } from "../../components/common/Spinner";
 import Modal from "../../components/common/Modal";
@@ -15,8 +16,10 @@ import {
   EyeIcon,
 } from "@heroicons/react/24/outline";
 import TeacherProfileModal from "../../components/admin/TeacherProfileModal";
+import { setAdminPreviewTeacher } from "../../utils/adminPreviewTeacher";
 
 export default function AdminTeachers() {
+  const navigate = useNavigate();
   const [teachers, setTeachers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -176,6 +179,15 @@ export default function AdminTeachers() {
                   <td className="px-5 py-3">
                     <div className="flex items-center justify-end gap-2">
                       <button
+                        className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-50"
+                        onClick={() => {
+                          setAdminPreviewTeacher(teacher.id, teacher.full_name);
+                          navigate(`/admin/teachers/${teacher.id}/sections`);
+                        }}
+                      >
+                        Sections
+                      </button>
+                      <button
                         className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
                         onClick={() => setSelectedTeacher(teacher)}
                       >
@@ -239,15 +251,15 @@ export default function AdminTeachers() {
             <Info label="Emergency Contact" value={selectedTeacher.emergency_contact} />
             <Info label="Experience (Years)" value={selectedTeacher.experience_years} />
             <Info label="Languages" value={selectedTeacher.languages} />
-            <Info label="Assigned Classes" value={formatAssignedClasses(selectedTeacher.assigned_classes)} />
             <Info label="Salary" value={selectedTeacher.salary} />
             <div className="md:col-span-2">
               <Info label="Qualifications" value={selectedTeacher.qualifications} />
             </div>
             <div className="md:col-span-2">
               <Info
-                label="Subjects Taught"
-                value={(selectedTeacher.subject_names || []).join(", ")}
+                label="Teaching assignments"
+                value={formatTeachingAssignments(selectedTeacher)}
+                multiline
               />
             </div>
             <div className="md:col-span-2 pt-2">
@@ -269,11 +281,15 @@ export default function AdminTeachers() {
   );
 }
 
-function Info({ label, value }) {
+function Info({ label, value, multiline }) {
   return (
     <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
       <p className="text-xs text-gray-500">{label}</p>
-      <p className="font-medium text-gray-900 mt-1">{value || "—"}</p>
+      <p
+        className={`font-medium text-gray-900 mt-1 ${multiline ? "whitespace-pre-line text-sm leading-relaxed" : ""}`}
+      >
+        {value || "—"}
+      </p>
     </div>
   );
 }
@@ -306,6 +322,38 @@ function normalizeStringArray(value) {
     }
   }
   return [];
+}
+
+function formatTeachingAssignments(teacher) {
+  const raw = teacher?.teacher_curriculum_assignments;
+  let list = [];
+  if (Array.isArray(raw)) list = raw;
+  else if (raw && typeof raw === "string") {
+    try {
+      const p = JSON.parse(raw);
+      if (Array.isArray(p)) list = p;
+    } catch {
+      /* ignore */
+    }
+  }
+  if (list.length) {
+    return list
+      .map((a) => {
+        const cls = [
+          a.class_name,
+          a.grade_level != null && a.grade_level !== "" ? `Grade ${a.grade_level}` : null,
+          a.section ? `Sec ${a.section}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        const board = a.board_name ? `${a.board_name} · ` : "";
+        return `${cls || "Section"} → ${board}${a.subject_name || ""} (${a.book_title || "book"})`;
+      })
+      .join("\n");
+  }
+  const subs = normalizeStringArray(teacher.subject_names);
+  if (subs.length) return subs.join(", ");
+  return "—";
 }
 
 function formatAssignedClasses(value) {

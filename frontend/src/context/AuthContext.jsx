@@ -6,6 +6,7 @@ import {
   useCallback,
 } from "react";
 import api from "../services/api";
+import { clearAdminPreviewTeacher } from "../utils/adminPreviewTeacher";
 
 const AuthContext = createContext(null);
 
@@ -73,6 +74,7 @@ export function AuthProvider({ children }) {
     } finally {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
+      clearAdminPreviewTeacher();
       setToken(null);
       setUser(null);
     }

@@ -52,6 +52,25 @@ function openLibraryPresentNewTabWithFallback(topicLike, navigate) {
   });
 }
 
+function openRecordLectureNewTabWithFallback(topicLike, navigate) {
+  const tid = resolveLibraryTopicIdFromRow(topicLike);
+  if (!tid) {
+    toast.error("Missing topic ID. Reload and try again.");
+    return;
+  }
+  const w = window.open(`/admin/record-lecture/${tid}`, "_blank");
+  if (!w) {
+    toast.error("Pop-up blocked — opening recorder in this tab.");
+    navigate(`/admin/record-lecture/${encodeURIComponent(tid)}`);
+    return;
+  }
+  try {
+    w.focus();
+  } catch {
+    /* ignore */
+  }
+}
+
 // ============================================
 // BREADCRUMB NAVIGATION
 // ============================================
@@ -90,26 +109,227 @@ const CLASS_PRESETS = [
   "A-Level 1st Year", "A-Level 2nd Year",
 ];
 
+function ManageBoardsModal({ isOpen, onClose }) {
+  const [boards, setBoards] = useState([]);
+  const [subjects, setSubjects] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [savingBoard, setSavingBoard] = useState(false);
+  const [activeBoardId, setActiveBoardId] = useState("");
+  const [selectedSubjectIds, setSelectedSubjectIds] = useState([]);
+  const [boardName, setBoardName] = useState("");
+  const [boardDescription, setBoardDescription] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [boardsRes, subjectsRes] = await Promise.all([
+        libraryService.getBoards(),
+        libraryService.getAllSubjects(),
+      ]);
+      const boardsData = boardsRes?.data?.data || [];
+      const subjectsData = subjectsRes?.data?.data || [];
+      setBoards(boardsData);
+      setSubjects(subjectsData);
+      const first = boardsData[0]?.id || "";
+      setActiveBoardId(first);
+    } catch {
+      toast.error("Failed to load boards.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    load();
+  }, [isOpen, load]);
+
+  useEffect(() => {
+    if (!activeBoardId) {
+      setSelectedSubjectIds([]);
+      return;
+    }
+    libraryService
+      .getBoardSubjects(activeBoardId)
+      .then((res) => {
+        const data = res?.data?.data || [];
+        setSelectedSubjectIds(data.map((s) => s.id));
+      })
+      .catch(() => setSelectedSubjectIds([]));
+  }, [activeBoardId]);
+
+  const createBoard = async () => {
+    if (!boardName.trim()) return toast.error("Board name required.");
+    setSavingBoard(true);
+    try {
+      await libraryService.createBoard({
+        name: boardName.trim(),
+        description: boardDescription.trim() || null,
+      });
+      toast.success("Board created.");
+      setBoardName("");
+      setBoardDescription("");
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to create board.");
+    } finally {
+      setSavingBoard(false);
+    }
+  };
+
+  const saveSubjects = async () => {
+    if (!activeBoardId) return;
+    try {
+      await libraryService.setBoardSubjects(activeBoardId, {
+        subject_ids: selectedSubjectIds,
+      });
+      toast.success("Board subjects updated.");
+      await load();
+      setActiveBoardId(activeBoardId);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to update board subjects.");
+    }
+  };
+
+  const deleteBoard = async (boardId) => {
+    if (!window.confirm("Delete this board?")) return;
+    try {
+      await libraryService.deleteBoard(boardId);
+      toast.success("Board deleted.");
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to delete board.");
+    }
+  };
+
+  const toggleSubject = (subjectId) => {
+    setSelectedSubjectIds((prev) =>
+      prev.includes(subjectId)
+        ? prev.filter((id) => id !== subjectId)
+        : [...prev, subjectId]
+    );
+  };
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Manage Boards">
+      {loading ? (
+        <div className="py-8 text-center text-sm text-gray-500">Loading…</div>
+      ) : (
+        <div className="space-y-5">
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
+            <input
+              value={boardName}
+              onChange={(e) => setBoardName(e.target.value)}
+              placeholder="Board name (e.g. Punjab Board)"
+              className="rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+            <button
+              type="button"
+              onClick={createBoard}
+              disabled={savingBoard}
+              className="px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-60"
+            >
+              Add Board
+            </button>
+          </div>
+          <input
+            value={boardDescription}
+            onChange={(e) => setBoardDescription(e.target.value)}
+            placeholder="Description (optional)"
+            className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+
+          <div className="space-y-2">
+            {boards.length === 0 ? (
+              <div className="text-sm text-gray-500 bg-gray-50 rounded-xl p-3">No boards yet.</div>
+            ) : (
+              boards.map((board) => (
+                <div key={board.id} className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActiveBoardId(board.id)}
+                    className={`flex-1 text-left px-3 py-2 rounded-xl border text-sm ${
+                      activeBoardId === board.id
+                        ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                        : "border-gray-200 bg-white text-gray-700"
+                    }`}
+                  >
+                    {board.name}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteBoard(board.id)}
+                    className="px-2.5 py-2 rounded-xl border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
+                    title="Delete board"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+
+          {activeBoardId && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-gray-700">Subjects in selected board</p>
+              <div className="max-h-52 overflow-y-auto border border-gray-200 rounded-xl p-2 space-y-1">
+                {subjects.map((subject) => (
+                  <label key={subject.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedSubjectIds.includes(subject.id)}
+                      onChange={() => toggleSubject(subject.id)}
+                    />
+                    <span className="text-sm text-gray-800">{subject.name}</span>
+                  </label>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={saveSubjects}
+                className="w-full py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700"
+              >
+                Save Board Subjects
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function ClassesView({ onSelectClass }) {
+  const navigate = useNavigate();
   const [classes, setClasses] = useState([]);
+  const [boards, setBoards] = useState([]);
+  const [boardSubjects, setBoardSubjects] = useState([]);
+  const [allSubjects, setAllSubjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(null);
+  const [showAddBoardModal, setShowAddBoardModal] = useState(false);
+  const [showDeleteBoardModal, setShowDeleteBoardModal] = useState(null);
   const [classForm, setClassForm] = useState({ preset: "", custom: "" });
+  const [boardForm, setBoardForm] = useState({ name: "", description: "" });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const loadClasses = useCallback(async () => {
     try {
-      const res = await libraryService.getLibraryClasses();
-      const classesData = Array.isArray(res.data) ? res.data : (res.data?.data || []);
-      console.log("Library classes loaded:", classesData);
+      const [classRes, boardRes] = await Promise.all([
+        libraryService.getLibraryClasses(),
+        libraryService.getBoards(),
+      ]);
+      const classesData = Array.isArray(classRes.data) ? classRes.data : (classRes.data?.data || []);
+      const boardsData = Array.isArray(boardRes.data) ? boardRes.data : (boardRes.data?.data || []);
       setClasses(classesData);
+      setBoards(boardsData);
     } catch (err) {
       console.error("Failed to load library classes:", err);
       setError(err.message);
-      toast.error("Failed to load library classes");
+      toast.error("Failed to load library data");
     } finally {
       setLoading(false);
     }
@@ -134,6 +354,21 @@ function ClassesView({ onSelectClass }) {
     }
   };
 
+  const handleDeleteBoard = async () => {
+    if (!showDeleteBoardModal) return;
+    setDeleting(true);
+    try {
+      await libraryService.deleteBoard(showDeleteBoardModal.id);
+      toast.success(`${showDeleteBoardModal.name} deleted`);
+      setShowDeleteBoardModal(null);
+      loadClasses();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to delete board");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleAddClass = async (e) => {
     e.preventDefault();
     const name = classForm.preset === "__custom__" ? classForm.custom.trim() : classForm.preset;
@@ -151,6 +386,30 @@ function ClassesView({ onSelectClass }) {
       setSaving(false);
     }
   };
+
+  const handleAddBoard = async (e) => {
+    e.preventDefault();
+    if (!boardForm.name.trim()) {
+      toast.error("Board name is required");
+      return;
+    }
+    setSaving(true);
+    try {
+      await libraryService.createBoard({
+        name: boardForm.name.trim(),
+        description: boardForm.description.trim() || null,
+      });
+      toast.success(`${boardForm.name} added`);
+      setShowAddBoardModal(false);
+      setBoardForm({ name: "", description: "" });
+      loadClasses();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to add board");
+    } finally {
+      setSaving(false);
+    }
+  };
+
 
   if (loading) return <PageSpinner />;
 
@@ -170,30 +429,76 @@ function ClassesView({ onSelectClass }) {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Curriculum Library</h2>
-          <p className="text-sm text-gray-500 mt-1">Select a class to view subjects and books</p>
+          <p className="text-sm text-gray-500 mt-1">Board-first flow: Board → Subjects</p>
         </div>
-        <Button variant="primary" onClick={() => setShowAddModal(true)} className="flex items-center gap-2">
-          <PlusIcon className="h-4 w-4" />
-          Add Class
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="primary"
+            onClick={() => setShowAddBoardModal(true)}
+            className="flex items-center gap-2"
+          >
+            <PlusIcon className="h-4 w-4" />
+            Add Board
+          </Button>
+        </div>
+      </div>
+
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-bold text-gray-900">Boards</h3>
+          <p className="text-xs text-gray-500">Board → Subject hierarchy</p>
+        </div>
+        {boards.length === 0 ? (
+          <div className="text-center py-8 text-gray-400 bg-gray-50 rounded-xl">
+            <BookOpenIcon className="h-10 w-10 mx-auto mb-2 opacity-20" />
+            <p className="text-sm font-medium">No boards found</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {boards.map((board) => (
+              <div
+                key={board.id}
+                className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md hover:border-emerald-300 transition-all group cursor-pointer"
+                onClick={() => navigate(`/admin/library/boards/${board.id}`, { state: { board } })}
+              >
+                <div className="flex items-start gap-3 mb-3">
+                  <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center flex-shrink-0 group-hover:bg-emerald-100 transition-colors">
+                    <BookOpenIcon className="h-6 w-6 text-emerald-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-bold text-gray-900 leading-tight">{board.name}</h3>
+                    {board.description && (
+                      <p className="text-xs text-gray-400 mt-1 line-clamp-1">{board.description}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setShowDeleteBoardModal(board); }}
+                    className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="flex items-center justify-between text-xs text-gray-500 pt-3 border-t border-gray-100">
+                  <span>{board.subject_count || 0} subject{Number(board.subject_count || 0) !== 1 ? "s" : ""}</span>
+                  <span className="text-indigo-400 font-medium group-hover:text-indigo-600 transition-colors">View →</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {classes.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
           <AcademicCapIcon className="h-16 w-16 mx-auto mb-4 opacity-20" />
           <p className="text-sm font-medium">No classes found</p>
-          <Button variant="primary" onClick={() => setShowAddModal(true)} className="mt-4">
-            <PlusIcon className="h-4 w-4 inline mr-2" />
-            Add First Class
-          </Button>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {classes.map((cls) => (
             <div
               key={cls.id}
-              className="bg-white rounded-xl border border-gray-200 p-5 hover:border-indigo-300 hover:shadow-md transition-all cursor-pointer group"
-              onClick={() => onSelectClass(cls)}
+              className="bg-white rounded-xl border border-gray-200 p-5 group"
             >
               <div className="flex flex-col">
                 <div className="flex items-start gap-3 mb-3">
@@ -289,6 +594,64 @@ function ClassesView({ onSelectClass }) {
           </div>
         </form>
       </Modal>
+
+      <Modal isOpen={showAddBoardModal} onClose={() => setShowAddBoardModal(false)} title="Add Board">
+        <form onSubmit={handleAddBoard} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Board Name <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={boardForm.name}
+              onChange={(e) => setBoardForm((f) => ({ ...f, name: e.target.value }))}
+              placeholder="e.g., Punjab Board, Oxford, O-Level"
+              required
+              className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Description (optional)
+            </label>
+            <textarea
+              value={boardForm.description}
+              onChange={(e) => setBoardForm((f) => ({ ...f, description: e.target.value }))}
+              placeholder="Short description of this board"
+              rows={3}
+              className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+            />
+          </div>
+          <div className="flex gap-3">
+            <Button type="button" variant="secondary" onClick={() => setShowAddBoardModal(false)} fullWidth>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" loading={saving} fullWidth>
+              Add Board
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal isOpen={!!showDeleteBoardModal} onClose={() => !deleting && setShowDeleteBoardModal(null)} title="Delete Board">
+        {showDeleteBoardModal && (
+          <div className="space-y-4">
+            <div className="bg-red-50 rounded-xl p-4 text-sm text-red-700">
+              <p className="font-semibold mb-1">This cannot be undone.</p>
+              <p>Deleting <strong>"{showDeleteBoardModal.name}"</strong> will remove its subject mappings and section links.</p>
+            </div>
+            <div className="flex gap-3">
+              <Button variant="secondary" onClick={() => setShowDeleteBoardModal(null)} disabled={deleting} fullWidth>
+                Cancel
+              </Button>
+              <Button variant="danger" onClick={handleDeleteBoard} loading={deleting} fullWidth>
+                Delete Board
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
     </div>
   );
 }
@@ -958,23 +1321,6 @@ function ChapterTopicsView({ book, onBack, onSelectTopic }) {
                   <div className="border-t border-gray-100 px-5 py-3 bg-gray-50/50 space-y-2">
                     {(chapter.topics || []).map((topic) => {
                       const hasSlides = libraryTopicHasSlides(topic);
-                      const recordContext = bookData && {
-                        libraryClass: {
-                          id: bookData.class_id,
-                          name: bookData.class_name || "Class",
-                        },
-                        subject: {
-                          id: bookData.subject_id,
-                          name: bookData.subject_name || "Subject",
-                        },
-                        book: { id: bookData.id, title: bookData.title },
-                        chapter: {
-                          id: chapter.id,
-                          chapter_number: chapter.chapter_number,
-                          title: chapter.title,
-                        },
-                      };
-
                       return (
                         <div
                           key={resolveLibraryTopicIdFromRow(topic) || topic.title}
@@ -1017,9 +1363,7 @@ function ChapterTopicsView({ book, onBack, onSelectTopic }) {
                                     toast.error("Missing topic ID.");
                                     return;
                                   }
-                                  navigate(`/admin/record-lecture/${encodeURIComponent(tid)}`, {
-                                    state: recordContext ? { libraryContext: recordContext } : undefined,
-                                  });
+                                  openRecordLectureNewTabWithFallback({ id: tid }, navigate);
                                 }}
                                 className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-rose-200 bg-white text-rose-700 text-xs font-semibold hover:bg-rose-50"
                               >
@@ -1235,6 +1579,7 @@ function TopicDetailView({ topic, chapter, book, libraryContext, onCreateSlides 
   const topicIdRaw = resolveLibraryTopicIdFromRow({ ...topic, ...meta });
 
   const hasSlides = libraryTopicHasSlides(meta);
+  const hasLecture = Boolean(meta?.has_lecture || meta?.lecture_video_url);
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -1289,16 +1634,42 @@ function TopicDetailView({ topic, chapter, book, libraryContext, onCreateSlides 
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    navigate(`/admin/record-lecture/${encodeURIComponent(topicIdRaw)}`, {
-                      state: libraryContext ? { libraryContext } : undefined,
-                    })
-                  }
+                  onClick={() => openRecordLectureNewTabWithFallback({ id: topicIdRaw }, navigate)}
                   className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-rose-300 bg-white text-rose-700 text-sm font-semibold hover:bg-rose-50"
                 >
                   <FilmIcon className="h-5 w-5" />
-                  Record lecture
+                  {hasLecture ? "Re-record lecture" : "Record lecture"}
                 </button>
+                {hasLecture && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/admin/topics/${topicIdRaw}/lecture`)}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-emerald-300 bg-white text-emerald-700 text-sm font-semibold hover:bg-emerald-50"
+                    >
+                      <PlayCircleIcon className="h-5 w-5" />
+                      Open recorded lecture
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!window.confirm("Delete recorded lecture for this topic?")) return;
+                        try {
+                          const res = await libraryService.deleteTopicLecture(topicIdRaw);
+                          const row = res?.data?.data ?? res?.data;
+                          if (row?.id) setMeta(row);
+                          toast.success("Lecture deleted.");
+                        } catch {
+                          toast.error("Failed to delete lecture.");
+                        }
+                      }}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-red-300 bg-white text-red-700 text-sm font-semibold hover:bg-red-50"
+                    >
+                      <TrashIcon className="h-5 w-5" />
+                      Delete lecture
+                    </button>
+                  </>
+                )}
               </>
             )}
           </div>

@@ -45,6 +45,16 @@ api.interceptors.request.use(
     if (token) {
       config.headers["Authorization"] = `Bearer ${token}`;
     }
+    // Default instance header is JSON; multipart uploads must omit Content-Type so the
+    // browser sets multipart/form-data + boundary (otherwise FastAPI sees no file → 422).
+    if (config.data instanceof FormData) {
+      const h = config.headers;
+      if (h && typeof h.delete === "function") {
+        h.delete("Content-Type");
+      } else {
+        delete config.headers["Content-Type"];
+      }
+    }
     return config;
   },
   (error) => Promise.reject(error),

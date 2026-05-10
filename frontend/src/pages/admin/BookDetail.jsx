@@ -13,6 +13,7 @@ import {
   TrashIcon,
   PlayIcon,
   ArrowPathIcon,
+  FilmIcon,
 } from "@heroicons/react/24/outline";
 
 export default function BookDetail() {
@@ -27,6 +28,7 @@ export default function BookDetail() {
   const [expandedChapters, setExpandedChapters] = useState({});
   const [deletingSlides, setDeletingSlides] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deletingLecture, setDeletingLecture] = useState(false);
 
   // passed via navigate state for breadcrumb
   const boardId = location.state?.boardId;
@@ -70,13 +72,29 @@ export default function BookDetail() {
       });
       toast.success("Slides deleted. You can now create new slides.");
       // Update local state so UI reflects change immediately
-      setSelectedTopic((t) => ({ ...t, has_slides: false, slides_json: null }));
+      setSelectedTopic((t) => ({
+        ...t,
+        has_slides: false,
+        slides_json: null,
+        has_lecture: false,
+        lecture_video_url: null,
+        lecture_metadata_json: null,
+      }));
       setBook((b) => ({
         ...b,
         chapters: (b.chapters || []).map((ch) => ({
           ...ch,
           topics: (ch.topics || []).map((tp) =>
-            tp.id === selectedTopic.id ? { ...tp, has_slides: false, slides_json: null } : tp
+            tp.id === selectedTopic.id
+              ? {
+                  ...tp,
+                  has_slides: false,
+                  slides_json: null,
+                  has_lecture: false,
+                  lecture_video_url: null,
+                  lecture_metadata_json: null,
+                }
+              : tp
           ),
         })),
       }));
@@ -88,6 +106,37 @@ export default function BookDetail() {
     }
   };
 
+  const handleDeleteLecture = async () => {
+    if (!selectedTopic?.id) return;
+    if (!window.confirm("Delete recorded lecture for this topic?")) return;
+    setDeletingLecture(true);
+    try {
+      await libraryService.deleteTopicLecture(selectedTopic.id);
+      toast.success("Recorded lecture deleted.");
+      setSelectedTopic((t) => ({
+        ...t,
+        has_lecture: false,
+        lecture_video_url: null,
+        lecture_metadata_json: null,
+      }));
+      setBook((b) => ({
+        ...b,
+        chapters: (b.chapters || []).map((ch) => ({
+          ...ch,
+          topics: (ch.topics || []).map((tp) =>
+            tp.id === selectedTopic.id
+              ? { ...tp, has_lecture: false, lecture_video_url: null, lecture_metadata_json: null }
+              : tp
+          ),
+        })),
+      }));
+    } catch {
+      toast.error("Failed to delete lecture.");
+    } finally {
+      setDeletingLecture(false);
+    }
+  };
+
   if (loading) return <PageSpinner />;
   if (!book) return (
     <div className="p-6 text-center text-gray-500">Book not found.</div>
@@ -96,6 +145,9 @@ export default function BookDetail() {
   const totalTopics = (book.chapters || []).reduce(
     (s, ch) => s + (ch.topics || []).length, 0
   );
+  const lectureUrl = selectedTopic?.lecture_video_url
+    ? `${(import.meta.env.VITE_API_URL || "http://localhost:8000/api").replace("/api", "")}${selectedTopic.lecture_video_url}`
+    : "";
 
   return (
     <div className="p-6 max-w-7xl mx-auto pb-24">
@@ -261,6 +313,39 @@ export default function BookDetail() {
                         <PencilSquareIcon className="h-3.5 w-3.5" />
                         Edit Slides
                       </button>
+
+                      <button
+                        onClick={() => {
+                          const w = window.open(`/admin/record-lecture/${selectedTopic.id}`, "_blank");
+                          if (!w) {
+                            navigate(`/admin/record-lecture/${selectedTopic.id}`);
+                          }
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-rose-200 text-rose-700 text-xs font-semibold hover:bg-rose-50 transition-colors"
+                      >
+                        <FilmIcon className="h-3.5 w-3.5" />
+                        {selectedTopic.has_lecture ? "Re-record Lecture" : "Record Lecture"}
+                      </button>
+
+                      {selectedTopic.has_lecture && lectureUrl && (
+                        <>
+                          <button
+                            onClick={() => navigate(`/admin/topics/${selectedTopic.id}/lecture`)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors"
+                          >
+                            <PlayIcon className="h-3.5 w-3.5" />
+                            Open Recorded Lecture
+                          </button>
+                          <button
+                            onClick={handleDeleteLecture}
+                            disabled={deletingLecture}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-red-200 text-red-600 text-xs font-semibold hover:bg-red-50 transition-colors disabled:opacity-50"
+                          >
+                            {deletingLecture ? <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" /> : <TrashIcon className="h-3.5 w-3.5" />}
+                            Delete Lecture
+                          </button>
+                        </>
+                      )}
 
                       {/* Delete slides (with confirm step) */}
                       {!confirmDelete ? (

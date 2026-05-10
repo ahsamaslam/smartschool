@@ -15,6 +15,7 @@ from app.config import settings
 from app.routers import (
     auth,
     students,
+    student_learning,
     teachers,
     managers,
     admins,
@@ -25,7 +26,8 @@ from app.routers import (
     analytics,
     classes as classes_router,
     library,
-    exams
+    exams,
+    homework,
 )
 from app.schemas.slides_ai import GenerateSlidesRequest, GenerateSlidesResponse
 from app.utils.ai_slide_deck import generate_slide_deck as run_generate_slide_deck
@@ -105,6 +107,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 
 # Student routes
 app.include_router(students.router, prefix="/api/students", tags=["Students"])
+app.include_router(student_learning.router, prefix="/api/students", tags=["Student Learning"])
 
 # Teacher routes
 app.include_router(teachers.router, prefix="/api/teachers", tags=["Teachers"])
@@ -138,6 +141,9 @@ app.include_router(library.router, prefix="/api/library", tags=["Library"])
 
 # Exam Module
 app.include_router(exams.router, prefix="/api/exams", tags=["Exams"])
+
+# Homework (interactive + upload, topic-scoped)
+app.include_router(homework.router, prefix="/api/homework", tags=["Homework"])
 
 # Spec alias: POST /api/generate-slides (same handler as admin route)
 @app.post("/api/generate-slides", response_model=GenerateSlidesResponse, tags=["AI Slides"])
@@ -174,6 +180,9 @@ async def startup_event():
         from app.utils.database import init_db, execute_write
         await init_db()
         logger.info("✅ Database connected")
+        from app.routers.homework import ensure_homework_schema
+        await ensure_homework_schema()
+        os.makedirs(os.path.join("static", "homework_uploads"), exist_ok=True)
     except Exception as e:
         logger.error(f"❌ Database connection failed: {str(e)}")
 
@@ -249,6 +258,7 @@ async def startup_event():
             "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'draft';",
             "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();",
             "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS subject_id UUID REFERENCES subjects(id);",
+            "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS library_subject_id UUID;",
             """CREATE TABLE IF NOT EXISTS exam_questions (
                 id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                 exam_id UUID REFERENCES teacher_exams(id) ON DELETE CASCADE,
@@ -260,6 +270,42 @@ async def startup_event():
                 order_index INTEGER DEFAULT 0,
                 is_manual BOOLEAN DEFAULT false,
                 created_at TIMESTAMP DEFAULT NOW()
+            );""",
+            # Exam geography (school / branch / board) — derived from class + optional board selection
+            "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS school_id UUID REFERENCES schools(id) ON DELETE SET NULL;",
+            "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS branch_id UUID REFERENCES branches(id) ON DELETE SET NULL;",
+            "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS board_id UUID;",
+            "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS due_at TIMESTAMP;",
+            # Student learning progress (library topics)
+            """CREATE TABLE IF NOT EXISTS student_topic_progress (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                topic_id UUID NOT NULL,
+                slides_viewed_count INTEGER DEFAULT 0,
+                slides_total INTEGER DEFAULT 0,
+                slides_completed BOOLEAN DEFAULT false,
+                lecture_watch_percent DOUBLE PRECISION DEFAULT 0,
+                watch_time_seconds INTEGER DEFAULT 0,
+                lecture_position_seconds DOUBLE PRECISION DEFAULT 0,
+                lecture_completed BOOLEAN DEFAULT false,
+                topic_completed BOOLEAN DEFAULT false,
+                last_opened_at TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(student_id, topic_id)
+            );""",
+            # Future: attempts / assignment rows when online exam delivery ships
+            """CREATE TABLE IF NOT EXISTS student_exam_assignments (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                exam_id UUID NOT NULL REFERENCES teacher_exams(id) ON DELETE CASCADE,
+                assigned_at TIMESTAMP DEFAULT NOW(),
+                started_at TIMESTAMP,
+                submitted_at TIMESTAMP,
+                status VARCHAR(30) DEFAULT 'available',
+                score DOUBLE PRECISION,
+                attempts INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(student_id, exam_id)
             );""",
         ]
         for sql in migrations:

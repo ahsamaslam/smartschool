@@ -16,8 +16,12 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     
     # Admin bootstrap user (sourced from env; upserted on startup)
+    ADMIN_ID: str = "00000000-0000-0000-0000-000000000001"
     ADMIN_EMAIL: str = "admin@mail.com"
+    ADMIN_FULL_NAME: str = "System Admin"
+    ADMIN_ROLE: str = "admin"
     ADMIN_PASSWORD: str = "Admin@123"
+    DEACTIVATE_NON_ADMIN_USERS: bool = True
 
     # Supabase
     SUPABASE_URL: str = ""

@@ -21,6 +21,18 @@ router = APIRouter()
 # REQUEST MODELS
 # ============================================
 
+
+class TeacherCurriculumAssignmentIn(BaseModel):
+    """One row: teacher teaches one subject+book in one class section."""
+
+    school_id: Optional[str] = None
+    branch_id: Optional[str] = None
+    library_board_id: Optional[str] = None
+    class_id: str
+    library_subject_id: str
+    library_book_id: str
+
+
 class CreateUserRequest(BaseModel):
     email: EmailStr
     full_name: str
@@ -39,6 +51,7 @@ class CreateUserRequest(BaseModel):
     languages: Optional[str] = None
     assigned_classes: Optional[List[str]] = None
     salary: Optional[str] = None
+    teacher_curriculum_assignments: Optional[List[TeacherCurriculumAssignmentIn]] = None
 
 
 class UpdateUserRequest(BaseModel):
@@ -58,6 +71,7 @@ class UpdateUserRequest(BaseModel):
     languages: Optional[str] = None
     assigned_classes: Optional[List[str]] = None
     salary: Optional[str] = None
+    teacher_curriculum_assignments: Optional[List[TeacherCurriculumAssignmentIn]] = None
 
 
 class AssignRoleRequest(BaseModel):
@@ -275,6 +289,38 @@ def _assigned_classes_text(value: Optional[List[str]]) -> Optional[str]:
     return json.dumps(cleaned)
 
 
+async def _sync_teacher_class_assignments(
+    teacher_user_id: str, class_ids: Optional[List[str]]
+) -> None:
+    """Mirror teacher form selections into teacher_class_assignments (My Classes)."""
+    try:
+        from app.routers.homework import ensure_homework_schema
+
+        await ensure_homework_schema()
+    except Exception:
+        return
+    await execute_write(
+        "DELETE FROM teacher_class_assignments WHERE teacher_id = $1::uuid",
+        teacher_user_id,
+    )
+    if not class_ids:
+        return
+    seen = set()
+    for cid in class_ids:
+        if not cid or not isinstance(cid, str) or cid in seen:
+            continue
+        seen.add(cid)
+        await execute_write(
+            """
+            INSERT INTO teacher_class_assignments (teacher_id, class_id)
+            VALUES ($1::uuid, $2::uuid)
+            ON CONFLICT (teacher_id, class_id) DO NOTHING
+            """,
+            teacher_user_id,
+            cid,
+        )
+
+
 def _parse_date_or_none(value: Optional[str]) -> Optional[date]:
     if not value:
         return None
@@ -363,6 +409,12 @@ def _extract_grade_number(value: Optional[str]) -> Optional[int]:
 async def get_all_users(role: Optional[str] = None):
     """Get all system users with optional role filter"""
     await ensure_teacher_profiles_table()
+    try:
+        from app.routers.homework import ensure_homework_schema
+
+        await ensure_homework_schema()
+    except Exception:
+        pass
 
     query = """
         SELECT
@@ -395,7 +447,45 @@ async def get_all_users(role: Optional[str] = None):
             tp.emergency_contact,
             tp.languages,
             tp.assigned_classes,
-            tp.salary
+            tp.salary,
+            (
+                SELECT COALESCE(
+                    json_agg(tca.class_id::text ORDER BY c.grade_level NULLS LAST, c.section NULLS LAST, c.name),
+                    '[]'::json
+                )
+                FROM teacher_class_assignments tca
+                JOIN classes c ON c.id = tca.class_id
+                WHERE tca.teacher_id = u.id
+            ) AS assigned_class_ids,
+            (
+                SELECT COALESCE(
+                    json_agg(
+                        json_build_object(
+                            'class_id', tcs.class_id,
+                            'class_name', c.name,
+                            'grade_level', c.grade_level,
+                            'section', c.section,
+                            'branch_name', bbr.name,
+                            'library_board_id', tcs.library_board_id,
+                            'board_name', lbo.name,
+                            'library_subject_id', tcs.library_subject_id,
+                            'subject_name', ls.name,
+                            'library_book_id', tcs.library_book_id,
+                            'book_title', lb.title,
+                            'school_id', tcs.school_id,
+                            'branch_id', tcs.branch_id
+                        ) ORDER BY c.name, ls.name
+                    ),
+                    '[]'::json
+                )
+                FROM teacher_class_subject_assignments tcs
+                JOIN classes c ON c.id = tcs.class_id
+                JOIN branches bbr ON bbr.id = c.branch_id
+                JOIN library_subjects ls ON ls.id = tcs.library_subject_id
+                JOIN library_books lb ON lb.id = tcs.library_book_id
+                LEFT JOIN library_boards lbo ON lbo.id = tcs.library_board_id
+                WHERE tcs.teacher_id = u.id
+            ) AS teacher_curriculum_assignments
         FROM users u
         LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
         LEFT JOIN schools sc ON sc.id = tp.school_id
@@ -430,6 +520,21 @@ async def create_user(user_data: CreateUserRequest):
         school_id = _none_if_blank(user_data.school_id)
         branch_id = _none_if_blank(user_data.branch_id)
         date_of_joining = _parse_date_or_none(user_data.date_of_joining)
+
+        subj_json = json.dumps(user_data.subjects or [])
+        assign_txt = _assigned_classes_text(user_data.assigned_classes)
+        curriculum_payload = None
+        if user_data.teacher_curriculum_assignments is not None:
+            curriculum_payload = [
+                a.model_dump() for a in user_data.teacher_curriculum_assignments
+            ]
+            assign_txt = _assigned_classes_text(
+                list({str(r["class_id"]) for r in curriculum_payload})
+            )
+            subj_json = json.dumps(
+                list({str(r["library_subject_id"]) for r in curriculum_payload})
+            )
+
         await execute_write(
             """
             INSERT INTO teacher_profiles (
@@ -466,15 +571,26 @@ async def create_user(user_data: CreateUserRequest):
             user_data.designation,
             date_of_joining,
             user_data.employment_status,
-            json.dumps(user_data.subjects or []),
+            subj_json,
             user_data.qualifications,
             user_data.experience_years,
             _none_if_blank(user_data.contact),
             _none_if_blank(user_data.emergency_contact),
             user_data.languages,
-            _assigned_classes_text(user_data.assigned_classes),
+            assign_txt,
             user_data.salary,
         )
+
+        from app.routers.homework import sync_teacher_class_subject_assignments
+
+        if curriculum_payload is not None:
+            await sync_teacher_class_subject_assignments(str(user["id"]), curriculum_payload)
+        class_ids_for_sync = (
+            list({str(r["class_id"]) for r in curriculum_payload})
+            if curriculum_payload is not None
+            else (user_data.assigned_classes or [])
+        )
+        await _sync_teacher_class_assignments(str(user["id"]), class_ids_for_sync)
 
     return {
         "message": "User created successfully",
@@ -518,6 +634,20 @@ async def update_user(user_id: str, user_data: UpdateUserRequest):
         school_id = _none_if_blank(user_data.school_id)
         branch_id = _none_if_blank(user_data.branch_id)
         date_of_joining = _parse_date_or_none(user_data.date_of_joining)
+
+        subj_param = (
+            json.dumps(user_data.subjects) if user_data.subjects is not None else None
+        )
+        assign_param = _assigned_classes_text(user_data.assigned_classes)
+        if user_data.teacher_curriculum_assignments is not None:
+            cur_rows = [a.model_dump() for a in user_data.teacher_curriculum_assignments]
+            subj_param = json.dumps(
+                list({str(r["library_subject_id"]) for r in cur_rows})
+            )
+            assign_param = _assigned_classes_text(
+                list({str(r["class_id"]) for r in cur_rows})
+            )
+
         await execute_write(
             """
             INSERT INTO teacher_profiles (
@@ -557,15 +687,26 @@ async def update_user(user_id: str, user_data: UpdateUserRequest):
             user_data.designation,
             date_of_joining,
             user_data.employment_status,
-            json.dumps(user_data.subjects) if user_data.subjects is not None else None,
+            subj_param,
             user_data.qualifications,
             user_data.experience_years,
             _none_if_blank(user_data.contact),
             _none_if_blank(user_data.emergency_contact),
             user_data.languages,
-            _assigned_classes_text(user_data.assigned_classes),
+            assign_param,
             user_data.salary,
         )
+
+        from app.routers.homework import sync_teacher_class_subject_assignments
+
+        if user_data.teacher_curriculum_assignments is not None:
+            rows = [a.model_dump() for a in user_data.teacher_curriculum_assignments]
+            await sync_teacher_class_subject_assignments(user_id, rows)
+            await _sync_teacher_class_assignments(
+                user_id, list({str(r["class_id"]) for r in rows})
+            )
+        elif user_data.assigned_classes is not None:
+            await _sync_teacher_class_assignments(user_id, user_data.assigned_classes)
 
     updated_user = await execute_one(
         """
@@ -1483,10 +1624,27 @@ async def generate_topic_content_ai(topic_id: str):
 # AI CURRICULUM MANAGEMENT
 # ============================================
 
+@router.post("/curriculum/parse-metadata")
+async def parse_book_metadata(file: UploadFile = File(...)):
+    """Extract only title/author/board/grade/subject from a book — fast, no full parse."""
+    from app.utils.claude_ai import extract_book_metadata
+
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    content = await file.read()
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"File exceeds {settings.MAX_FILE_SIZE_MB} MB limit")
+
+    try:
+        result = await extract_book_metadata(content, file.filename, file.content_type or "")
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Metadata extraction failed: {str(e)}")
+
+
 @router.post("/curriculum/parse-book")
 async def parse_curriculum_book(file: UploadFile = File(...)):
     """Upload a curriculum book (PDF or text) and parse it with Claude AI."""
-    from app.utils.claude_ai import parse_curriculum_document
+    from app.utils.claude_ai import parse_curriculum_document, _parse_curriculum_heuristic
 
     max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
     content = await file.read()
@@ -1497,20 +1655,37 @@ async def parse_curriculum_book(file: UploadFile = File(...)):
     if file.content_type not in allowed_types and not file.filename.lower().endswith((".pdf", ".txt", ".md")):
         raise HTTPException(status_code=415, detail="Unsupported file type. Upload PDF or text file.")
 
+    # Local extraction used as fast, reliable fallback path.
+    def _local_fallback_payload():
+        fallback_text = ""
+        if file.filename.lower().endswith(".pdf") or (file.content_type or "") == "application/pdf":
+            try:
+                import io
+                from pypdf import PdfReader
+                reader = PdfReader(io.BytesIO(content))
+                pages = []
+                for page in reader.pages[:30]:
+                    pages.append(page.extract_text() or "")
+                fallback_text = "\n".join(pages)
+            except Exception:
+                fallback_text = ""
+        if not fallback_text:
+            try:
+                fallback_text = content.decode("utf-8", errors="replace")
+            except Exception:
+                fallback_text = ""
+        return _parse_curriculum_heuristic(fallback_text, file.filename)
+
     try:
         import asyncio
+        # Allow enough time for real AI parsing on medium PDFs.
         result = await asyncio.wait_for(
             parse_curriculum_document(content, file.filename, file.content_type or ""),
-            timeout=300  # 5 minutes max
+            timeout=120
         )
         return result
-    except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=504,
-            detail="Parsing timed out after 5 minutes. Try a smaller PDF or one with fewer pages."
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Parsing failed: {str(e)}")
+    except Exception:
+        return _local_fallback_payload()
 
 
 @router.post("/curriculum/save-parsed")
@@ -2704,6 +2879,95 @@ async def seed_default_templates():
         "templates_created": created,
         "templates_already_exist": len(default_templates) - created,
     }
+
+
+class TeacherClassAssignmentBody(BaseModel):
+    class_id: str
+
+
+@router.get("/teachers/{teacher_id}/class-assignments")
+async def list_teacher_class_assignments(teacher_id: str):
+    """Sections/classes assigned to a teacher (in addition to classes.teacher_id)."""
+    from app.routers.homework import ensure_homework_schema
+
+    await ensure_homework_schema()
+    teacher = await execute_one(
+        "SELECT id, role FROM users WHERE id = $1::uuid AND role = 'teacher'",
+        teacher_id,
+    )
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    rows = await execute_query(
+        """
+        SELECT c.id, c.name, c.grade_level, c.section, b.name AS branch_name, s.name AS school_name
+        FROM teacher_class_assignments tca
+        JOIN classes c ON c.id = tca.class_id
+        JOIN branches b ON b.id = c.branch_id
+        JOIN schools s ON s.id = b.school_id
+        WHERE tca.teacher_id = $1::uuid
+        ORDER BY c.grade_level NULLS LAST, c.section NULLS LAST, c.name
+        """,
+        teacher_id,
+    )
+    primary = await execute_query(
+        """
+        SELECT c.id, c.name, c.grade_level, c.section, b.name AS branch_name, s.name AS school_name
+        FROM classes c
+        JOIN branches b ON b.id = c.branch_id
+        JOIN schools s ON s.id = b.school_id
+        WHERE c.teacher_id = $1::uuid
+        ORDER BY c.grade_level NULLS LAST, c.section NULLS LAST, c.name
+        """,
+        teacher_id,
+    )
+    return {
+        "assigned_via_admin": [dict(r) for r in rows],
+        "primary_teacher_of": [dict(r) for r in primary],
+    }
+
+
+@router.post("/teachers/{teacher_id}/class-assignments")
+async def add_teacher_class_assignment(
+    teacher_id: str, body: TeacherClassAssignmentBody
+):
+    from app.routers.homework import ensure_homework_schema
+
+    await ensure_homework_schema()
+    teacher = await execute_one(
+        "SELECT id FROM users WHERE id = $1::uuid AND role = 'teacher'",
+        teacher_id,
+    )
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    cls = await execute_one("SELECT id FROM classes WHERE id = $1::uuid", body.class_id)
+    if not cls:
+        raise HTTPException(status_code=404, detail="Class not found")
+    await execute_write(
+        """
+        INSERT INTO teacher_class_assignments (teacher_id, class_id)
+        VALUES ($1::uuid, $2::uuid)
+        ON CONFLICT (teacher_id, class_id) DO NOTHING
+        """,
+        teacher_id,
+        body.class_id,
+    )
+    return {"ok": True}
+
+
+@router.delete("/teachers/{teacher_id}/class-assignments/{class_id}")
+async def remove_teacher_class_assignment(teacher_id: str, class_id: str):
+    from app.routers.homework import ensure_homework_schema
+
+    await ensure_homework_schema()
+    await execute_write(
+        """
+        DELETE FROM teacher_class_assignments
+        WHERE teacher_id = $1::uuid AND class_id = $2::uuid
+        """,
+        teacher_id,
+        class_id,
+    )
+    return {"ok": True}
 
 
 # Admin has access to all teacher and manager routes

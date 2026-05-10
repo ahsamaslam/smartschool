@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { PageSpinner } from "../../components/common/Spinner";
 import Button from "../../components/common/Button";
-import Modal from "../../components/common/Modal";
 import Input from "../../components/common/Input";
 import Dropdown from "../../components/common/Dropdown";
 import toast from "react-hot-toast";
@@ -14,76 +12,60 @@ import {
   DocumentTextIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  BookOpenIcon,
   CheckCircleIcon,
   ArrowPathIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 
 // ============================================
-// STEP 1: UPLOAD & CONTEXT SELECTION
+// STEP 1: UPLOAD & CONFIGURE
 // ============================================
 
 function UploadStep({ onNext }) {
   const [file, setFile] = useState(null);
-  const [classes, setClasses] = useState([]);
-  const [subjects, setSubjects] = useState([]);
-  const [selectedClass, setSelectedClass] = useState("");
-  const [selectedSubject, setSelectedSubject] = useState("");
-  const [metadata, setMetadata] = useState({
-    title: "",
-    author: "",
-    board_name: "",
-    edition_year: "",
-  });
+  const [boards, setBoards] = useState([]);
+  const [boardSubjects, setBoardSubjects] = useState([]);
   const [dragOver, setDragOver] = useState(false);
   const [parsing, setParsing] = useState(false);
-  const inputRef = useRef();
+  const [parsedChapters, setParsedChapters] = useState(null); // full parse result
 
+  const [form, setForm] = useState({
+    title: "",
+    author: "",
+    board_id: "",
+    subject_id: "",
+    edition_year: "",
+    grade_level: "",
+  });
+
+  const inputRef = useRef();
+  const setField = (key, val) => setForm((f) => ({ ...f, [key]: val }));
+
+  // Load boards on mount
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const classesRes = await libraryService.getLibraryClasses();
-        const classesData = Array.isArray(classesRes.data) 
-          ? classesRes.data 
-          : (classesRes.data?.data || []);
-        
-        setClasses(classesData);
-        console.log("Loaded library classes:", classesData);
-      } catch (err) {
-        console.error("Failed to load library classes:", err);
-        toast.error("Failed to load library classes");
-      }
-    };
-    loadData();
+    libraryService.getBoards()
+      .then((res) => {
+        const data = Array.isArray(res?.data?.data) ? res.data.data : (res?.data || []);
+        setBoards(Array.isArray(data) ? data : []);
+      })
+      .catch(() => toast.error("Failed to load boards"));
   }, []);
 
-  // Load subjects when class changes
+  // Load subjects when board changes
   useEffect(() => {
-    const loadSubjects = async () => {
-      if (!selectedClass) {
-        setSubjects([]);
-        setSelectedSubject("");
-        return;
-      }
-      
-      try {
-        const res = await libraryService.getClassSubjects(selectedClass);
-        const subjectsData = Array.isArray(res.data) ? res.data : (res.data?.data || []);
-        setSubjects(subjectsData);
-        console.log("Loaded subjects for class:", subjectsData);
-        
-        if (subjectsData.length === 0) {
-          const className = classes.find(c => c.id === selectedClass)?.name || "this class";
-          toast.error(`No subjects found for ${className}. Please add subjects in Library first.`);
-        }
-      } catch (err) {
-        console.error("Failed to load subjects:", err);
-        toast.error("Failed to load subjects");
-      }
-    };
-    loadSubjects();
-  }, [selectedClass, classes]);
+    if (!form.board_id) {
+      setBoardSubjects([]);
+      setField("subject_id", "");
+      return;
+    }
+    libraryService.getBoardSubjects(form.board_id)
+      .then((res) => {
+        const data = res?.data?.data || res?.data || [];
+        setBoardSubjects(Array.isArray(data) ? data : []);
+        setField("subject_id", "");
+      })
+      .catch(() => toast.error("Failed to load subjects for this board"));
+  }, [form.board_id]);
 
   const handleFile = (f) => {
     if (!f) return;
@@ -92,11 +74,9 @@ function UploadStep({ onNext }) {
       return;
     }
     setFile(f);
-    // Auto-fill title from filename
-    if (!metadata.title) {
-      const titleFromFile = f.name.replace(/\.(pdf|txt|md|docx)$/i, "");
-      setMetadata((m) => ({ ...m, title: titleFromFile }));
-    }
+    setParsedChapters(null);
+    const titleFromFile = f.name.replace(/\.(pdf|txt|md|docx)$/i, "");
+    setForm((prev) => ({ ...prev, title: prev.title || titleFromFile }));
   };
 
   const handleDrop = useCallback((e) => {
@@ -105,61 +85,78 @@ function UploadStep({ onNext }) {
     handleFile(e.dataTransfer.files[0]);
   }, []);
 
-  const handleParse = async () => {
-    if (!file || !selectedClass || !selectedSubject) {
-      toast.error("Please select file, class, and subject");
-      return;
-    }
-    if (!metadata.title) {
-      toast.error("Please provide a book title");
-      return;
-    }
-
+  // Parse book with AI — fills form + extracts chapters
+  const handleParseWithAI = async () => {
+    if (!file) return;
     setParsing(true);
-    const loadingToast = toast.loading("AI is parsing your book... This may take 1-3 minutes for large PDFs", { duration: 300000 });
+    const tid = toast.loading("AI is parsing your book… This may take 1–3 minutes", { duration: 300000 });
 
     try {
       const fd = new FormData();
       fd.append("file", file);
       const res = await adminService.parseCurriculumBook(fd);
-
-      toast.success("Book parsed successfully!", { id: loadingToast });
-
-      // Normalize: AI returns { subjects: [{ chapters: [{ number, name, topics }] }] }
-      // Flatten all subjects' chapters and map field names to what the backend expects
       const raw = res.data;
-      const allChapters = (raw?.subjects || []).flatMap(subj =>
-        (subj.chapters || []).map(ch => ({
-          chapter_number: ch.chapter_number ?? ch.number ?? 0,
+
+      // Normalize chapters from the full parse response
+      const allChapters = (raw?.subjects || []).flatMap((subj) =>
+        (subj.chapters || []).map((ch) => ({
+          chapter_number: ch.chapter_number ?? ch.number ?? 1,
           title: ch.title ?? ch.name ?? "Untitled Chapter",
-          topics: (ch.topics || []).map(t => ({
+          topics: (ch.topics || []).map((t) => ({
             title: t.title ?? t.name ?? "Untitled Topic",
             content_body: t.content_body ?? t.description ?? t.content ?? "",
           })),
         }))
       );
 
-      // Pass parsed data with context to next step
-      onNext({
-        parsed: { ...raw, chapters: allChapters },
-        context: {
-          class_id: selectedClass,
-          subject_id: selectedSubject,
-          ...metadata,
-          edition_year: metadata.edition_year
-            ? parseInt(metadata.edition_year)
-            : null,
-        },
-      });
+      const validChapters = allChapters
+        .filter((ch) => (ch.title || "").trim())
+        .map((ch, idx) => ({
+          chapter_number: Number(ch.chapter_number) > 0 ? Number(ch.chapter_number) : idx + 1,
+          title: ch.title.trim(),
+          topics: (ch.topics || [])
+            .filter((t) => (t.title || "").trim())
+            .map((t) => ({
+              title: t.title.trim(),
+              content_body: (t.content_body || "").trim(),
+            })),
+        }));
+
+      if (validChapters.length === 0) {
+        throw new Error("Parser returned no chapters. Try another file or re-parse.");
+      }
+
+      setParsedChapters(validChapters);
+
+      // Auto-fill form from what the AI returned
+      const updates = {};
+      if (raw.book_title) updates.title = raw.book_title;
+      if (raw.grade_level) updates.grade_level = raw.grade_level;
+
+      // Try to detect board from grade_level or subject names
+      const gradeHint = (raw.grade_level || "").toLowerCase();
+      if (boards.length > 0) {
+        const match = boards.find((b) => {
+          const bn = b.name.toLowerCase();
+          return gradeHint.includes(bn) || bn.includes(gradeHint);
+        });
+        if (match) updates.board_id = match.id;
+      }
+
+      setForm((f) => ({ ...f, ...updates }));
+      toast.success(`Parsed! ${validChapters.length} chapters found — fill in board & subject, then click Review & Save.`, { id: tid });
     } catch (err) {
-      toast.error(
-        err?.response?.data?.detail || "Failed to parse book",
-        { id: loadingToast }
-      );
+      toast.error(err?.response?.data?.detail || "Failed to parse book", { id: tid });
     } finally {
       setParsing(false);
     }
   };
+
+  const canProceed =
+    parsedChapters?.length > 0 &&
+    form.title.trim() &&
+    form.board_id &&
+    form.subject_id;
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -169,21 +166,18 @@ function UploadStep({ onNext }) {
         </div>
         <h2 className="text-2xl font-bold text-gray-900">AI Book Parser</h2>
         <p className="text-sm text-gray-500 mt-2 max-w-md mx-auto">
-          Upload a curriculum book. Our AI will automatically extract the book title, author, subject, class, board, and organize all chapters and topics. You can review and edit before saving.
+          Upload a book, parse it with AI, then select the board and subject to store it under.
         </p>
       </div>
 
       <div className="space-y-6">
-        {/* File Upload */}
+        {/* ── File Upload ── */}
         <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
           onClick={() => !file && inputRef.current?.click()}
-          className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${
+          className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${
             dragOver
               ? "border-indigo-500 bg-indigo-50 scale-[1.02]"
               : file
@@ -198,21 +192,38 @@ function UploadStep({ onNext }) {
             className="hidden"
             onChange={(e) => handleFile(e.target.files[0])}
           />
+
           {file ? (
-            <div className="flex items-center justify-center gap-4">
-              <DocumentTextIcon className="h-10 w-10 text-green-600" />
-              <div className="text-left">
-                <p className="font-semibold text-gray-900">{file.name}</p>
-                <p className="text-xs text-gray-500">
-                  {(file.size / 1024 / 1024).toFixed(2)} MB
-                </p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <DocumentTextIcon className="h-10 w-10 text-green-600 flex-shrink-0" />
+              <div className="text-left flex-1 min-w-0">
+                <p className="font-semibold text-gray-900 truncate">{file.name}</p>
+                <p className="text-xs text-gray-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                {parsedChapters && (
+                  <p className="text-xs text-green-600 font-medium mt-0.5">
+                    ✓ Parsed — {parsedChapters.length} chapters found
+                  </p>
+                )}
               </div>
+
+              {/* Parse button — right next to file */}
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setFile(null);
-                }}
-                className="p-2 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                onClick={(e) => { e.stopPropagation(); handleParseWithAI(); }}
+                disabled={parsing}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-60 transition-colors flex-shrink-0"
+              >
+                {parsing ? (
+                  <><ArrowPathIcon className="h-4 w-4 animate-spin" />Parsing…</>
+                ) : parsedChapters ? (
+                  <><ArrowPathIcon className="h-4 w-4" />Re-parse</>
+                ) : (
+                  <><SparklesIcon className="h-4 w-4" />Parse with AI</>
+                )}
+              </button>
+
+              <button
+                onClick={(e) => { e.stopPropagation(); setFile(null); setParsedChapters(null); }}
+                className="p-2 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0"
               >
                 <XMarkIcon className="h-5 w-5" />
               </button>
@@ -220,148 +231,147 @@ function UploadStep({ onNext }) {
           ) : (
             <>
               <CloudArrowUpIcon className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-              <p className="text-sm font-semibold text-gray-700">
-                Drop your curriculum book here
-              </p>
-              <p className="text-xs text-gray-400 mt-1">
-                Supports PDF, TXT, Markdown, DOCX — up to 100 MB
-              </p>
+              <p className="text-sm font-semibold text-gray-700">Drop your curriculum book here</p>
+              <p className="text-xs text-gray-400 mt-1">Supports PDF, TXT, Markdown, DOCX</p>
             </>
           )}
         </div>
-
-        {/* Context Selection */}
-        <div className="bg-gray-50 rounded-2xl p-6 space-y-4">
-          <div className="flex items-start justify-between">
-            <h3 className="font-semibold text-gray-900">Book Context</h3>
-            <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full font-medium">
-              AI will detect these
-            </span>
-          </div>
-          <p className="text-xs text-gray-500 -mt-2">
-            AI will identify the class and subject from the book content. Select manually if needed.
-          </p>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Class <span className="text-red-500">*</span>
-              </label>
-              <Dropdown
-                options={(classes || []).map((c) => ({
-                  value: c.id,
-                  label: c.name,
-                }))}
-                value={selectedClass}
-                onChange={setSelectedClass}
-                placeholder="Select library class..."
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Subject <span className="text-red-500">*</span>
-              </label>
-              <Dropdown
-                options={(subjects || []).map((s) => ({
-                  value: s.id,
-                  label: s.name,
-                }))}
-                value={selectedSubject}
-                onChange={setSelectedSubject}
-                placeholder={selectedClass ? "Select subject..." : "Select class first"}
-                disabled={!selectedClass || subjects.length === 0}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Book Metadata */}
-        <div className="bg-gray-50 rounded-2xl p-6 space-y-4">
-          <div className="flex items-start justify-between">
-            <h3 className="font-semibold text-gray-900">Book Metadata</h3>
-            <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full font-medium">
-              AI will auto-fill these
-            </span>
-          </div>
-          <p className="text-xs text-gray-500 -mt-2">
-            Our AI will extract these details automatically. You can edit them if needed.
-          </p>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Book Title <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={metadata.title}
-              onChange={(e) =>
-                setMetadata((m) => ({ ...m, title: e.target.value }))
-              }
-              placeholder="e.g., Computer Science for Class 10"
-              required
-              className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <Input
-              label="Author"
-              value={metadata.author}
-              onChange={(e) =>
-                setMetadata((m) => ({ ...m, author: e.target.value }))
-              }
-              placeholder="e.g., John Smith"
-            />
-
-            <Input
-              label="Board Name"
-              value={metadata.board_name}
-              onChange={(e) =>
-                setMetadata((m) => ({ ...m, board_name: e.target.value }))
-              }
-              placeholder="e.g., Cambridge, Oxford"
-            />
-          </div>
-
-          <Input
-            label="Edition Year"
-            type="number"
-            value={metadata.edition_year}
-            onChange={(e) =>
-              setMetadata((m) => ({ ...m, edition_year: e.target.value }))
-            }
-            placeholder="e.g., 2024"
-          />
-        </div>
-
-        {/* Parse Button */}
-        <Button
-          variant="primary"
-          onClick={handleParse}
-          loading={parsing}
-          disabled={!file || !selectedClass || !selectedSubject || !metadata.title}
-          fullWidth
-          className="h-12 text-base"
-        >
-          {parsing ? (
-            <>
-              <ArrowPathIcon className="h-5 w-5 mr-2 animate-spin" />
-              AI is Parsing...
-            </>
-          ) : (
-            <>
-              <SparklesIcon className="h-5 w-5 mr-2" />
-              Parse Book with AI
-            </>
-          )}
-        </Button>
 
         {parsing && (
           <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 text-sm text-indigo-700">
             <ArrowPathIcon className="h-4 w-4 inline mr-2 animate-spin" />
-            Our AI is reading and structuring your book. This typically takes 30-60 seconds depending on file size...
+            Reading and structuring your book — typically 30–90 seconds…
           </div>
+        )}
+
+        {/* ── Book Details (only shown after upload) ── */}
+        {file && (
+          <>
+            <div className="bg-gray-50 rounded-2xl p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900">Book Details</h3>
+                {parsedChapters && (
+                  <span className="text-xs bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-full font-medium">
+                    AI auto-filled · edit if needed
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Title <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={form.title}
+                  onChange={(e) => setField("title", e.target.value)}
+                  placeholder="e.g., Computer Science for Class 10"
+                  className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <Input
+                  label="Author"
+                  value={form.author}
+                  onChange={(e) => setField("author", e.target.value)}
+                  placeholder="e.g., John Smith"
+                />
+                <Input
+                  label="Edition Year"
+                  type="number"
+                  value={form.edition_year}
+                  onChange={(e) => setField("edition_year", e.target.value)}
+                  placeholder="e.g., 2024"
+                />
+              </div>
+
+              <Input
+                label="Grade / Class Level"
+                value={form.grade_level}
+                onChange={(e) => setField("grade_level", e.target.value)}
+                placeholder="e.g., Class 9, O Level, Grade 10"
+              />
+            </div>
+
+            {/* ── Board (required) ── */}
+            <div className="bg-gray-50 rounded-2xl p-6 space-y-3">
+              <h3 className="font-semibold text-gray-900">
+                Board <span className="text-red-500">*</span>
+              </h3>
+              <p className="text-xs text-gray-500 -mt-1">
+                Select a board — subjects shown will be specific to that board.
+              </p>
+              <Dropdown
+                options={boards.map((b) => ({ value: b.id, label: b.name }))}
+                value={form.board_id}
+                onChange={(val) => setField("board_id", val)}
+                placeholder="Select board…"
+              />
+              {boards.length === 0 && (
+                <p className="text-xs text-amber-600">
+                  No boards found. Go to Library and create boards first.
+                </p>
+              )}
+            </div>
+
+            {/* ── Subject (required, filtered by board) ── */}
+            <div className="bg-gray-50 rounded-2xl p-6 space-y-3">
+              <h3 className="font-semibold text-gray-900">
+                Subject <span className="text-red-500">*</span>
+              </h3>
+              <p className="text-xs text-gray-500 -mt-1">
+                {form.board_id
+                  ? boardSubjects.length === 0
+                    ? "No subjects linked to this board yet — add them in Library first."
+                    : "Showing subjects for the selected board only."
+                  : "Select a board first to see its subjects."}
+              </p>
+              <Dropdown
+                options={(boardSubjects || []).map((s) => ({ value: s.id, label: s.name }))}
+                value={form.subject_id}
+                onChange={(val) => setField("subject_id", val)}
+                placeholder={form.board_id ? "Select subject…" : "Select board first"}
+                disabled={!form.board_id || boardSubjects.length === 0}
+              />
+            </div>
+
+            {/* ── Continue button ── */}
+            {parsedChapters && (
+              <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800 flex items-center gap-2">
+                <CheckCircleIcon className="h-5 w-5 text-green-600 flex-shrink-0" />
+                <span>
+                  <strong>{parsedChapters.length} chapters</strong> parsed successfully.
+                  Select board &amp; subject above, then click <strong>Review Chapters</strong> to check everything before saving.
+                </span>
+              </div>
+            )}
+
+            <Button
+              variant="primary"
+              onClick={() =>
+                onNext({
+                  parsed: { chapters: parsedChapters },
+                  form: { ...form },
+                  boards,
+                })
+              }
+              disabled={!canProceed}
+              fullWidth
+              className="h-12 text-base"
+            >
+              <ChevronRightIcon className="h-5 w-5 mr-2" />
+              {parsedChapters
+                ? `Review ${parsedChapters.length} Chapters & Save`
+                : "Parse the book first"}
+            </Button>
+
+            {!parsedChapters && (
+              <p className="text-center text-xs text-gray-400">
+                Click "Parse with AI" next to the file above to continue
+              </p>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -376,13 +386,10 @@ function ReviewStep({ data, onBack, onSave }) {
   const [expanded, setExpanded] = useState({});
   const [saving, setSaving] = useState(false);
 
-  const { parsed, context } = data;
+  const { parsed, form, boards } = data;
 
   useEffect(() => {
-    // Auto-expand first chapter
-    if (parsed?.chapters?.length > 0) {
-      setExpanded({ 0: true });
-    }
+    if (parsed?.chapters?.length > 0) setExpanded({ 0: true });
   }, [parsed]);
 
   const totalTopics = (parsed?.chapters || []).reduce(
@@ -390,23 +397,24 @@ function ReviewStep({ data, onBack, onSave }) {
     0
   );
 
+  const boardName = boards.find((b) => b.id === form.board_id)?.name || "";
+
   const handleSave = async () => {
     setSaving(true);
-    const loadingToast = toast.loading("Saving book to library...");
+    const tid = toast.loading("Saving book to library…");
 
     try {
       await libraryService.saveParsedBook({
-        class_id: context.class_id,
-        subject_id: context.subject_id,
-        title: context.title,
-        author: context.author || null,
-        board_name: context.board_name || null,
-        edition_year: context.edition_year || null,
-        pdf_url: context.pdf_url || null,
-        chapters: (parsed.chapters || []).map(ch => ({
+        board_id: form.board_id,
+        subject_id: form.subject_id,
+        title: form.title,
+        author: form.author || null,
+        board_name: boardName || null,
+        edition_year: form.edition_year ? parseInt(form.edition_year) : null,
+        chapters: (parsed.chapters || []).map((ch) => ({
           chapter_number: ch.chapter_number,
           title: ch.title,
-          topics: (ch.topics || []).map(t => ({
+          topics: (ch.topics || []).map((t) => ({
             title: t.title,
             content_body: t.content_body || "",
           })),
@@ -414,44 +422,42 @@ function ReviewStep({ data, onBack, onSave }) {
       });
 
       toast.success(
-        `Book saved successfully! ${(parsed.chapters || []).length} chapters, ${totalTopics} topics`,
-        { id: loadingToast }
+        `Saved! ${(parsed.chapters || []).length} chapters, ${totalTopics} topics`,
+        { id: tid }
       );
 
-      onSave();
+      onSave({ boardId: form.board_id });
     } catch (err) {
-      toast.error(
-        err?.response?.data?.detail || "Failed to save book",
-        { id: loadingToast }
-      );
-    } finally {
+      toast.error(err?.response?.data?.detail || "Failed to save book", { id: tid });
       setSaving(false);
     }
   };
 
   return (
     <div>
+      {/* Summary card */}
       <div className="bg-gradient-to-br from-violet-50 to-indigo-50 rounded-2xl p-6 mb-6 border border-indigo-100">
         <div className="flex items-start gap-4">
           <div className="w-12 h-12 bg-gradient-to-br from-violet-500 to-indigo-600 rounded-xl flex items-center justify-center flex-shrink-0">
             <CheckCircleIcon className="h-6 w-6 text-white" />
           </div>
           <div className="flex-1">
-            <h2 className="text-xl font-bold text-gray-900">
-              {context.title}
-            </h2>
-            {context.author && (
-              <p className="text-sm text-gray-600 mt-1">By {context.author}</p>
-            )}
+            <h2 className="text-xl font-bold text-gray-900">{form.title}</h2>
+            {form.author && <p className="text-sm text-gray-600 mt-1">By {form.author}</p>}
             <div className="flex flex-wrap gap-2 mt-3">
-              {context.board_name && (
+              {boardName && (
                 <span className="text-xs bg-white/60 text-indigo-700 px-2.5 py-1 rounded-full font-medium">
-                  {context.board_name}
+                  {boardName}
                 </span>
               )}
-              {context.edition_year && (
+              {form.grade_level && (
                 <span className="text-xs bg-white/60 text-indigo-700 px-2.5 py-1 rounded-full font-medium">
-                  {context.edition_year}
+                  {form.grade_level}
+                </span>
+              )}
+              {form.edition_year && (
+                <span className="text-xs bg-white/60 text-indigo-700 px-2.5 py-1 rounded-full font-medium">
+                  {form.edition_year}
                 </span>
               )}
               <span className="text-xs bg-indigo-600 text-white px-2.5 py-1 rounded-full font-medium">
@@ -465,19 +471,14 @@ function ReviewStep({ data, onBack, onSave }) {
         </div>
       </div>
 
-      {/* Chapters Preview */}
+      {/* Chapters */}
       <div className="space-y-3 mb-6 max-h-[60vh] overflow-y-auto pr-2">
         {(parsed?.chapters || []).map((chapter, idx) => {
           const isExpanded = expanded[idx];
           return (
-            <div
-              key={idx}
-              className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm"
-            >
+            <div key={idx} className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
               <button
-                onClick={() =>
-                  setExpanded((p) => ({ ...p, [idx]: !p[idx] }))
-                }
+                onClick={() => setExpanded((p) => ({ ...p, [idx]: !p[idx] }))}
                 className="w-full flex items-center gap-3 px-5 py-4 hover:bg-gray-50 transition-colors text-left"
               >
                 {isExpanded ? (
@@ -489,9 +490,7 @@ function ReviewStep({ data, onBack, onSave }) {
                   Ch {chapter.chapter_number}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-gray-900 truncate">
-                    {chapter.title}
-                  </p>
+                  <p className="font-semibold text-gray-900 truncate">{chapter.title}</p>
                 </div>
                 <span className="text-xs bg-gray-100 text-gray-600 px-2.5 py-1 rounded-full font-medium flex-shrink-0">
                   {(chapter.topics || []).length} topics
@@ -510,13 +509,9 @@ function ReviewStep({ data, onBack, onSave }) {
                           {topicIdx + 1}.
                         </span>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-800">
-                            {topic.title}
-                          </p>
+                          <p className="text-sm font-medium text-gray-800">{topic.title}</p>
                           {topic.content_body && (
-                            <p className="text-xs text-gray-500 mt-1 line-clamp-2">
-                              {topic.content_body}
-                            </p>
+                            <p className="text-xs text-gray-500 mt-1 line-clamp-2">{topic.content_body}</p>
                           )}
                         </div>
                       </div>
@@ -529,33 +524,15 @@ function ReviewStep({ data, onBack, onSave }) {
         })}
       </div>
 
-      {/* Action Buttons */}
       <div className="flex gap-4">
-        <Button
-          variant="secondary"
-          onClick={onBack}
-          disabled={saving}
-          fullWidth
-        >
+        <Button variant="secondary" onClick={onBack} disabled={saving} fullWidth>
           ← Back
         </Button>
-        <Button
-          variant="primary"
-          onClick={handleSave}
-          loading={saving}
-          fullWidth
-          className="h-12"
-        >
+        <Button variant="primary" onClick={handleSave} loading={saving} fullWidth className="h-12">
           {saving ? (
-            <>
-              <ArrowPathIcon className="h-5 w-5 mr-2 animate-spin" />
-              Saving...
-            </>
+            <><ArrowPathIcon className="h-5 w-5 mr-2 animate-spin" />Saving…</>
           ) : (
-            <>
-              <CheckCircleIcon className="h-5 w-5 mr-2" />
-              Save to Library ({totalTopics} topics)
-            </>
+            <><CheckCircleIcon className="h-5 w-5 mr-2" />Save to Library ({totalTopics} topics)</>
           )}
         </Button>
       </div>
@@ -564,7 +541,7 @@ function ReviewStep({ data, onBack, onSave }) {
 }
 
 // ============================================
-// MAIN AI PARSER PAGE
+// MAIN
 // ============================================
 
 export default function AIParserPage() {
@@ -572,38 +549,23 @@ export default function AIParserPage() {
   const [step, setStep] = useState(1);
   const [parsedData, setParsedData] = useState(null);
 
-  // Debug log
-  console.log("AIParserPage rendered", { step });
-
-  // Error boundary check
-  if (!navigate) {
-    return <div className="p-6">Navigation error</div>;
-  }
-
   const steps = [
     { n: 1, label: "Upload & Configure" },
     { n: 2, label: "Review & Save" },
   ];
 
-  const handleNext = (data) => {
-    setParsedData(data);
-    setStep(2);
-  };
-
-  const handleBack = () => {
-    setStep(1);
-  };
-
-  const handleSave = () => {
-    toast.success("Redirecting to library...");
-    setTimeout(() => {
-      navigate("/admin/library");
-    }, 1500);
+  const handleSave = ({ boardId }) => {
+    if (boardId) {
+      toast.success("Redirecting to board…");
+      setTimeout(() => navigate(`/admin/library/boards/${boardId}`), 1200);
+    } else {
+      setTimeout(() => navigate("/admin/library"), 1200);
+    }
   };
 
   return (
     <div className="p-6 max-w-4xl mx-auto pb-24">
-      {/* Step Indicator */}
+      {/* Step indicator */}
       <div className="flex items-center justify-center gap-3 mb-10">
         {steps.map((s, idx) => (
           <div key={s.n} className="flex items-center gap-3">
@@ -620,30 +582,29 @@ export default function AIParserPage() {
             </div>
             <span
               className={`text-sm font-semibold ${
-                step === s.n
-                  ? "text-indigo-700"
-                  : step > s.n
-                  ? "text-green-600"
-                  : "text-gray-400"
+                step === s.n ? "text-indigo-700" : step > s.n ? "text-green-600" : "text-gray-400"
               }`}
             >
               {s.label}
             </span>
             {idx < steps.length - 1 && (
-              <div
-                className={`w-16 h-0.5 mx-2 ${
-                  step > s.n ? "bg-green-400" : "bg-gray-200"
-                }`}
-              />
+              <div className={`w-16 h-0.5 mx-2 ${step > s.n ? "bg-green-400" : "bg-gray-200"}`} />
             )}
           </div>
         ))}
       </div>
 
-      {/* Steps */}
-      {step === 1 && <UploadStep onNext={handleNext} />}
+      {step === 1 && (
+        <UploadStep
+          onNext={(data) => { setParsedData(data); setStep(2); }}
+        />
+      )}
       {step === 2 && parsedData && (
-        <ReviewStep data={parsedData} onBack={handleBack} onSave={handleSave} />
+        <ReviewStep
+          data={parsedData}
+          onBack={() => setStep(1)}
+          onSave={handleSave}
+        />
       )}
     </div>
   );

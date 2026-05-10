@@ -10,6 +10,13 @@ const teacherService = {
   getClasses: (teacherId) =>
     api.get(`${API_ROUTES.TEACHERS}/classes/${teacherId}`),
 
+  /** Subject/book slots assigned to this teacher for a section */
+  getTeachingAssignments: (classId, axiosConfig = {}) =>
+    api.get(
+      `${API_ROUTES.TEACHERS}/classes/${classId}/teaching-assignments`,
+      axiosConfig,
+    ),
+
   createClass: (teacherId, data) =>
     api.post(`${API_ROUTES.TEACHERS}/classes`, data, {
       params: { teacher_id: teacherId },

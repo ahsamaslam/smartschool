@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import teacherService from "../../services/teacherService";
+import { useAuth } from "../../hooks/useAuth";
+import { getAdminPreviewTeacherId } from "../../utils/adminPreviewTeacher";
 import StudentList from "../../components/teacher/StudentList";
 import AttendanceForm from "../../components/teacher/AttendanceForm";
 import { PageSpinner } from "../../components/common/Spinner";
@@ -13,7 +15,10 @@ import { UserPlusIcon } from "@heroicons/react/24/outline";
 
 export default function ClassDetail() {
   const { classId } = useParams();
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const [students, setStudents] = useState([]);
+  const [teachingSlots, setTeachingSlots] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
@@ -29,7 +34,26 @@ export default function ClassDetail() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(loadStudents, [classId]);
+  useEffect(() => {
+    loadStudents();
+  }, [classId]);
+
+  useEffect(() => {
+    const preview =
+      user?.role === "admin" ? getAdminPreviewTeacherId() || user?.id : user?.id;
+    if (!preview || !classId) {
+      setTeachingSlots([]);
+      return;
+    }
+    const params =
+      user?.role === "admin" && getAdminPreviewTeacherId()
+        ? { params: { for_teacher_id: getAdminPreviewTeacherId() } }
+        : {};
+    teacherService
+      .getTeachingAssignments(classId, params)
+      .then((res) => setTeachingSlots(res.data?.assignments || []))
+      .catch(() => setTeachingSlots([]));
+  }, [classId, user?.role, user?.id]);
 
   const handleAddStudent = async (e) => {
     e.preventDefault();
@@ -50,10 +74,25 @@ export default function ClassDetail() {
   if (loading) return <PageSpinner />;
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Class Students</h1>
-        <div className="flex gap-3">
+    <div className="p-6 max-w-6xl mx-auto pb-16">
+      <button
+        type="button"
+        onClick={() => navigate("/teacher/classes")}
+        className="text-sm text-gray-500 hover:text-gray-800 mb-4"
+      >
+        ← My Classes
+      </button>
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Class overview</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Roster, attendance, and homework for this section.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3 shrink-0">
+          <Button variant="secondary" onClick={() => navigate(`/teacher/classes/${classId}/homework`)}>
+            Homework
+          </Button>
           <Button
             variant="secondary"
             onClick={() => setShowAttendance(!showAttendance)}
@@ -68,6 +107,29 @@ export default function ClassDetail() {
       </div>
 
       {error && <Alert type="error" message={error} className="mb-4" />}
+
+      {teachingSlots.length > 0 && (
+        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4 mb-6">
+          <p className="text-sm font-semibold text-indigo-950 mb-2">Your teaching slots (this section)</p>
+          <ul className="grid sm:grid-cols-2 gap-2 text-sm text-gray-800">
+            {teachingSlots.map((row, i) => (
+              <li
+                key={`${row.library_subject_id}-${row.library_book_id}-${i}`}
+                className="rounded-xl bg-white/90 border border-indigo-100 px-3 py-2"
+              >
+                <span className="font-medium">{row.subject_name}</span>
+                <span className="text-gray-600"> · {row.book_title}</span>
+                {row.board_name ? (
+                  <span className="block text-xs text-gray-500 mt-0.5">{row.board_name}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-gray-600 mt-3">
+            Homework and library topics you can use are scoped to these subjects and books.
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">

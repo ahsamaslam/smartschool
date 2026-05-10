@@ -38,6 +38,21 @@ export default function SectionDetail() {
 
   const { gradeLevel, branchName, schoolName } = state;
   const hasCurriculum = curriculum?.board_name;
+  const backToClassPath = state?.returnToClassPath || (state?.classId ? `/admin/classes/${state.classId}` : null);
+  const goBackToClass = () => {
+    if (backToClassPath) {
+      navigate(backToClassPath, {
+        state: {
+          branchId: state?.branchId,
+          gradeLevel,
+          branchName,
+          schoolName,
+        },
+      });
+      return;
+    }
+    navigate("/admin/schools");
+  };
 
   // Group books by subject_id
   const booksBySubject = {};
@@ -67,7 +82,7 @@ export default function SectionDetail() {
         {gradeLevel && (
           <>
             <ChevronRightIcon className="h-3.5 w-3.5 flex-shrink-0" />
-            <button onClick={() => navigate(-1)} className="hover:text-gray-700 transition-colors">
+            <button onClick={goBackToClass} className="hover:text-gray-700 transition-colors">
               Class {gradeLevel}
             </button>
           </>
@@ -104,7 +119,7 @@ export default function SectionDetail() {
             </div>
           </div>
           <button
-            onClick={() => navigate(-1, { state: { openCurriculumFor: sectionId } })}
+            onClick={goBackToClass}
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-amber-200 bg-white text-amber-700 text-sm font-semibold hover:bg-amber-50 transition-colors flex-shrink-0"
           >
             <PencilSquareIcon className="h-4 w-4" />
@@ -119,7 +134,7 @@ export default function SectionDetail() {
           <BookOpenIcon className="h-12 w-12 mb-3 opacity-20" />
           <p className="text-sm font-medium text-gray-500">No curriculum assigned yet</p>
           <button
-            onClick={() => navigate(-1)}
+            onClick={goBackToClass}
             className="mt-3 text-sm text-indigo-600 hover:underline"
           >
             ← Go back to assign a course

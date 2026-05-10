@@ -16,6 +16,100 @@ logger = logging.getLogger(__name__)
 client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
 
+def _looks_like_auth_error(error_text: str) -> bool:
+    t = (error_text or "").lower()
+    return (
+        "authentication_error" in t
+        or "invalid x-api-key" in t
+        or "invalid api key" in t
+        or "api key" in t and "invalid" in t
+        or "unauthorized" in t
+    )
+
+
+def _has_configured_anthropic_key() -> bool:
+    key = (settings.ANTHROPIC_API_KEY or "").strip()
+    if not key:
+        return False
+    lowered = key.lower()
+    placeholder_markers = [
+        "your-claude-api-key",
+        "your_api_key",
+        "changeme",
+        "replace-me",
+    ]
+    if any(marker in lowered for marker in placeholder_markers):
+        return False
+    # Real keys are substantially longer than toy placeholders.
+    if len(key) < 20:
+        return False
+    return True
+
+
+def _parse_curriculum_heuristic(text: str, file_name: str) -> dict:
+    """
+    Fallback parser used when Claude API is unavailable/auth fails.
+    Produces a minimal but valid structure so UI flow can continue.
+    """
+    safe_text = (text or "").replace("\r\n", "\n")
+    lines = [ln.strip() for ln in safe_text.split("\n") if ln.strip()]
+
+    chapter_patterns = [
+        re.compile(r"^\s*chapter\s+(\d+)\s*[:\-.]?\s*(.*)$", re.IGNORECASE),
+        re.compile(r"^\s*unit\s+(\d+)\s*[:\-.]?\s*(.*)$", re.IGNORECASE),
+    ]
+    topic_pattern = re.compile(r"^\s*((\d+(\.\d+)*)|[a-z]\))\s+(.+)$", re.IGNORECASE)
+
+    book_title = file_name.rsplit(".", 1)[0] if file_name else "Parsed Book"
+    grade_match = re.search(r"(class|grade)\s*\d{1,2}|o\s*level|a\s*level", safe_text, re.IGNORECASE)
+    grade_level = grade_match.group(0).strip() if grade_match else "Unknown"
+
+    chapters = []
+    current = None
+
+    for ln in lines:
+        chapter_hit = None
+        for pat in chapter_patterns:
+            m = pat.match(ln)
+            if m:
+                chapter_hit = m
+                break
+        if chapter_hit:
+            num = int(chapter_hit.group(1))
+            name = (chapter_hit.group(2) or "").strip() or f"Chapter {num}"
+            current = {"number": num, "name": name, "topics": []}
+            chapters.append(current)
+            continue
+
+        topic_hit = topic_pattern.match(ln)
+        if topic_hit and current is not None:
+            title = topic_hit.group(4).strip()
+            if len(title) > 2:
+                current["topics"].append({"title": title, "content_body": ""})
+
+    if not chapters:
+        # Keep the response usable even when chapter headings are unclear.
+        preview = [ln for ln in lines[:15] if len(ln) > 3][:8]
+        chapters = [{
+            "number": 1,
+            "name": "Chapter 1",
+            "topics": [{"title": t[:120], "content_body": ""} for t in preview] or [{"title": "Introduction", "content_body": ""}],
+        }]
+
+    return {
+        "book_title": book_title,
+        "grade_level": grade_level,
+        "subjects": [
+            {
+                "name": "General",
+                "description": "Auto-extracted using local fallback parser.",
+                "chapters": chapters,
+            }
+        ],
+        "parsing_mode": "fallback",
+    }
+
+
 # ============================================
 # Q&A BOT
 # ============================================
@@ -594,6 +688,77 @@ Return ONLY the JSON array."""
 # CURRICULUM PARSING
 # ============================================
 
+async def extract_book_metadata(
+    file_content: bytes,
+    file_name: str,
+    media_type: str = "application/pdf"
+) -> dict:
+    """
+    Quickly extract only metadata from a book: title, author, board, grade_level, subject.
+    Much faster than full parse — reads first ~10k chars only.
+    Returns: { title, author, board_name, grade_level, subject, edition_year }
+    """
+    import io
+
+    # Extract text (first ~10k chars is enough for cover page / TOC metadata)
+    text = ""
+    try:
+        if media_type == "application/pdf" or file_name.lower().endswith(".pdf"):
+            try:
+                import pdfplumber
+                with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+                    for page in pdf.pages[:5]:
+                        text += (page.extract_text(x_tolerance=2, y_tolerance=2) or "") + "\n"
+            except Exception:
+                pass
+            if not text.strip():
+                try:
+                    from pypdf import PdfReader
+                    reader = PdfReader(io.BytesIO(file_content))
+                    for page in reader.pages[:5]:
+                        text += (page.extract_text() or "") + "\n"
+                except Exception:
+                    pass
+        else:
+            text = file_content.decode("utf-8", errors="replace")
+    except Exception:
+        pass
+
+    text = text[:10_000]
+
+    prompt = f"""You are analyzing the cover page and first few pages of an educational book.
+Extract the following metadata and return ONLY valid JSON (no extra text):
+{{
+  "title": "full book title or null",
+  "author": "author name(s) or null",
+  "board_name": "education board name (e.g. Punjab Board, Cambridge, Federal Board, AKU, Oxford) or null",
+  "grade_level": "class/grade level (e.g. Class 9, Grade 10, O Level, A Level) or null",
+  "subject": "subject name (e.g. Biology, Mathematics, Computer Science) or null",
+  "edition_year": year as integer or null
+}}
+
+Book text (first pages):
+---
+{text}
+---
+File name hint: {file_name}
+
+Return ONLY the JSON object."""
+
+    message = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = message.content[0].text.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*```\s*$", "", raw)
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {"title": None, "author": None, "board_name": None, "grade_level": None, "subject": None, "edition_year": None}
+
+
 async def parse_curriculum_document(
     file_content: bytes,
     file_name: str,
@@ -639,8 +804,29 @@ CRITICAL RULES:
 - Topic titles should match the book headings exactly"""
 
     MAX_CHARS = 80_000  # ~20k tokens — stays well under Claude's context limit
+    text = ""
 
     try:
+        if not _has_configured_anthropic_key():
+            logger.warning("ANTHROPIC_API_KEY not configured; using fallback parser")
+            if media_type == "application/pdf" or file_name.lower().endswith(".pdf"):
+                try:
+                    import io
+                    from pypdf import PdfReader
+                    reader = PdfReader(io.BytesIO(file_content))
+                    pages = []
+                    for page in reader.pages[:30]:
+                        pages.append(page.extract_text() or "")
+                    text = "\n".join(pages)
+                except Exception:
+                    text = ""
+            else:
+                try:
+                    text = file_content.decode("utf-8", errors="replace")
+                except Exception:
+                    text = ""
+            return _parse_curriculum_heuristic(text, file_name)
+
         if media_type == "application/pdf" or file_name.lower().endswith(".pdf"):
             import io
             text = ""
@@ -758,23 +944,38 @@ CRITICAL RULES:
                 }
             ]
 
-        message = await client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=16000,
-            system=system_prompt,
-            messages=[{"role": "user", "content": content}],
-        )
+        try:
+            message = await client.messages.create(
+                model="claude-opus-4-5",
+                max_tokens=16000,
+                system=system_prompt,
+                messages=[{"role": "user", "content": content}],
+            )
 
-        response_text = message.content[0].text
-        if "```json" in response_text:
-            response_text = response_text.split("```json")[1].split("```")[0]
-        elif "```" in response_text:
-            response_text = response_text.split("```")[1].split("```")[0]
+            response_text = message.content[0].text
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0]
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0]
 
-        return json.loads(response_text.strip())
+            return json.loads(response_text.strip())
+        except Exception as model_error:
+            # Common local setup issue: invalid/missing Anthropic key.
+            if _looks_like_auth_error(str(model_error)):
+                logger.warning("Claude auth failed for curriculum parsing; using fallback parser")
+                return _parse_curriculum_heuristic(text, file_name)
+            raise
 
     except Exception as e:
         logger.error(f"Error parsing curriculum document: {e}")
+        if _looks_like_auth_error(str(e)):
+            logger.warning("Claude auth error in outer parser path; using fallback parser")
+            if not text:
+                try:
+                    text = file_content.decode("utf-8", errors="replace")
+                except Exception:
+                    text = ""
+            return _parse_curriculum_heuristic(text, file_name)
         raise
 
 
