@@ -898,3 +898,136 @@ async def add_question(exam_id: str, req: AddQuestionRequest):
         except Exception:
             pass
     return qd
+
+
+# ============================================
+# STUDENT EXAM SUBMISSION
+# ============================================
+
+class AnswerIn(BaseModel):
+    question_id: str
+    answer_text: str
+
+
+class SubmitExamRequest(BaseModel):
+    answers: List[AnswerIn]
+
+
+@router.post("/{exam_id}/submit")
+async def submit_exam(
+    exam_id: str,
+    body: SubmitExamRequest,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """
+    Student submits their answers for an exam.
+    Auto-grades MCQ questions; text questions get marks_awarded=0 for manual grading.
+    """
+    if current_user.get("role") not in ("student", "admin"):
+        raise HTTPException(status_code=403, detail="Students only")
+
+    student_id = current_user["user_id"]
+
+    exam = await execute_one("SELECT id, class_id FROM teacher_exams WHERE id = $1", exam_id)
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+
+    # Load all questions for this exam
+    questions = await execute_query(
+        "SELECT id, question_type, correct_answer, marks FROM exam_questions WHERE exam_id = $1",
+        exam_id,
+    )
+    q_map = {str(q["id"]): dict(q) for q in questions}
+
+    total_marks = sum(float(q["marks"] or 0) for q in questions)
+    earned = 0.0
+    per_question = []
+
+    for ans in body.answers:
+        qid = ans.question_id
+        q = q_map.get(qid)
+        if not q:
+            continue
+        is_mcq = q["question_type"] == "mcq"
+        correct = q.get("correct_answer") or ""
+        is_correct = is_mcq and ans.answer_text.strip().lower() == correct.strip().lower()
+        marks_awarded = float(q["marks"] or 0) if is_correct else 0.0
+        earned += marks_awarded
+
+        await execute_write(
+            """INSERT INTO student_exam_answers (exam_id, student_id, question_id, answer_text, is_correct, marks_awarded)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT (student_id, question_id) DO UPDATE
+                 SET answer_text = EXCLUDED.answer_text,
+                     is_correct = EXCLUDED.is_correct,
+                     marks_awarded = EXCLUDED.marks_awarded""",
+            exam_id, student_id, qid, ans.answer_text, is_correct if is_mcq else None, marks_awarded,
+        )
+        per_question.append({
+            "question_id": qid,
+            "answer_text": ans.answer_text,
+            "is_correct": is_correct if is_mcq else None,
+            "marks_awarded": marks_awarded,
+        })
+
+    percentage = round(earned / total_marks * 100, 1) if total_marks > 0 else 0
+
+    # Upsert assignment row
+    await execute_write(
+        """INSERT INTO student_exam_assignments (student_id, exam_id, status, submitted_at, score)
+           VALUES ($1, $2, 'submitted', NOW(), $3)
+           ON CONFLICT (student_id, exam_id) DO UPDATE
+             SET status = 'submitted', submitted_at = NOW(), score = EXCLUDED.score""",
+        student_id, exam_id, earned,
+    )
+
+    return {
+        "score": earned,
+        "total_marks": total_marks,
+        "percentage": percentage,
+        "passed": percentage >= 50,
+        "per_question": per_question,
+    }
+
+
+@router.get("/{exam_id}/my-result")
+async def get_my_exam_result(
+    exam_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Returns a student's submitted answers and marks for an exam."""
+    if current_user.get("role") not in ("student", "admin"):
+        raise HTTPException(status_code=403, detail="Students only")
+
+    student_id = current_user["user_id"]
+
+    assignment = await execute_one(
+        "SELECT status, submitted_at, score FROM student_exam_assignments WHERE student_id = $1 AND exam_id = $2",
+        student_id, exam_id,
+    )
+    if not assignment or assignment["status"] != "submitted":
+        raise HTTPException(status_code=404, detail="No submission found for this exam")
+
+    answers = await execute_query(
+        """SELECT sea.question_id, sea.answer_text, sea.is_correct, sea.marks_awarded,
+                  eq.question_text, eq.question_type, eq.correct_answer, eq.marks
+           FROM student_exam_answers sea
+           JOIN exam_questions eq ON eq.id = sea.question_id
+           WHERE sea.student_id = $1 AND sea.exam_id = $2
+           ORDER BY eq.order_index""",
+        student_id, exam_id,
+    )
+
+    total_marks = sum(float(a["marks"] or 0) for a in answers)
+    score = float(assignment["score"] or 0)
+    percentage = round(score / total_marks * 100, 1) if total_marks > 0 else 0
+
+    return {
+        "status": assignment["status"],
+        "submitted_at": assignment["submitted_at"],
+        "score": score,
+        "total_marks": total_marks,
+        "percentage": percentage,
+        "passed": percentage >= 50,
+        "answers": [dict(a) for a in answers],
+    }

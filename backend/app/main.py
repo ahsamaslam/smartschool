@@ -52,14 +52,19 @@ app = FastAPI(
 # MIDDLEWARE
 # ============================================
 
-# CORS - Allow frontend to make requests
-app.add_middleware(
-    CORSMiddleware,
+# CORS — browsers require Access-Control-Allow-Origin on API responses from another port (e.g. :3000 → :8000).
+# If .env CORS_ORIGINS is wrong or empty, requests fail with "blocked by CORS policy".
+# In DEBUG we also allow any localhost / 127.0.0.1 origin via regex (covers alternate dev ports).
+_cors_kw = dict(
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+if settings.DEBUG:
+    _cors_kw["allow_origin_regex"] = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+
+app.add_middleware(CORSMiddleware, **_cors_kw)
 
 # Request timing middleware
 @app.middleware("http")
@@ -306,6 +311,16 @@ async def startup_event():
                 attempts INTEGER DEFAULT 0,
                 updated_at TIMESTAMP DEFAULT NOW(),
                 UNIQUE(student_id, exam_id)
+            );""",
+            """CREATE TABLE IF NOT EXISTS student_exam_answers (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                exam_id UUID NOT NULL REFERENCES teacher_exams(id) ON DELETE CASCADE,
+                student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                question_id UUID NOT NULL REFERENCES exam_questions(id) ON DELETE CASCADE,
+                answer_text TEXT,
+                is_correct BOOLEAN,
+                marks_awarded NUMERIC(5,2) DEFAULT 0,
+                UNIQUE(student_id, question_id)
             );""",
         ]
         for sql in migrations:

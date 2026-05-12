@@ -22,6 +22,8 @@ const StudentCourseChapter = lazy(() => import("./pages/student/StudentCourseCha
 const StudentTopicLearn = lazy(() => import("./pages/student/StudentTopicLearn"));
 const StudentExams = lazy(() => import("./pages/student/StudentExams"));
 const StudentExamTake = lazy(() => import("./pages/student/StudentExamTake"));
+const StudentExamResults = lazy(() => import("./pages/student/StudentExamResults"));
+const MyEnrollment = lazy(() => import("./pages/student/MyEnrollment"));
 const SubjectView = lazy(() => import("./pages/student/SubjectView"));
 const VideoLesson = lazy(() => import("./pages/student/VideoLesson"));
 const QuizPage = lazy(() => import("./pages/student/QuizPage"));
@@ -126,6 +128,8 @@ export default function App() {
             <Route path="/student/homework/:homeworkId" element={<StudentHomeworkDetail />} />
             <Route path="/student/exams" element={<StudentExams />} />
             <Route path="/student/exams/:examId" element={<StudentExamTake />} />
+            <Route path="/student/exam/:examId/results" element={<StudentExamResults />} />
+            <Route path="/student/enrollment" element={<MyEnrollment />} />
             <Route
               path="/student/learn/topic/:topicId"
               element={<StudentTopicLearn />}

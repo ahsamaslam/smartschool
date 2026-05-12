@@ -49,6 +49,11 @@ const examService = {
 
   // Add a manual question
   addQuestion: (examId, data) => api.post(`${BASE}/${examId}/questions`, data),
+
+  // Student submission
+  submitExam: (examId, answers) =>
+    api.post(`${BASE}/${examId}/submit`, { answers }),
+  getMyResult: (examId) => api.get(`${BASE}/${examId}/my-result`),
 };
 
 export default examService;

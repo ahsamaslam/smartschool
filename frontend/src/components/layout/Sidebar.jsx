@@ -96,6 +96,7 @@ const NAV_BY_ROLE = {
     { label: "My Courses", to: "/student/courses", icon: "BookOpenIcon" },
     { label: "My Homework", to: "/student/homework", icon: "ClipboardDocumentListIcon" },
     { label: "My Exams", to: "/student/exams", icon: "ClipboardDocumentCheckIcon" },
+    { label: "My Enrollment", to: "/student/enrollment", icon: "AcademicCapIcon" },
     { label: "Profile", to: "/student/profile", icon: "UserCircleIcon" },
   ],
   teacher: [

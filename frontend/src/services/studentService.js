@@ -5,6 +5,8 @@ const studentService = {
   // Dashboard
   getDashboard: (studentId) =>
     api.get(`${API_ROUTES.STUDENTS}/dashboard/${studentId}`),
+  getAttendanceSummary: (studentId) =>
+    api.get(`${API_ROUTES.STUDENTS}/attendance/summary/${studentId}`),
 
   // Subject topics
   getSubjectTopics: (subjectId, studentId) =>
@@ -48,6 +50,10 @@ const studentService = {
       old_password: oldPassword,
       new_password: newPassword,
     }),
+
+  // Enrollment details
+  getEnrollment: (studentId) =>
+    api.get(`${API_ROUTES.STUDENTS}/enrollment/${studentId}`),
 };
 
 export default studentService;
