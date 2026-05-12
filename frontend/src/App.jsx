@@ -5,6 +5,7 @@ import { PageSpinner } from "./components/common/Spinner";
 import Layout from "./components/layout/Layout";
 import ProtectedRoute from "./routes/ProtectedRoute";
 import RoleBasedRedirect from "./routes/RoleBasedRoute";
+import TeacherRoute from "./routes/TeacherRoute";
 
 // Auth pages (no lazy — small, always needed)
 import Login from "./pages/auth/Login";
@@ -56,6 +57,8 @@ const BranchView = lazy(() => import("./pages/manager/BranchDetail"));
 const StudentReports = lazy(() => import("./pages/manager/StudentReports"));
 const ClassReports = lazy(() => import("./pages/manager/ClassReports"));
 const TeacherReportsMgr = lazy(() => import("./pages/manager/TeacherReports"));
+const ManagerTeachers = lazy(() => import("./pages/manager/Teachers"));
+const ManagerStudents = lazy(() => import("./pages/manager/Students"));
 
 // Admin
 const AdminDashboard = lazy(() => import("./pages/admin/Dashboard"));
@@ -138,32 +141,34 @@ export default function App() {
             />
             {/* /student/profile handled by shared ProfilePage below */}
 
-            {/* ── TEACHER ── */}
-            <Route path="/teacher/dashboard" element={<TeacherDashboard />} />
-            <Route path="/teacher/classes" element={<TeacherClasses />} />
-            <Route path="/teacher/classes/:classId" element={<ClassDetail />} />
-            <Route path="/teacher/classes/:classId/homework" element={<TeacherClassHomework />} />
-            <Route path="/teacher/classes/:classId/homework/new" element={<TeacherHomeworkEditor />} />
-            <Route
-              path="/teacher/classes/:classId/homework/:homeworkId/edit"
-              element={<TeacherHomeworkEditor />}
-            />
-            <Route
-              path="/teacher/classes/:classId/homework/:homeworkId/submissions"
-              element={<TeacherHomeworkSubmissions />}
-            />
-            <Route
-              path="/teacher/classes/:classId/student/:studentId"
-              element={<StudentDetail />}
-            />
-            <Route path="/teacher/attendance" element={<TeacherAttendance />} />
-            <Route path="/teacher/publish-video" element={<PublishVideo />} />
-            <Route path="/teacher/avatar-videos" element={<AvatarVideos />} />
-            <Route path="/teacher/lecture-viewer" element={<LectureViewer />} />
-            <Route path="/teacher/generate-exam" element={<GenerateExam />} />
-            <Route path="/teacher/exams" element={<ExamsPage />} />
-            <Route path="/teacher/exams/:examId" element={<ExamEditor />} />
-            <Route path="/teacher/reports" element={<TeacherReports />} />
+            {/* ── TEACHER (students cannot open these URLs — see TeacherRoute) ── */}
+            <Route element={<TeacherRoute />}>
+              <Route path="/teacher/dashboard" element={<TeacherDashboard />} />
+              <Route path="/teacher/classes" element={<TeacherClasses />} />
+              <Route path="/teacher/classes/:classId" element={<ClassDetail />} />
+              <Route path="/teacher/classes/:classId/homework" element={<TeacherClassHomework />} />
+              <Route path="/teacher/classes/:classId/homework/new" element={<TeacherHomeworkEditor />} />
+              <Route
+                path="/teacher/classes/:classId/homework/:homeworkId/edit"
+                element={<TeacherHomeworkEditor />}
+              />
+              <Route
+                path="/teacher/classes/:classId/homework/:homeworkId/submissions"
+                element={<TeacherHomeworkSubmissions />}
+              />
+              <Route
+                path="/teacher/classes/:classId/student/:studentId"
+                element={<StudentDetail />}
+              />
+              <Route path="/teacher/attendance" element={<TeacherAttendance />} />
+              <Route path="/teacher/publish-video" element={<PublishVideo />} />
+              <Route path="/teacher/avatar-videos" element={<AvatarVideos />} />
+              <Route path="/teacher/lecture-viewer" element={<LectureViewer />} />
+              <Route path="/teacher/generate-exam" element={<GenerateExam />} />
+              <Route path="/teacher/exams" element={<ExamsPage />} />
+              <Route path="/teacher/exams/:examId" element={<ExamEditor />} />
+              <Route path="/teacher/reports" element={<TeacherReports />} />
+            </Route>
 
             {/* ── MANAGER ── */}
             <Route path="/manager/dashboard" element={<ManagerDashboard />} />
@@ -185,6 +190,8 @@ export default function App() {
               path="/manager/teacher-reports"
               element={<TeacherReportsMgr />}
             />
+            <Route path="/manager/teachers" element={<ManagerTeachers />} />
+            <Route path="/manager/students" element={<ManagerStudents />} />
 
             {/* ── ADMIN ── */}
             <Route path="/admin/dashboard" element={<AdminDashboard />} />

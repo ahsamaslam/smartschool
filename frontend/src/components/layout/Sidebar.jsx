@@ -130,22 +130,13 @@ const NAV_BY_ROLE = {
   ],
   manager: [
     { label: "Dashboard", to: "/manager/dashboard", icon: "HomeIcon" },
-    { label: "Schools", to: "/manager/schools", icon: "BuildingOfficeIcon" },
-    {
-      label: "Student Reports",
-      to: "/manager/student-reports",
-      icon: "UserGroupIcon",
-    },
-    {
-      label: "Class Reports",
-      to: "/manager/class-reports",
-      icon: "AcademicCapIcon",
-    },
-    {
-      label: "Teacher Reports",
-      to: "/manager/teacher-reports",
-      icon: "ChartBarIcon",
-    },
+    { label: "My School", to: "/manager/schools", icon: "BuildingOfficeIcon" },
+    { label: "Teachers", to: "/manager/teachers", icon: "AcademicCapIcon" },
+    { label: "Students", to: "/manager/students", icon: "UserGroupIcon" },
+    { divider: true, label: "Reports" },
+    { label: "Student Reports", to: "/manager/student-reports", icon: "ChartBarIcon" },
+    { label: "Class Reports", to: "/manager/class-reports", icon: "TableCellsIcon" },
+    { label: "Teacher Reports", to: "/manager/teacher-reports", icon: "PresentationChartLineIcon" },
   ],
   admin: [
     { divider: true, label: "Admin" },

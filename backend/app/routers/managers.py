@@ -14,6 +14,30 @@ from app.utils.auth import hash_password
 router = APIRouter()
 
 
+# ============================================
+# REQUEST MODELS
+# ============================================
+
+class CreateTeacherRequest(BaseModel):
+    full_name: str
+    email: EmailStr
+    password: str
+    branch_id: Optional[str] = None
+    designation: Optional[str] = None
+    contact: Optional[str] = None
+
+
+class AssignTeacherClassRequest(BaseModel):
+    class_id: str
+
+
+class CreateClassRequest(BaseModel):
+    branch_id: str
+    name: str
+    grade_level: Optional[str] = None
+    section: Optional[str] = None
+
+
 def require_manager(current_user: dict = Depends(get_user_from_token)):
     if current_user.get("role") not in ("manager", "admin"):
         raise HTTPException(status_code=403, detail="Manager access required")
@@ -82,6 +106,203 @@ async def get_school_branches(school_id: str, current_user: dict = Depends(requi
     """
     branches = await execute_query(query, school_id)
     return [dict(b) for b in branches]
+
+
+# ============================================
+# TEACHER MANAGEMENT
+# ============================================
+
+@router.get("/teachers")
+async def get_school_teachers(current_user: dict = Depends(require_manager)):
+    """List all teachers in manager's school."""
+    school_id = current_user.get("school_id") if current_user.get("role") == "manager" else None
+
+    if school_id:
+        teachers = await execute_query(
+            """SELECT u.id, u.full_name, u.email, u.designation, u.contact, u.is_active,
+                      b.name as branch_name,
+                      COUNT(DISTINCT c.id) as class_count
+               FROM users u
+               LEFT JOIN branches b ON b.id = u.branch_id
+               LEFT JOIN classes c ON c.teacher_id = u.id
+               WHERE u.role = 'teacher' AND u.school_id = $1
+               GROUP BY u.id, b.name
+               ORDER BY u.full_name""",
+            school_id,
+        )
+    else:
+        teachers = await execute_query(
+            """SELECT u.id, u.full_name, u.email, u.designation, u.contact, u.is_active,
+                      s.name as school_name, b.name as branch_name,
+                      COUNT(DISTINCT c.id) as class_count
+               FROM users u
+               LEFT JOIN schools s ON s.id = u.school_id
+               LEFT JOIN branches b ON b.id = u.branch_id
+               LEFT JOIN classes c ON c.teacher_id = u.id
+               WHERE u.role = 'teacher'
+               GROUP BY u.id, s.name, b.name
+               ORDER BY u.full_name""",
+        )
+    return [dict(t) for t in teachers]
+
+
+@router.post("/teachers")
+async def create_school_teacher(body: CreateTeacherRequest, current_user: dict = Depends(require_manager)):
+    """Create a teacher account in the manager's school."""
+    school_id = current_user.get("school_id") if current_user.get("role") == "manager" else None
+
+    existing = await execute_one("SELECT id FROM users WHERE email = $1", body.email)
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Email {body.email} is already registered")
+
+    if body.branch_id and school_id:
+        branch = await execute_one("SELECT school_id FROM branches WHERE id = $1", body.branch_id)
+        if not branch or str(branch["school_id"]) != str(school_id):
+            raise HTTPException(status_code=403, detail="Branch does not belong to your school")
+
+    teacher = await execute_one(
+        """INSERT INTO users (id, email, full_name, password_hash, role, school_id, branch_id, designation, contact, is_active)
+           VALUES ($1, $2, $3, $4, 'teacher', $5, $6, $7, $8, true)
+           RETURNING id, email, full_name, role, school_id, branch_id, designation, contact""",
+        str(uuid_lib.uuid4()), body.email, body.full_name, hash_password(body.password),
+        school_id, body.branch_id or None, body.designation or None, body.contact or None,
+    )
+    return {**dict(teacher), "plain_password": body.password}
+
+
+@router.post("/teachers/{teacher_id}/assign-class")
+async def assign_teacher_to_class(
+    teacher_id: str,
+    body: AssignTeacherClassRequest,
+    current_user: dict = Depends(require_manager),
+):
+    """Assign a teacher to a class (validates school ownership)."""
+    school_id = current_user.get("school_id") if current_user.get("role") == "manager" else None
+
+    if school_id:
+        cls = await execute_one(
+            """SELECT c.id FROM classes c
+               JOIN branches b ON b.id = c.branch_id
+               WHERE c.id = $1 AND b.school_id = $2""",
+            body.class_id, school_id,
+        )
+        if not cls:
+            raise HTTPException(status_code=403, detail="Class does not belong to your school")
+
+    await execute_write(
+        "UPDATE classes SET teacher_id = $1 WHERE id = $2",
+        teacher_id, body.class_id,
+    )
+    return {"message": "Teacher assigned to class successfully"}
+
+
+# ============================================
+# STUDENT MANAGEMENT
+# ============================================
+
+@router.get("/students")
+async def get_school_students(
+    branch_id: Optional[str] = None,
+    class_id: Optional[str] = None,
+    current_user: dict = Depends(require_manager),
+):
+    """List all students enrolled in the manager's school."""
+    school_id = current_user.get("school_id") if current_user.get("role") == "manager" else None
+
+    where = ["u.role = 'student'", "e.is_active = true"]
+    params: list = []
+    n = 1
+
+    if school_id:
+        where.append(f"b.school_id = ${n}")
+        params.append(school_id)
+        n += 1
+    if class_id:
+        where.append(f"e.class_id = ${n}")
+        params.append(class_id)
+        n += 1
+    elif branch_id:
+        where.append(f"c.branch_id = ${n}")
+        params.append(branch_id)
+        n += 1
+
+    students = await execute_query(
+        f"""SELECT u.id, u.full_name, u.email, u.is_active,
+                   c.name as class_name, c.grade_level,
+                   b.name as branch_name,
+                   e.created_at as enrolled_at
+            FROM users u
+            JOIN enrollments e ON e.student_id = u.id
+            JOIN classes c ON c.id = e.class_id
+            JOIN branches b ON b.id = c.branch_id
+            WHERE {' AND '.join(where)}
+            ORDER BY u.full_name""",
+        *params,
+    )
+    return [dict(s) for s in students]
+
+
+# ============================================
+# CLASS MANAGEMENT
+# ============================================
+
+@router.get("/classes")
+async def get_school_classes(
+    branch_id: Optional[str] = None,
+    current_user: dict = Depends(require_manager),
+):
+    """List all classes in manager's school."""
+    school_id = current_user.get("school_id") if current_user.get("role") == "manager" else None
+
+    where = []
+    params: list = []
+    n = 1
+
+    if school_id:
+        where.append(f"b.school_id = ${n}")
+        params.append(school_id)
+        n += 1
+    if branch_id:
+        where.append(f"c.branch_id = ${n}")
+        params.append(branch_id)
+        n += 1
+
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+
+    classes = await execute_query(
+        f"""SELECT c.id, c.name, c.grade_level, c.section,
+                   b.name as branch_name, b.id as branch_id,
+                   u.full_name as teacher_name,
+                   COUNT(DISTINCT e.student_id) as student_count
+            FROM classes c
+            JOIN branches b ON b.id = c.branch_id
+            LEFT JOIN users u ON u.id = c.teacher_id
+            LEFT JOIN enrollments e ON e.class_id = c.id AND e.is_active = true
+            {where_sql}
+            GROUP BY c.id, b.name, b.id, u.full_name
+            ORDER BY b.name, c.grade_level, c.section, c.name""",
+        *params,
+    )
+    return [dict(c) for c in classes]
+
+
+@router.post("/classes")
+async def create_school_class(body: CreateClassRequest, current_user: dict = Depends(require_manager)):
+    """Create a class in a branch (branch must belong to manager's school)."""
+    school_id = current_user.get("school_id") if current_user.get("role") == "manager" else None
+
+    if school_id:
+        branch = await execute_one("SELECT school_id FROM branches WHERE id = $1", body.branch_id)
+        if not branch or str(branch["school_id"]) != str(school_id):
+            raise HTTPException(status_code=403, detail="Branch does not belong to your school")
+
+    cls = await execute_one(
+        """INSERT INTO classes (branch_id, name, grade_level, section)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, branch_id, name, grade_level, section""",
+        body.branch_id, body.name, body.grade_level or None, body.section or None,
+    )
+    return dict(cls)
 
 
 @router.get("/branches/{branch_id}/overview")
