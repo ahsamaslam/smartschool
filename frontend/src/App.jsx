@@ -48,6 +48,7 @@ const TeacherHomeworkEditor = lazy(() => import("./pages/teacher/TeacherHomework
 const TeacherHomeworkSubmissions = lazy(() =>
   import("./pages/teacher/TeacherHomeworkSubmissions"),
 );
+const TeacherMyCurriculum = lazy(() => import("./pages/teacher/MyCurriculum"));
 
 // Manager
 const ManagerDashboard = lazy(() => import("./pages/manager/Dashboard"));
@@ -168,6 +169,7 @@ export default function App() {
               <Route path="/teacher/exams" element={<ExamsPage />} />
               <Route path="/teacher/exams/:examId" element={<ExamEditor />} />
               <Route path="/teacher/reports" element={<TeacherReports />} />
+              <Route path="/teacher/curriculum" element={<TeacherMyCurriculum />} />
             </Route>
 
             {/* ── MANAGER ── */}

@@ -30,10 +30,15 @@ class AddStudentRequest(BaseModel):
     full_name: str
 
 
+class AttendanceRecord(BaseModel):
+    student_id: str
+    is_present: bool
+
+
 class AttendanceRequest(BaseModel):
     class_id: str
     date: date
-    attendance_records: List[Dict[str, bool]]  # [{"student_id": "...", "is_present": true}]
+    attendance_records: List[AttendanceRecord]
 
 
 class PublishVideoRequest(BaseModel):
@@ -236,7 +241,7 @@ async def get_class_students(class_id: str):
     """
     Get all students in a class with performance metrics
     """
-    
+    await ensure_attendance_schema()
     query = """
         SELECT 
             u.id,
@@ -245,7 +250,7 @@ async def get_class_students(class_id: str):
             u.profile_picture_url,
             e.enrolled_at,
             sp.video_completion_rate,
-            sp.attendance_rate,
+            COALESCE(att.attendance_rate, sp.attendance_rate, 0) AS attendance_rate,
             sp.average_quiz_score,
             sp.highest_quiz_score,
             sp.overall_score,
@@ -258,6 +263,18 @@ async def get_class_students(class_id: str):
             AND e.class_id = sp.class_id
             AND sp.date = CURRENT_DATE
         )
+        LEFT JOIN (
+            SELECT
+                student_id,
+                class_id,
+                ROUND(
+                    100.0 * SUM(CASE WHEN is_present THEN 1 ELSE 0 END)
+                    / NULLIF(COUNT(*), 0),
+                    2
+                ) AS attendance_rate
+            FROM attendance
+            GROUP BY student_id, class_id
+        ) att ON att.student_id = u.id AND att.class_id = e.class_id
         LEFT JOIN (
             SELECT
                 hs.student_id,
@@ -380,14 +397,76 @@ async def send_password_reset(student_id: str):
 # ATTENDANCE
 # ============================================
 
+async def ensure_attendance_schema():
+    """Ensure attendance table supports upsert + percentage analytics."""
+    await execute_write(
+        """
+        CREATE TABLE IF NOT EXISTS attendance (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            student_id UUID NOT NULL,
+            class_id UUID NOT NULL,
+            date DATE NOT NULL,
+            is_present BOOLEAN NOT NULL DEFAULT false,
+            marked_by UUID,
+            marked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    await execute_write(
+        """
+        ALTER TABLE attendance
+        ADD COLUMN IF NOT EXISTS marked_by UUID
+        """
+    )
+    await execute_write(
+        """
+        ALTER TABLE attendance
+        ADD COLUMN IF NOT EXISTS marked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        """
+    )
+    await execute_write(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS attendance_student_class_date_uq
+        ON attendance(student_id, class_id, date)
+        """
+    )
+    await execute_write(
+        """
+        CREATE INDEX IF NOT EXISTS attendance_class_date_idx
+        ON attendance(class_id, date DESC)
+        """
+    )
+
+
 @router.post("/attendance")
-async def mark_attendance(teacher_id: str, attendance: AttendanceRequest):
+async def mark_attendance(
+    teacher_id: str,
+    attendance: AttendanceRequest,
+    allow_edit: bool = False,
+):
     """
     Mark attendance for a class
     """
-    
+    await ensure_attendance_schema()
+    existing_count_row = await execute_one(
+        """
+        SELECT COUNT(*)::int AS count
+        FROM attendance
+        WHERE class_id = $1::uuid AND date = $2
+        """,
+        attendance.class_id,
+        attendance.date,
+    )
+    existing_count = int(existing_count_row["count"] or 0) if existing_count_row else 0
+
+    if existing_count > 0 and not allow_edit:
+        raise HTTPException(
+            status_code=409,
+            detail="Attendance already saved for this date. Click edit to modify it.",
+        )
+
     records_added = 0
-    
+
     for record in attendance.attendance_records:
         query = """
             INSERT INTO attendance (student_id, class_id, date, is_present, marked_by)
@@ -398,14 +477,14 @@ async def mark_attendance(teacher_id: str, attendance: AttendanceRequest):
         
         await execute_write(
             query,
-            record["student_id"],
+            record.student_id,
             attendance.class_id,
             attendance.date,
-            record["is_present"],
+            record.is_present,
             teacher_id
         )
         records_added += 1
-    
+
     return {
         "message": "Attendance marked successfully",
         "records_updated": records_added,
@@ -418,7 +497,7 @@ async def get_attendance(class_id: str, date_from: date, date_to: date):
     """
     Get attendance records for a class
     """
-    
+    await ensure_attendance_schema()
     query = """
         SELECT 
             a.date,
@@ -789,3 +868,115 @@ async def get_student_questions(class_id: str):
     
     questions = await execute_query(query, class_id)
     return [dict(q) for q in questions]
+
+
+# ============================================
+# TEACHER CURRICULUM (My Books + Topics)
+# ============================================
+
+@router.get("/my-curriculum")
+async def get_my_curriculum(current_user: dict = Depends(get_user_from_token)):
+    """
+    Returns all classes+subjects+books assigned to this teacher.
+    Groups: class → subject → book.
+    """
+    teacher_id = current_user.get("user_id")
+
+    rows = await execute_query(
+        """
+        SELECT
+            c.id as class_id, c.name as class_name, c.grade_level, c.section,
+            ls.id as subject_id, ls.name as subject_name,
+            lb.id as book_id, lb.title as book_title, lb.author as book_author,
+            lbo.id as board_id, lbo.name as board_name,
+            (SELECT COUNT(*) FROM library_chapters lch WHERE lch.book_id = lb.id) as chapter_count,
+            (SELECT COUNT(*) FROM library_topics lt2
+                JOIN library_chapters lch2 ON lch2.id = lt2.chapter_id
+                WHERE lch2.book_id = lb.id) as topic_count
+        FROM teacher_class_subject_assignments tsa
+        JOIN classes c ON c.id = tsa.class_id
+        JOIN library_subjects ls ON ls.id = tsa.library_subject_id
+        JOIN library_books lb ON lb.id = tsa.library_book_id
+        LEFT JOIN library_boards lbo ON lbo.id = tsa.library_board_id
+        WHERE tsa.teacher_id = $1::uuid
+        ORDER BY c.name, ls.name, lb.title
+        """,
+        teacher_id,
+    )
+
+    # Build nested structure: class → subject → books list
+    classes: dict = {}
+    for r in rows:
+        cid = r["class_id"]
+        sid = r["subject_id"]
+        if cid not in classes:
+            classes[cid] = {
+                "class_id": cid,
+                "class_name": r["class_name"],
+                "grade_level": r["grade_level"],
+                "section": r["section"],
+                "subjects": {},
+            }
+        if sid not in classes[cid]["subjects"]:
+            classes[cid]["subjects"][sid] = {
+                "subject_id": sid,
+                "subject_name": r["subject_name"],
+                "board_id": r["board_id"],
+                "board_name": r["board_name"],
+                "books": [],
+            }
+        classes[cid]["subjects"][sid]["books"].append({
+            "book_id": r["book_id"],
+            "book_title": r["book_title"],
+            "book_author": r["book_author"],
+            "chapter_count": r["chapter_count"],
+            "topic_count": r["topic_count"],
+        })
+
+    result = []
+    for cls in classes.values():
+        cls["subjects"] = list(cls["subjects"].values())
+        result.append(cls)
+
+    return result
+
+
+@router.get("/books/{book_id}")
+async def get_teacher_book(book_id: str, current_user: dict = Depends(get_user_from_token)):
+    """
+    Returns a book with chapters+topics for this teacher.
+    Validates that the teacher has an assignment for this book.
+    """
+    teacher_id = current_user.get("user_id")
+    role = current_user.get("role")
+
+    if role != "admin":
+        assignment = await execute_one(
+            "SELECT id FROM teacher_class_subject_assignments WHERE teacher_id = $1::uuid AND library_book_id = $2::uuid LIMIT 1",
+            teacher_id, book_id,
+        )
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You are not assigned to this book")
+
+    book = await execute_one(
+        "SELECT id, title, author, description FROM library_books WHERE id = $1::uuid",
+        book_id,
+    )
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    chapters = await execute_query(
+        """SELECT id, title, order_index FROM library_chapters WHERE book_id = $1 ORDER BY order_index""",
+        book_id,
+    )
+    chapter_list = []
+    for ch in chapters:
+        topics = await execute_query(
+            """SELECT id, title, order_index,
+                      slides_json IS NOT NULL AND slides_json::text != 'null' as has_slides
+               FROM library_topics WHERE chapter_id = $1 ORDER BY order_index""",
+            ch["id"],
+        )
+        chapter_list.append({**dict(ch), "topics": [dict(t) for t in topics]})
+
+    return {**dict(book), "chapters": chapter_list}

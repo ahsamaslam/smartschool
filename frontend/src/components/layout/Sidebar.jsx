@@ -101,6 +101,7 @@ const NAV_BY_ROLE = {
   teacher: [
     { label: "Dashboard", to: "/teacher/dashboard", icon: "HomeIcon" },
     { label: "My Classes", to: "/teacher/classes", icon: "AcademicCapIcon" },
+    { label: "My Curriculum", to: "/teacher/curriculum", icon: "BookOpenIcon" },
     {
       label: "Attendance",
       to: "/teacher/attendance",

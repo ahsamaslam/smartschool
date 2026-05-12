@@ -38,9 +38,9 @@ const teacherService = {
     api.post(`${API_ROUTES.TEACHERS}/students/${studentId}/password-reset`),
 
   // Attendance
-  markAttendance: (teacherId, data) =>
+  markAttendance: (teacherId, data, allowEdit = false) =>
     api.post(`${API_ROUTES.TEACHERS}/attendance`, data, {
-      params: { teacher_id: teacherId },
+      params: { teacher_id: teacherId, allow_edit: allowEdit },
     }),
 
   getAttendance: (classId, dateFrom, dateTo) =>
@@ -79,6 +79,10 @@ const teacherService = {
     api.post(`${API_ROUTES.TEACHERS}/exams/generate`, data, {
       params: { teacher_id: teacherId },
     }),
+
+  // Teacher curriculum (My Books)
+  getMyCurriculum: () => api.get(`${API_ROUTES.TEACHERS}/my-curriculum`),
+  getTeacherBook: (bookId) => api.get(`${API_ROUTES.TEACHERS}/books/${bookId}`),
 };
 
 export default teacherService;
