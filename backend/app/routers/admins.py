@@ -47,6 +47,7 @@ class CreateUserRequest(BaseModel):
     email: EmailStr
     full_name: str
     role: str  # student, teacher, manager, admin
+    password: Optional[str] = None
     employee_id: Optional[str] = None
     school_id: Optional[str] = None
     branch_id: Optional[str] = None
@@ -62,6 +63,10 @@ class CreateUserRequest(BaseModel):
     assigned_classes: Optional[List[str]] = None
     salary: Optional[str] = None
     teacher_curriculum_assignments: Optional[List[TeacherCurriculumAssignmentIn]] = None
+
+
+class SetPasswordRequest(BaseModel):
+    password: str
 
 
 class UpdateUserRequest(BaseModel):
@@ -200,6 +205,7 @@ class CompositeVideoRequest(BaseModel):
 class CreateStudentRequest(BaseModel):
     email: EmailStr
     full_name: str
+    student_roll_no: Optional[str] = None
     school_id: str
     branch_id: str
     class_id: str
@@ -289,6 +295,7 @@ async def ensure_student_data_structures():
     await execute_write("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS promotion_result VARCHAR(30)")
     await execute_write("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP")
     await execute_write("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS notes TEXT")
+    await execute_write("ALTER TABLE student_profiles ADD COLUMN IF NOT EXISTS student_roll_no VARCHAR(100)")
 
 
 def _none_if_blank(value):
@@ -520,17 +527,15 @@ async def create_user(user_data: CreateUserRequest):
     """Create new user account"""
     await ensure_teacher_profiles_table()
 
-    query = """
-        INSERT INTO users (email, full_name, role)
-        VALUES ($1, $2, $3)
-        RETURNING id, email, full_name, role
-    """
-    
+    pwd_hash = hash_password(user_data.password) if user_data.password else None
     user = await execute_one(
-        query,
+        """INSERT INTO users (email, full_name, role, password_hash, is_active)
+           VALUES ($1, $2, $3, $4, true)
+           RETURNING id, email, full_name, role""",
         user_data.email,
         user_data.full_name,
-        user_data.role
+        user_data.role,
+        pwd_hash,
     )
 
     if user_data.role == "teacher":
@@ -761,11 +766,24 @@ async def assign_role(user_id: str, role_data: AssignRoleRequest):
 @router.delete("/users/{user_id}")
 async def deactivate_user(user_id: str):
     """Deactivate user account"""
-    
     query = "UPDATE users SET is_active = false WHERE id = $1"
     await execute_write(query, user_id)
-    
     return {"message": "User deactivated successfully"}
+
+
+@router.post("/users/{user_id}/set-password")
+async def admin_set_password(user_id: str, body: SetPasswordRequest):
+    """Admin sets or resets the password for any user."""
+    if not body.password or len(body.password) < 4:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
+    user = await execute_one("SELECT id FROM users WHERE id = $1", user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    await execute_write(
+        "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2",
+        hash_password(body.password), user_id,
+    )
+    return {"message": "Password updated successfully"}
 
 
 # ============================================
@@ -832,15 +850,17 @@ async def create_student(student_data: CreateStudentRequest):
         raise HTTPException(status_code=400, detail="Selected class does not belong to selected branch.")
 
     dob = _parse_date_or_none(student_data.date_of_birth) if student_data.date_of_birth else None
+    pwd_hash = hash_password(student_data.student_roll_no) if student_data.student_roll_no else None
     try:
         user = await execute_one(
             """
-            INSERT INTO users (email, full_name, role, is_active)
-            VALUES ($1, $2, 'student', true)
+            INSERT INTO users (email, full_name, role, password_hash, is_active)
+            VALUES ($1, $2, 'student', $3, true)
             RETURNING id, email, full_name, role
             """,
             student_data.email,
             student_data.full_name,
+            pwd_hash,
         )
     except Exception as e:
         if "users_email_key" in str(e):
@@ -849,13 +869,14 @@ async def create_student(student_data: CreateStudentRequest):
     await execute_write(
         """
         INSERT INTO student_profiles (
-            user_id, school_id, branch_id, date_of_birth, gender, address,
+            user_id, school_id, branch_id, student_roll_no, date_of_birth, gender, address,
             guardian_name, primary_contact, emergency_contact, blood_group, medical_notes, profile_picture_url
         )
-        VALUES ($1, $2::uuid, $3::uuid, $4::date, $5, $6, $7, $8, $9, $10, $11, $12)
+        VALUES ($1, $2::uuid, $3::uuid, $4, $5::date, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (user_id) DO UPDATE SET
             school_id = EXCLUDED.school_id,
             branch_id = EXCLUDED.branch_id,
+            student_roll_no = EXCLUDED.student_roll_no,
             date_of_birth = EXCLUDED.date_of_birth,
             gender = EXCLUDED.gender,
             address = EXCLUDED.address,
@@ -870,6 +891,7 @@ async def create_student(student_data: CreateStudentRequest):
         user["id"],
         student_data.school_id,
         student_data.branch_id,
+        _none_if_blank(student_data.student_roll_no),
         dob,
         _none_if_blank(student_data.gender),
         _none_if_blank(student_data.address),
@@ -885,7 +907,12 @@ async def create_student(student_data: CreateStudentRequest):
         user["id"],
     )
     await _activate_enrollment(user["id"], student_data.class_id, student_data.academic_session)
-    return {"message": "Student created successfully", "student": dict(user)}
+    return {
+        "message": "Student created successfully",
+        "student": dict(user),
+        "student_roll_no": student_data.student_roll_no,
+        "password_set": bool(student_data.student_roll_no),
+    }
 
 
 @router.get("/students/{student_id}")
@@ -895,7 +922,7 @@ async def get_student_detail(student_id: str):
         """
         SELECT
             u.id, u.email, u.full_name, u.is_active, u.created_at,
-            sp.school_id, sp.branch_id, sp.date_of_birth, sp.gender, sp.address,
+            sp.school_id, sp.branch_id, sp.student_roll_no, sp.date_of_birth, sp.gender, sp.address,
             sp.guardian_name, sp.primary_contact, sp.emergency_contact, sp.blood_group, sp.medical_notes,
             sp.profile_picture_url,
             sc.name AS school_name, b.name AS branch_name

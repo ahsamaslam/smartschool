@@ -246,6 +246,7 @@ export default function TeacherProfileModal({ isOpen, onClose, onSaved, initialD
         contact: normalizePhone(form.contact),
         emergency_contact: normalizePhone(form.emergency_contact),
         teacher_curriculum_assignments: curriculumRows,
+        ...(!isEdit && form.employee_id ? { password: form.employee_id } : {}),
       };
 
       if (isEdit) {
@@ -305,6 +306,7 @@ export default function TeacherProfileModal({ isOpen, onClose, onSaved, initialD
           label="Employee ID"
           value={form.employee_id}
           onChange={(e) => handleChange("employee_id", e.target.value)}
+          hint={!isEdit ? "Used as the initial login password" : undefined}
           required
         />
         <Input

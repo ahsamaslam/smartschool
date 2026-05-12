@@ -37,6 +37,7 @@ const COUNTRY_CODES = [
 const EMPTY_FORM = {
   full_name: "",
   email: "",
+  student_roll_no: "",
   school_id: "",
   branch_id: "",
   class_id: "",
@@ -616,6 +617,13 @@ export default function AdminStudents() {
         <form onSubmit={handleCreate} className="space-y-3 max-h-[70vh] overflow-y-auto">
           <Input label="Full Name" value={form.full_name} onChange={(e) => setForm((f) => ({ ...f, full_name: e.target.value }))} required />
           <Input label="Email" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} required />
+          <Input
+            label="Student ID (Roll No)"
+            value={form.student_roll_no}
+            onChange={(e) => setForm((f) => ({ ...f, student_roll_no: e.target.value }))}
+            hint="Used as the initial login password"
+            required
+          />
           <Dropdown label="School" options={schoolOptions} value={form.school_id} onChange={(v) => setForm((f) => ({ ...f, school_id: v, branch_id: "", class_id: "" }))} required />
           <Dropdown label="Branch" options={branchOptions} value={form.branch_id} onChange={(v) => setForm((f) => ({ ...f, branch_id: v, class_id: "" }))} required />
           <Dropdown label="Class & Section" options={classOptions} value={form.class_id} onChange={(v) => setForm((f) => ({ ...f, class_id: v }))} required />
@@ -886,6 +894,7 @@ export default function AdminStudents() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
               <Info label="Name" value={detail.profile.full_name} />
               <Info label="Email" value={detail.profile.email} />
+              <Info label="Student ID (Roll No)" value={detail.profile.student_roll_no} />
               <Info
                 label="Account status"
                 value={detail.profile.is_active ? "Active (can log in)" : "Inactive"}

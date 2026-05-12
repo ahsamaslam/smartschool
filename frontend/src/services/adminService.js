@@ -23,6 +23,8 @@ const adminService = {
 
   createUser: (data) => api.post(`${API_ROUTES.ADMINS}/users`, data),
   updateUser: (userId, data) => api.put(`${API_ROUTES.ADMINS}/users/${userId}`, data),
+  setUserPassword: (userId, password) =>
+    api.post(`${API_ROUTES.ADMINS}/users/${userId}/set-password`, { password }),
 
   assignRole: (userId, newRole) =>
     api.put(`${API_ROUTES.ADMINS}/users/${userId}/role`, {
