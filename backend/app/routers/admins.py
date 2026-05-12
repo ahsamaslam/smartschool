@@ -44,7 +44,7 @@ class TeacherCurriculumAssignmentIn(BaseModel):
 
 
 class CreateUserRequest(BaseModel):
-    email: EmailStr
+    email: Optional[str] = None
     full_name: str
     role: str  # student, teacher, manager, admin
     password: Optional[str] = None
@@ -203,7 +203,7 @@ class CompositeVideoRequest(BaseModel):
 
 
 class CreateStudentRequest(BaseModel):
-    email: EmailStr
+    email: Optional[str] = None
     full_name: str
     student_roll_no: Optional[str] = None
     school_id: str
@@ -527,16 +527,29 @@ async def create_user(user_data: CreateUserRequest):
     """Create new user account"""
     await ensure_teacher_profiles_table()
 
+    # Auto-generate email from employee_id if not provided
+    email = user_data.email
+    if not email:
+        id_slug = (user_data.employee_id or "").strip().lower().replace(" ", "")
+        if not id_slug:
+            id_slug = user_data.full_name.strip().lower().replace(" ", "_")
+        email = f"{id_slug}@staff.school"
+
     pwd_hash = hash_password(user_data.password) if user_data.password else None
-    user = await execute_one(
-        """INSERT INTO users (email, full_name, role, password_hash, is_active)
-           VALUES ($1, $2, $3, $4, true)
-           RETURNING id, email, full_name, role""",
-        user_data.email,
-        user_data.full_name,
-        user_data.role,
-        pwd_hash,
-    )
+    try:
+        user = await execute_one(
+            """INSERT INTO users (email, full_name, role, password_hash, is_active)
+               VALUES ($1, $2, $3, $4, true)
+               RETURNING id, email, full_name, role""",
+            email,
+            user_data.full_name,
+            user_data.role,
+            pwd_hash,
+        )
+    except Exception as e:
+        if "users_email_key" in str(e):
+            raise HTTPException(status_code=400, detail="A user with this email or ID already exists.")
+        raise
 
     if user_data.role == "teacher":
         school_id = _none_if_blank(user_data.school_id)
@@ -851,6 +864,15 @@ async def create_student(student_data: CreateStudentRequest):
 
     dob = _parse_date_or_none(student_data.date_of_birth) if student_data.date_of_birth else None
     pwd_hash = hash_password(student_data.student_roll_no) if student_data.student_roll_no else None
+
+    # Auto-generate email from student_roll_no if not provided
+    email = student_data.email
+    if not email:
+        roll_slug = (student_data.student_roll_no or "").strip().lower().replace(" ", "")
+        if not roll_slug:
+            roll_slug = student_data.full_name.strip().lower().replace(" ", "_")
+        email = f"{roll_slug}@student.school"
+
     try:
         user = await execute_one(
             """
@@ -858,13 +880,13 @@ async def create_student(student_data: CreateStudentRequest):
             VALUES ($1, $2, 'student', $3, true)
             RETURNING id, email, full_name, role
             """,
-            student_data.email,
+            email,
             student_data.full_name,
             pwd_hash,
         )
     except Exception as e:
         if "users_email_key" in str(e):
-            raise HTTPException(status_code=400, detail="A user with this email already exists.")
+            raise HTTPException(status_code=400, detail="A user with this Student ID or email already exists.")
         raise
     await execute_write(
         """

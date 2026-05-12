@@ -295,11 +295,10 @@ export default function TeacherProfileModal({ isOpen, onClose, onSaved, initialD
           required
         />
         <Input
-          label="Email"
-          type="email"
+          label="Email (optional)"
           value={form.email}
           onChange={(e) => handleChange("email", e.target.value)}
-          required
+          hint={!isEdit ? "Leave blank to auto-generate from Employee ID" : undefined}
           disabled={isEdit}
         />
         <Input

@@ -616,7 +616,12 @@ export default function AdminStudents() {
       <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title="Add Student" size="xl">
         <form onSubmit={handleCreate} className="space-y-3 max-h-[70vh] overflow-y-auto">
           <Input label="Full Name" value={form.full_name} onChange={(e) => setForm((f) => ({ ...f, full_name: e.target.value }))} required />
-          <Input label="Email" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} required />
+          <Input
+            label="Email (optional)"
+            value={form.email}
+            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+            hint="Leave blank to auto-generate from Student ID"
+          />
           <Input
             label="Student ID (Roll No)"
             value={form.student_roll_no}
