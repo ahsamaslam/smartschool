@@ -36,6 +36,7 @@ class LoginResponse(BaseModel):
     full_name: str
     role: str
     profile_picture_url: Optional[str] = None
+    school_id: Optional[str] = None
     token: str
 
 
@@ -96,9 +97,14 @@ async def login(credentials: LoginRequest):
 
     user_id = str(user["id"])
 
-    # Build JWT
+    # Build JWT (include school_id so manager scoping works without extra DB hit)
     token = create_access_token(
-        data={"sub": user_id, "role": user["role"], "email": user["email"]}
+        data={
+            "sub": user_id,
+            "role": user["role"],
+            "email": user["email"],
+            "school_id": str(user["school_id"]) if user.get("school_id") else None,
+        }
     )
 
     # Cache the session for quick lookups (optional but keeps parity with existing code)
@@ -116,6 +122,7 @@ async def login(credentials: LoginRequest):
         full_name=user["full_name"],
         role=user["role"],
         profile_picture_url=user.get("profile_picture_url"),
+        school_id=str(user["school_id"]) if user.get("school_id") else None,
         token=token,
     )
 
@@ -317,7 +324,12 @@ async def get_user_from_token(authorization: Optional[str] = Header(None)) -> di
             detail="Invalid or expired token",
         )
 
-    return {"user_id": payload["sub"], "role": payload["role"], "email": payload["email"]}
+    return {
+        "user_id": payload["sub"],
+        "role": payload["role"],
+        "email": payload["email"],
+        "school_id": payload.get("school_id"),
+    }
 
 
 

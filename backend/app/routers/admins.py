@@ -1,7 +1,7 @@
 """
 Admin Portal Routes - Full System Access
 """
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 import json
@@ -13,8 +13,18 @@ from app.utils.database import execute_query, execute_one, execute_write
 from app.config import settings
 from app.schemas.slides_ai import GenerateSlidesRequest, GenerateSlidesResponse
 from app.utils.ai_slide_deck import generate_slide_deck
+from app.routers.auth import get_user_from_token
+from app.utils.auth import hash_password
+import uuid as uuid_lib
 
-router = APIRouter()
+
+def require_admin(current_user: dict = Depends(get_user_from_token)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
+
+
+router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 # ============================================
@@ -79,9 +89,16 @@ class AssignRoleRequest(BaseModel):
     new_role: str
 
 
+class ManagerCreateRequest(BaseModel):
+    full_name: str
+    email: EmailStr
+    password: str
+
+
 class CreateSchoolRequest(BaseModel):
     name: str
     address: str
+    manager: Optional[ManagerCreateRequest] = None
 
 
 class CreateBranchRequest(BaseModel):
@@ -1081,7 +1098,13 @@ async def get_all_schools():
 @router.get("/schools/all-data")
 async def get_all_school_data():
     """Get all schools, branches, and classes at once for global search"""
-    schools = await execute_query("SELECT id, name, address, created_at FROM schools ORDER BY name")
+    schools = await execute_query("""
+        SELECT s.id, s.name, s.address, s.created_at,
+               mgr.full_name AS manager_name, mgr.email AS manager_email
+        FROM schools s
+        LEFT JOIN users mgr ON mgr.school_id = s.id AND mgr.role = 'manager'
+        ORDER BY s.name
+    """)
     branches = await execute_query("SELECT id, school_id, name, city, address, created_at FROM branches ORDER BY name")
     classes = await execute_query("""
         SELECT 
@@ -1104,14 +1127,38 @@ async def get_all_school_data():
 
 @router.post("/schools")
 async def create_school(school_data: CreateSchoolRequest):
-    """Create new school"""
-    query = """
-        INSERT INTO schools (name, address)
-        VALUES ($1, $2)
-        RETURNING id, name, address
-    """
-    school = await execute_one(query, school_data.name, school_data.address)
-    return {"message": "School created successfully", "school": dict(school)}
+    """Create new school, optionally with a linked manager account"""
+    school = await execute_one(
+        "INSERT INTO schools (name, address) VALUES ($1, $2) RETURNING id, name, address",
+        school_data.name, school_data.address,
+    )
+    result = {"message": "School created successfully", "school": dict(school)}
+
+    if school_data.manager:
+        m = school_data.manager
+        existing = await execute_one("SELECT id FROM users WHERE email = $1", m.email)
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Email {m.email} is already registered")
+        manager_user = await execute_one(
+            """INSERT INTO users (id, email, full_name, password_hash, role, school_id, is_active)
+               VALUES ($1, $2, $3, $4, 'manager', $5, true)
+               RETURNING id, email, full_name, role, school_id""",
+            str(uuid_lib.uuid4()), m.email, m.full_name, hash_password(m.password), str(school["id"]),
+        )
+        result["manager"] = {**dict(manager_user), "plain_password": m.password}
+
+    return result
+
+
+@router.get("/schools/{school_id}/managers")
+async def get_school_managers(school_id: str):
+    """List all manager accounts for a school"""
+    managers = await execute_query(
+        """SELECT id, email, full_name, is_active, created_at
+           FROM users WHERE role = 'manager' AND school_id = $1 ORDER BY created_at""",
+        school_id,
+    )
+    return [dict(m) for m in managers]
 
 
 @router.put("/schools/{school_id}")

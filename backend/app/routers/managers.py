@@ -1,14 +1,31 @@
 """
 Manager Portal Routes
 """
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 from datetime import datetime, date, timedelta
+import uuid as uuid_lib
 
 from app.utils.database import execute_query, execute_one, execute_write
+from app.routers.auth import get_user_from_token
+from app.utils.auth import hash_password
 
 router = APIRouter()
+
+
+def require_manager(current_user: dict = Depends(get_user_from_token)):
+    if current_user.get("role") not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Manager access required")
+    return current_user
+
+
+def _assert_school_access(user: dict, school_id: str):
+    """Managers can only access their own school; admins can access any."""
+    if user.get("role") == "admin":
+        return
+    if str(user.get("school_id", "")) != str(school_id):
+        raise HTTPException(status_code=403, detail="Access denied to this school")
 
 
 # ============================================
@@ -16,40 +33,44 @@ router = APIRouter()
 # ============================================
 
 @router.get("/schools")
-async def get_all_schools():
-    """
-    Get all schools accessible to manager
-    """
-    
-    query = """
-        SELECT 
-            s.id,
-            s.name,
-            s.address,
+async def get_all_schools(current_user: dict = Depends(require_manager)):
+    """Get schools accessible to this manager (admins see all, managers see their own)."""
+    if current_user.get("role") == "admin":
+        where = ""
+        params: list = []
+    else:
+        school_id = current_user.get("school_id")
+        if not school_id:
+            return []
+        where = "WHERE s.id = $1"
+        params = [school_id]
+
+    query = f"""
+        SELECT
+            s.id, s.name, s.address,
             COUNT(DISTINCT b.id) as branch_count,
-            COUNT(DISTINCT c.id) as class_count
+            COUNT(DISTINCT c.id) as class_count,
+            mgr.full_name as manager_name, mgr.email as manager_email
         FROM schools s
         LEFT JOIN branches b ON s.id = b.school_id
         LEFT JOIN classes c ON b.id = c.branch_id
-        GROUP BY s.id, s.name, s.address
+        LEFT JOIN users mgr ON mgr.school_id = s.id AND mgr.role = 'manager'
+        {where}
+        GROUP BY s.id, s.name, s.address, mgr.full_name, mgr.email
         ORDER BY s.name
     """
-    
-    schools = await execute_query(query)
-    return [dict(school) for school in schools]
+    schools = await execute_query(query, *params)
+    return [dict(s) for s in schools]
 
 
 @router.get("/schools/{school_id}/branches")
-async def get_school_branches(school_id: str):
-    """
-    Get all branches for a school
-    """
-    
+async def get_school_branches(school_id: str, current_user: dict = Depends(require_manager)):
+    """Get all branches for a school (scoped to manager's school)."""
+    _assert_school_access(current_user, school_id)
+
     query = """
-        SELECT 
-            b.id,
-            b.name,
-            b.address,
+        SELECT
+            b.id, b.name, b.address,
             COUNT(DISTINCT c.id) as class_count,
             COUNT(DISTINCT e.student_id) as student_count
         FROM branches b
@@ -59,13 +80,12 @@ async def get_school_branches(school_id: str):
         GROUP BY b.id, b.name, b.address
         ORDER BY b.name
     """
-    
     branches = await execute_query(query, school_id)
-    return [dict(branch) for branch in branches]
+    return [dict(b) for b in branches]
 
 
 @router.get("/branches/{branch_id}/overview")
-async def get_branch_overview(branch_id: str):
+async def get_branch_overview(branch_id: str, current_user: dict = Depends(require_manager)):  # noqa: ARG001
     """
     Get comprehensive overview of a branch
     """
@@ -119,30 +139,22 @@ async def get_student_wise_report(
     school_id: Optional[str] = None,
     branch_id: Optional[str] = None,
     class_id: Optional[str] = None,
-    period: str = "monthly"  # daily, weekly, monthly, quarterly, yearly, all
+    period: str = "monthly",
+    current_user: dict = Depends(require_manager),
 ):
-    """
-    Get student-wise performance reports
-    """
-    
-    # Calculate date range
-    period_days = {
-        "daily": 1,
-        "weekly": 7,
-        "monthly": 30,
-        "quarterly": 90,
-        "yearly": 365,
-        "all": 36500  # 100 years
-    }
-    
+    """Get student-wise performance reports (scoped to manager's school)."""
+    # Managers can only query their own school
+    if current_user.get("role") == "manager":
+        school_id = str(current_user.get("school_id") or "")
+
+    period_days = {"daily": 1, "weekly": 7, "monthly": 30, "quarterly": 90, "yearly": 365, "all": 36500}
     days = period_days.get(period, 30)
     date_from = datetime.now().date() - timedelta(days=days)
-    
-    # Build dynamic query based on filters
+
     where_clauses = ["sp.date >= $1"]
-    params = [date_from]
+    params: list = [date_from]
     param_count = 2
-    
+
     if class_id:
         where_clauses.append(f"sp.class_id = ${param_count}")
         params.append(class_id)
@@ -201,11 +213,12 @@ async def get_student_wise_report(
 async def get_class_wise_report(
     school_id: Optional[str] = None,
     branch_id: Optional[str] = None,
-    period: str = "monthly"
+    period: str = "monthly",
+    current_user: dict = Depends(require_manager),
 ):
-    """
-    Get class-wise performance reports
-    """
+    """Get class-wise performance reports (scoped to manager's school)."""
+    if current_user.get("role") == "manager":
+        school_id = str(current_user.get("school_id") or "")
     
     period_days = {
         "daily": 1,
@@ -272,11 +285,12 @@ async def get_class_wise_report(
 async def get_teacher_wise_report(
     school_id: Optional[str] = None,
     branch_id: Optional[str] = None,
-    period: str = "monthly"
+    period: str = "monthly",
+    current_user: dict = Depends(require_manager),
 ):
-    """
-    Get teacher-wise performance reports based on their students
-    """
+    """Get teacher-wise performance reports (scoped to manager's school)."""
+    if current_user.get("role") == "manager":
+        school_id = str(current_user.get("school_id") or "")
     
     period_days = {
         "daily": 1,
@@ -341,11 +355,12 @@ async def get_teacher_wise_report(
 async def get_dashboard_analytics(
     school_id: Optional[str] = None,
     branch_id: Optional[str] = None,
-    days: int = 30
+    days: int = 30,
+    current_user: dict = Depends(require_manager),
 ):
-    """
-    Get data for graphical dashboard visualizations
-    """
+    """Get dashboard analytics (scoped to manager's school)."""
+    if current_user.get("role") == "manager":
+        school_id = str(current_user.get("school_id") or "")
     
     date_from = datetime.now().date() - timedelta(days=days)
     
@@ -466,10 +481,8 @@ async def get_dashboard_analytics(
 # ============================================
 
 @router.post("/users/{user_id}/password-reset")
-async def send_password_reset_link(user_id: str):
-    """
-    Generate password reset link for any user (teacher or student)
-    """
+async def send_password_reset_link(user_id: str, current_user: dict = Depends(require_manager)):
+    """Generate password reset link for a user in manager's school."""
     
     import uuid
     
@@ -507,11 +520,12 @@ async def send_password_reset_link(user_id: str):
 @router.get("/statistics/overview")
 async def get_system_overview(
     school_id: Optional[str] = None,
-    branch_id: Optional[str] = None
+    branch_id: Optional[str] = None,
+    current_user: dict = Depends(require_manager),
 ):
-    """
-    Get high-level system statistics
-    """
+    """Get high-level system statistics (scoped to manager's school)."""
+    if current_user.get("role") == "manager":
+        school_id = str(current_user.get("school_id") or "")
     
     where_clauses = []
     params = []

@@ -19,6 +19,9 @@ import {
   PencilSquareIcon,
   TrashIcon,
   BookOpenIcon,
+  UserCircleIcon,
+  ClipboardDocumentIcon,
+  CheckIcon,
 } from "@heroicons/react/24/outline";
 
 // ── Constants & Helpers ───────────────────────────────────────────────────────
@@ -139,6 +142,76 @@ function ConfirmDeleteModal({ isOpen, onClose, onConfirm, title, message, deleti
         >
           {deleting ? <ArrowPathIcon className="h-4 w-4 animate-spin" /> : <TrashIcon className="h-4 w-4" />}
           Delete
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function CredentialsModal({ isOpen, onClose, school, manager }) {
+  const [copied, setCopied] = useState(null);
+  if (!isOpen || !manager) return null;
+
+  const copy = (text, key) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(key);
+      setTimeout(() => setCopied(null), 2000);
+    });
+  };
+
+  const CopyBtn = ({ text, id }) => (
+    <button
+      type="button"
+      onClick={() => copy(text, id)}
+      className="ml-2 p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
+      title="Copy"
+    >
+      {copied === id ? <CheckIcon className="h-3.5 w-3.5 text-green-500" /> : <ClipboardDocumentIcon className="h-3.5 w-3.5" />}
+    </button>
+  );
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="School + Manager Created">
+      <div className="space-y-4">
+        <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-sm">
+          <p className="font-semibold text-green-800 mb-1">School created successfully!</p>
+          <p className="text-green-700">A manager account has been created. Save these credentials — the password will not be shown again.</p>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            <UserCircleIcon className="h-4 w-4" /> Manager Login Credentials
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 mb-1">School</p>
+            <p className="text-sm font-medium text-gray-800">{school?.name}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 mb-1">Full Name</p>
+            <p className="text-sm font-medium text-gray-800">{manager.full_name}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 mb-1">Email (Login)</p>
+            <div className="flex items-center bg-gray-50 rounded-lg px-3 py-2">
+              <span className="text-sm font-mono flex-1 text-gray-800">{manager.email}</span>
+              <CopyBtn text={manager.email} id="email" />
+            </div>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 mb-1">Password</p>
+            <div className="flex items-center bg-gray-50 rounded-lg px-3 py-2">
+              <span className="text-sm font-mono flex-1 text-gray-800">{manager.plain_password}</span>
+              <CopyBtn text={manager.plain_password} id="password" />
+            </div>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-full py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors"
+        >
+          Done
         </button>
       </div>
     </Modal>
@@ -1096,6 +1169,12 @@ function SchoolCard({ school, schoolBranches, allClasses, teacherCountsByBranch,
           <div className="flex-1 min-w-0">
             <p className="font-bold text-gray-900 truncate">{school.name}</p>
             {school.address && <p className="text-xs text-gray-400 truncate mt-0.5">{school.address}</p>}
+            {school.manager_name && (
+              <p className="text-xs text-indigo-500 truncate mt-0.5 flex items-center gap-1">
+                <UserCircleIcon className="h-3 w-3 flex-shrink-0" />
+                {school.manager_name} — {school.manager_email}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-4 text-xs text-gray-400 flex-shrink-0 mr-2">
             <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium">
@@ -1233,6 +1312,10 @@ export default function AdminSchools() {
   const [editingSchool, setEditingSchool] = useState(null);
   const [schoolForm, setSchoolForm] = useState({ name: "", address: "" });
   const [savingSchool, setSavingSchool] = useState(false);
+  const [showManagerSection, setShowManagerSection] = useState(false);
+  const [managerForm, setManagerForm] = useState({ full_name: "", email: "", password: "" });
+  const [createdManager, setCreatedManager] = useState(null);
+  const [createdSchool, setCreatedSchool] = useState(null);
 
   const [deletingSchool, setDeletingSchool] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -1405,6 +1488,8 @@ export default function AdminSchools() {
   const openAddSchool = () => {
     setEditingSchool(null);
     setSchoolForm({ name: "", address: "" });
+    setShowManagerSection(false);
+    setManagerForm({ full_name: "", email: "", password: "" });
     setShowSchoolModal(true);
   };
 
@@ -1418,19 +1503,35 @@ export default function AdminSchools() {
     e.preventDefault();
     if (!schoolForm.name.trim()) return toast.error("School name is required.");
     if (!schoolForm.address.trim()) return toast.error("School address is required.");
+    if (showManagerSection && !editingSchool) {
+      if (!managerForm.full_name.trim()) return toast.error("Manager name is required.");
+      if (!managerForm.email.trim()) return toast.error("Manager email is required.");
+      if (!managerForm.password.trim()) return toast.error("Manager password is required.");
+    }
     setSavingSchool(true);
     try {
       if (editingSchool) {
         await adminService.updateSchool(editingSchool.id, schoolForm);
         toast.success("School updated!");
+        setShowSchoolModal(false);
       } else {
-        await adminService.createSchool(schoolForm);
-        toast.success("School created!");
+        const payload = { ...schoolForm };
+        if (showManagerSection && managerForm.email) {
+          payload.manager = managerForm;
+        }
+        const res = await adminService.createSchool(payload);
+        const resData = res?.data?.data ?? res?.data ?? {};
+        setShowSchoolModal(false);
+        if (resData.manager) {
+          setCreatedSchool(resData.school);
+          setCreatedManager(resData.manager);
+        } else {
+          toast.success("School created!");
+        }
       }
-      setShowSchoolModal(false);
       loadData();
-    } catch {
-      toast.error(editingSchool ? "Failed to update school." : "Failed to create school.");
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || (editingSchool ? "Failed to update school." : "Failed to create school."));
     } finally {
       setSavingSchool(false);
     }
@@ -1572,6 +1673,68 @@ export default function AdminSchools() {
               className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
+
+          {/* Manager Account Section (only for new schools) */}
+          {!editingSchool && (
+            <div className="border border-gray-200 rounded-xl overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setShowManagerSection((v) => !v)}
+                className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-sm font-medium text-gray-700"
+              >
+                <span className="flex items-center gap-2">
+                  <UserCircleIcon className="h-4 w-4 text-indigo-500" />
+                  Create Manager Account
+                  <span className="text-xs text-gray-400 font-normal">(optional)</span>
+                </span>
+                {showManagerSection
+                  ? <ChevronDownIcon className="h-4 w-4 text-gray-400" />
+                  : <ChevronRightIcon className="h-4 w-4 text-gray-400" />
+                }
+              </button>
+              {showManagerSection && (
+                <div className="px-4 py-3 space-y-3 border-t border-gray-100">
+                  <p className="text-xs text-gray-500">The manager will be able to log in and manage only this school.</p>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Full Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      value={managerForm.full_name}
+                      onChange={(e) => setManagerForm((f) => ({ ...f, full_name: e.target.value }))}
+                      placeholder="Manager's full name"
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Email (Login) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="email"
+                      value={managerForm.email}
+                      onChange={(e) => setManagerForm((f) => ({ ...f, email: e.target.value }))}
+                      placeholder="manager@school.com"
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Password <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={managerForm.password}
+                      onChange={(e) => setManagerForm((f) => ({ ...f, password: e.target.value }))}
+                      placeholder="Set a strong password"
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <button
             type="submit"
             disabled={savingSchool}
@@ -1581,6 +1744,14 @@ export default function AdminSchools() {
           </button>
         </form>
       </Modal>
+
+      {/* Manager Credentials Modal */}
+      <CredentialsModal
+        isOpen={!!createdManager}
+        onClose={() => { setCreatedManager(null); setCreatedSchool(null); }}
+        school={createdSchool}
+        manager={createdManager}
+      />
 
       <ConfirmDeleteModal
         isOpen={!!deletingSchool}
