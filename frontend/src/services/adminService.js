@@ -20,6 +20,9 @@ const adminService = {
   getStudentSectionOptions: (studentId) => api.get(`${API_ROUTES.ADMINS}/students/${studentId}/section-options`),
   setCurrentEnrollment: (studentId, data) => api.post(`${API_ROUTES.ADMINS}/students/${studentId}/set-current-enrollment`, data),
   archiveStudent: (studentId) => api.delete(`${API_ROUTES.ADMINS}/students/${studentId}`),
+  updateStudent: (studentId, data) => api.patch(`${API_ROUTES.ADMINS}/students/${studentId}`, data),
+  setStudentPassword: (studentId, password) =>
+    api.post(`${API_ROUTES.ADMINS}/users/${studentId}/set-password`, { password }),
 
   createUser: (data) => api.post(`${API_ROUTES.ADMINS}/users`, data),
   updateUser: (userId, data) => api.put(`${API_ROUTES.ADMINS}/users/${userId}`, data),
@@ -34,6 +37,8 @@ const adminService = {
 
   deactivateUser: (userId) =>
     api.delete(`${API_ROUTES.ADMINS}/users/${userId}`),
+  activateUser: (userId) =>
+    api.post(`${API_ROUTES.ADMINS}/users/${userId}/activate`),
 
   // Schools
   getSchools: () => api.get(`${API_ROUTES.ADMINS}/schools`),
@@ -43,6 +48,7 @@ const adminService = {
   createSchool: (data) => api.post(`${API_ROUTES.ADMINS}/schools`, data),
   updateSchool: (schoolId, data) => api.put(`${API_ROUTES.ADMINS}/schools/${schoolId}`, data),
   deleteSchool: (schoolId) => api.delete(`${API_ROUTES.ADMINS}/schools/${schoolId}`),
+  createSchoolManager: (schoolId, data) => api.post(`${API_ROUTES.ADMINS}/schools/${schoolId}/manager`, data),
 
   getSchoolBranches: (schoolId) =>
     api.get(`${API_ROUTES.ADMINS}/schools/${schoolId}/branches`),

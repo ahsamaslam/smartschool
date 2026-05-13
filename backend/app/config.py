@@ -56,8 +56,14 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     FROM_EMAIL: str = "noreply@education.com"
     
-    # CORS
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
+    # CORS — comma-separated list; include every browser origin (scheme+host+port) that loads the SPA.
+    # Example: http://localhost:3000,http://127.0.0.1:3000
+    # In DEBUG mode, the regex below allows all localhost ports anyway
+    CORS_ORIGINS: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:3001,http://127.0.0.1:3001,"
+        "http://localhost:5173,http://127.0.0.1:5173"
+    )
     
     # File Upload
     MAX_FILE_SIZE_MB: int = 100
@@ -85,8 +91,10 @@ class Settings(BaseSettings):
     
     @property
     def cors_origins_list(self) -> List[str]:
-        """Convert CORS_ORIGINS string to list"""
-        return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
+        """Convert CORS_ORIGINS string to list (skip blanks — empty entries break browser CORS)."""
+        if not (self.CORS_ORIGINS or "").strip():
+            return ["http://localhost:3000", "http://127.0.0.1:3000"]
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
     
     @property
     def allowed_video_extensions_list(self) -> List[str]:

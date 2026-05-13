@@ -153,8 +153,8 @@ export default function ManagerStudents() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-gray-500 hidden md:table-cell">{s.branch_name}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs hidden lg:table-cell">
-                    {s.enrolled_at ? new Date(s.enrolled_at).toLocaleDateString() : "—"}
+                  <td className="px-4 py-3 text-gray-600 text-xs hidden lg:table-cell">
+                    {s.academic_session || "—"}
                   </td>
                 </tr>
               ))}

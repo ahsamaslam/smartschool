@@ -142,6 +142,11 @@ export default function ClassDetail() {
             <AttendanceForm
               classId={classId}
               students={students}
+              teacherId={
+                user?.role === "admin"
+                  ? getAdminPreviewTeacherId() || user?.id
+                  : user?.id
+              }
               onSaved={loadStudents}
             />
           </div>

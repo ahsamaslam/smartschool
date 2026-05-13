@@ -207,6 +207,7 @@ export default function TeacherProfileModal({ isOpen, onClose, onSaved, initialD
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    // Rows with full curriculum (class + subject + book) → teacher_class_subject_assignments
     const curriculumRows = assignmentRows
       .filter((r) => r.class_id && r.subject_id && r.book_id)
       .map((r) => ({
@@ -218,17 +219,21 @@ export default function TeacherProfileModal({ isOpen, onClose, onSaved, initialD
         library_book_id: r.book_id,
       }));
 
-    const incomplete = assignmentRows.some(
-      (r) =>
-        (r.branch_id || r.class_id || r.board_id || r.subject_id || r.book_id) &&
-        !(r.class_id && r.subject_id && r.book_id),
-    );
-    if (incomplete || curriculumRows.length === 0) {
-      toast.error(
-        curriculumRows.length === 0
-          ? "Add at least one assignment: branch → class/section → board → subject → book."
-          : "Complete each started assignment row (class, subject, and book are required).",
-      );
+    // All class IDs from rows that have at least a class selected (with or without curriculum)
+    const assignedClassIds = [
+      ...new Set(assignmentRows.filter((r) => r.class_id).map((r) => r.class_id)),
+    ];
+
+    // Block only rows that started curriculum selection (board/subject/book) but didn't finish
+    const incomplete = assignmentRows.some((r) => {
+      const hasAny = r.branch_id || r.class_id || r.board_id || r.subject_id || r.book_id;
+      if (!hasAny) return false;
+      if (!r.class_id) return true; // has other fields but no class
+      // has class — partial curriculum is only invalid if some but not all curriculum fields
+      return (r.board_id || r.subject_id || r.book_id) && !(r.subject_id && r.book_id);
+    });
+    if (incomplete) {
+      toast.error("Each assignment needs at minimum a class. If selecting curriculum, subject and book are both required.");
       return;
     }
 
@@ -246,6 +251,7 @@ export default function TeacherProfileModal({ isOpen, onClose, onSaved, initialD
         contact: normalizePhone(form.contact),
         emergency_contact: normalizePhone(form.emergency_contact),
         teacher_curriculum_assignments: curriculumRows,
+        assigned_classes: assignedClassIds,
         ...(!isEdit && form.employee_id ? { password: form.employee_id } : {}),
       };
 
@@ -338,10 +344,9 @@ export default function TeacherProfileModal({ isOpen, onClose, onSaved, initialD
           <div>
             <p className="text-sm font-semibold text-gray-900">Teaching assignments</p>
             <p className="text-xs text-gray-600 mt-1">
-              For each row: choose <strong>branch</strong> → <strong>class/section</strong> →{" "}
-              <strong>board</strong> → <strong>subject</strong> → <strong>book</strong> (curriculum
-              must be linked to that section in your library). One subject per section per row; add
-              more rows for other sections or subjects.
+              Optional — assign later once curriculum is set up. For each row: choose{" "}
+              <strong>branch</strong> → <strong>class/section</strong> → <strong>board</strong> →{" "}
+              <strong>subject</strong> → <strong>book</strong>. One subject per row.
             </p>
           </div>
 
@@ -475,16 +480,17 @@ function CurriculumPickers({ row, examScope, onChangeBoard, onChangeSubject, onC
     return (
       <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
         This section uses legacy subjects only. Link <strong>library books</strong> to this section
-        in Curriculum so you can pick board → subject → book.
+        in Curriculum so you can pick board → subject → book.{" "}
+        <strong>Class will still be assigned to the teacher.</strong>
       </p>
     );
   }
   const boards = examScope.boards || [];
   if (!boards.length) {
     return (
-      <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-        No library curriculum for this section yet. Assign boards, subjects, and books in
-        Admin → Curriculum for this class.
+      <p className="text-xs text-green-800 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+        No library curriculum linked yet — class will be assigned to this teacher.
+        Add boards, subjects &amp; books in <strong>Admin → Curriculum</strong> to also assign subjects.
       </p>
     );
   }

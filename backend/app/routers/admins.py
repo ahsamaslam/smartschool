@@ -449,14 +449,14 @@ async def get_all_users(role: Optional[str] = None):
             u.is_active,
             u.created_at,
             u.profile_picture_url,
-            tp.employee_id,
-            tp.school_id,
-            sc.name AS school_name,
-            tp.branch_id,
-            br.name AS branch_name,
-            tp.designation,
-            tp.date_of_joining,
-            tp.employment_status,
+            COALESCE(tp.employee_id, u.employee_id) AS employee_id,
+            COALESCE(tp.school_id, u.school_id) AS school_id,
+            COALESCE(sc.name, (SELECT name FROM schools WHERE id = u.school_id)) AS school_name,
+            COALESCE(tp.branch_id, u.branch_id) AS branch_id,
+            COALESCE(br.name, (SELECT name FROM branches WHERE id = u.branch_id)) AS branch_name,
+            COALESCE(tp.designation, u.designation) AS designation,
+            COALESCE(tp.date_of_joining, u.date_of_joining) AS date_of_joining,
+            COALESCE(tp.employment_status, u.employment_status) AS employment_status,
             COALESCE(tp.subjects, '[]'::jsonb) AS subjects,
             (
                 SELECT COALESCE(json_agg(s.name ORDER BY s.name), '[]'::json)
@@ -465,11 +465,11 @@ async def get_all_users(role: Optional[str] = None):
                     SELECT jsonb_array_elements_text(COALESCE(tp.subjects, '[]'::jsonb))
                 )
             ) AS subject_names,
-            tp.qualifications,
-            tp.experience_years,
-            tp.contact,
-            tp.emergency_contact,
-            tp.languages,
+            COALESCE(tp.qualifications, u.qualifications) AS qualifications,
+            COALESCE(tp.experience_years, u.experience_years) AS experience_years,
+            COALESCE(tp.contact, u.contact) AS contact,
+            COALESCE(tp.emergency_contact, u.emergency_contact) AS emergency_contact,
+            COALESCE(tp.languages, u.languages) AS languages,
             tp.assigned_classes,
             tp.salary,
             (
@@ -620,11 +620,13 @@ async def create_user(user_data: CreateUserRequest):
 
         if curriculum_payload is not None:
             await sync_teacher_class_subject_assignments(str(user["id"]), curriculum_payload)
-        class_ids_for_sync = (
-            list({str(r["class_id"]) for r in curriculum_payload})
-            if curriculum_payload is not None
-            else (user_data.assigned_classes or [])
-        )
+        if curriculum_payload is not None:
+            # Merge curriculum class IDs with any class-only assignments (no curriculum yet)
+            curriculum_class_ids = {str(r["class_id"]) for r in curriculum_payload}
+            extra_class_ids = set(user_data.assigned_classes or [])
+            class_ids_for_sync = list(curriculum_class_ids | extra_class_ids)
+        else:
+            class_ids_for_sync = user_data.assigned_classes or []
         await _sync_teacher_class_assignments(str(user["id"]), class_ids_for_sync)
 
     return {
@@ -737,9 +739,11 @@ async def update_user(user_id: str, user_data: UpdateUserRequest):
         if user_data.teacher_curriculum_assignments is not None:
             rows = [a.model_dump() for a in user_data.teacher_curriculum_assignments]
             await sync_teacher_class_subject_assignments(user_id, rows)
-            await _sync_teacher_class_assignments(
-                user_id, list({str(r["class_id"]) for r in rows})
-            )
+            # Merge curriculum class IDs with any class-only assignments (no curriculum yet)
+            curriculum_class_ids = {str(r["class_id"]) for r in rows}
+            extra_class_ids = set(user_data.assigned_classes or [])
+            all_class_ids = list(curriculum_class_ids | extra_class_ids)
+            await _sync_teacher_class_assignments(user_id, all_class_ids)
         elif user_data.assigned_classes is not None:
             await _sync_teacher_class_assignments(user_id, user_data.assigned_classes)
 
@@ -779,9 +783,18 @@ async def assign_role(user_id: str, role_data: AssignRoleRequest):
 @router.delete("/users/{user_id}")
 async def deactivate_user(user_id: str):
     """Deactivate user account"""
-    query = "UPDATE users SET is_active = false WHERE id = $1"
-    await execute_write(query, user_id)
+    await execute_write("UPDATE users SET is_active = false, updated_at = NOW() WHERE id = $1", user_id)
     return {"message": "User deactivated successfully"}
+
+
+@router.post("/users/{user_id}/activate")
+async def activate_user(user_id: str):
+    """Activate (re-enable) a user account."""
+    user = await execute_one("SELECT id FROM users WHERE id = $1", user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    await execute_write("UPDATE users SET is_active = true, updated_at = NOW() WHERE id = $1", user_id)
+    return {"message": "User activated successfully"}
 
 
 @router.post("/users/{user_id}/set-password")
@@ -793,10 +806,10 @@ async def admin_set_password(user_id: str, body: SetPasswordRequest):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     await execute_write(
-        "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2",
+        "UPDATE users SET password_hash = $1, is_active = true, updated_at = NOW() WHERE id = $2",
         hash_password(body.password), user_id,
     )
-    return {"message": "Password updated successfully"}
+    return {"message": "Password updated and account activated successfully"}
 
 
 # ============================================
@@ -974,6 +987,77 @@ async def get_student_detail(student_id: str):
         student_id,
     )
     return {"profile": dict(profile), "history": [dict(h) for h in history]}
+
+
+class UpdateStudentRequest(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    student_roll_no: Optional[str] = None
+    guardian_name: Optional[str] = None
+    primary_contact: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    gender: Optional[str] = None
+    address: Optional[str] = None
+    blood_group: Optional[str] = None
+    medical_notes: Optional[str] = None
+
+
+@router.patch("/students/{student_id}")
+async def update_student(student_id: str, body: UpdateStudentRequest):
+    await ensure_student_data_structures()
+    user = await execute_one(
+        "SELECT id, email FROM users WHERE id = $1 AND role = 'student'", student_id
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    if body.full_name is not None or body.email is not None:
+        new_email = body.email if body.email else user["email"]
+        new_name = body.full_name if body.full_name else None
+        update_fields = []
+        update_vals = []
+        if body.full_name is not None:
+            update_fields.append(f"full_name = ${len(update_vals)+1}")
+            update_vals.append(body.full_name)
+        if body.email is not None and body.email:
+            update_fields.append(f"email = ${len(update_vals)+1}")
+            update_vals.append(body.email)
+        if update_fields:
+            update_vals.append(student_id)
+            await execute_write(
+                f"UPDATE users SET {', '.join(update_fields)}, updated_at = NOW() WHERE id = ${len(update_vals)}",
+                *update_vals,
+            )
+
+    dob = _parse_date_or_none(body.date_of_birth) if body.date_of_birth else None
+    await execute_write(
+        """
+        UPDATE student_profiles SET
+            student_roll_no = COALESCE($2, student_roll_no),
+            guardian_name = COALESCE($3, guardian_name),
+            primary_contact = COALESCE($4, primary_contact),
+            emergency_contact = COALESCE($5, emergency_contact),
+            date_of_birth = COALESCE($6::date, date_of_birth),
+            gender = COALESCE($7, gender),
+            address = COALESCE($8, address),
+            blood_group = COALESCE($9, blood_group),
+            medical_notes = COALESCE($10, medical_notes),
+            updated_at = NOW()
+        WHERE user_id = $1
+        """,
+        student_id,
+        _none_if_blank(body.student_roll_no),
+        _none_if_blank(body.guardian_name),
+        _none_if_blank(body.primary_contact),
+        _none_if_blank(body.emergency_contact),
+        dob,
+        _none_if_blank(body.gender),
+        _none_if_blank(body.address),
+        _none_if_blank(body.blood_group),
+        _none_if_blank(body.medical_notes),
+    )
+    return {"message": "Student updated successfully"}
 
 
 @router.post("/students/{student_id}/promote")
@@ -1208,6 +1292,26 @@ async def get_school_managers(school_id: str):
         school_id,
     )
     return [dict(m) for m in managers]
+
+
+@router.post("/schools/{school_id}/manager")
+async def create_school_manager(school_id: str, manager_data: ManagerCreateRequest):
+    """Create a new manager account for a school"""
+    school = await execute_one("SELECT id FROM schools WHERE id = $1", school_id)
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    existing = await execute_one("SELECT id FROM users WHERE email = $1", manager_data.email)
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Email {manager_data.email} is already registered")
+
+    manager_user = await execute_one(
+        """INSERT INTO users (id, email, full_name, password_hash, role, school_id, is_active)
+           VALUES ($1, $2, $3, $4, 'manager', $5, true)
+           RETURNING id, email, full_name, role, school_id""",
+        str(uuid_lib.uuid4()), manager_data.email, manager_data.full_name, hash_password(manager_data.password), school_id,
+    )
+    return {**dict(manager_user), "plain_password": manager_data.password}
 
 
 @router.put("/schools/{school_id}")

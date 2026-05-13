@@ -56,6 +56,121 @@ class ExamGenerationRequest(BaseModel):
 
 
 # ============================================
+# TEACHER DASHBOARD
+# ============================================
+
+@router.get("/dashboard/{teacher_id}")
+async def get_teacher_dashboard(teacher_id: str):
+    """Aggregated dashboard stats for a teacher."""
+    await ensure_homework_schema()
+
+    # Classes + student counts (same logic as get_teacher_classes)
+    classes = await execute_query(
+        """
+        SELECT c.id, c.name, c.grade_level, c.section,
+               b.name AS branch_name, sc.name AS school_name,
+               COUNT(DISTINCT e.student_id) AS student_count
+        FROM classes c
+        JOIN branches b ON b.id = c.branch_id
+        JOIN schools sc ON sc.id = b.school_id
+        LEFT JOIN enrollments e ON e.class_id = c.id AND e.is_active = true
+        WHERE c.teacher_id = $1::uuid
+           OR EXISTS (
+               SELECT 1 FROM teacher_class_assignments tca
+               WHERE tca.class_id = c.id AND tca.teacher_id = $1::uuid
+           )
+           OR EXISTS (
+               SELECT 1 FROM teacher_class_subject_assignments tcsa
+               WHERE tcsa.class_id = c.id AND tcsa.teacher_id = $1::uuid
+           )
+        GROUP BY c.id, c.name, c.grade_level, c.section, b.name, sc.name
+        ORDER BY c.name
+        """,
+        teacher_id,
+    )
+
+    class_ids = [str(r["id"]) for r in classes]
+    total_students = sum(r["student_count"] or 0 for r in classes)
+
+    # Pending homework submissions (submitted, needs review)
+    pending_review = 0
+    if class_ids:
+        row = await execute_one(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM homework_submissions hs
+            JOIN homeworks h ON h.id = hs.homework_id
+            WHERE h.teacher_id = $1::uuid
+              AND hs.submission_status IN ('submitted', 'late')
+            """,
+            teacher_id,
+        )
+        pending_review = int(row["cnt"]) if row else 0
+
+    # Published homeworks count
+    hw_published = 0
+    row2 = await execute_one(
+        "SELECT COUNT(*) AS cnt FROM homeworks WHERE teacher_id = $1::uuid AND status = 'published'",
+        teacher_id,
+    )
+    hw_published = int(row2["cnt"]) if row2 else 0
+
+    # Draft homeworks
+    hw_draft = 0
+    row3 = await execute_one(
+        "SELECT COUNT(*) AS cnt FROM homeworks WHERE teacher_id = $1::uuid AND status = 'draft'",
+        teacher_id,
+    )
+    hw_draft = int(row3["cnt"]) if row3 else 0
+
+    # Recent homework submissions (last 5)
+    recent_submissions = await execute_query(
+        """
+        SELECT hs.id, hs.submission_status, hs.submitted_at, hs.is_late,
+               u.full_name AS student_name,
+               h.title AS homework_title, h.id AS homework_id, h.class_id
+        FROM homework_submissions hs
+        JOIN homeworks h ON h.id = hs.homework_id
+        JOIN users u ON u.id = hs.student_id
+        WHERE h.teacher_id = $1::uuid AND hs.submission_status IN ('submitted', 'late')
+        ORDER BY hs.submitted_at DESC
+        LIMIT 5
+        """,
+        teacher_id,
+    )
+
+    # Attendance taken today
+    today = datetime.utcnow().date()
+    att_today = await execute_query(
+        """
+        SELECT DISTINCT class_id FROM attendance
+        WHERE marked_by = $1::uuid AND date = $2
+        """,
+        teacher_id,
+        today,
+    ) if class_ids else []
+    classes_with_attendance_today = {str(r["class_id"]) for r in att_today}
+
+    classes_out = []
+    for c in classes:
+        d = dict(c)
+        d["attendance_taken_today"] = str(c["id"]) in classes_with_attendance_today
+        classes_out.append(d)
+
+    return {
+        "stats": {
+            "total_classes": len(classes_out),
+            "total_students": total_students,
+            "pending_review": pending_review,
+            "hw_published": hw_published,
+            "hw_draft": hw_draft,
+        },
+        "classes": classes_out,
+        "recent_submissions": [dict(r) for r in recent_submissions],
+    }
+
+
+# ============================================
 # CLASS MANAGEMENT
 # ============================================
 
@@ -116,6 +231,10 @@ async def get_teacher_classes(teacher_id: str):
                OR EXISTS (
                    SELECT 1 FROM teacher_class_assignments tca
                    WHERE tca.class_id = c.id AND tca.teacher_id = $1::uuid
+               )
+               OR EXISTS (
+                   SELECT 1 FROM teacher_class_subject_assignments tcsa
+                   WHERE tcsa.class_id = c.id AND tcsa.teacher_id = $1::uuid
                )
             GROUP BY c.id, c.name, c.grade_level, c.section, b.name, s.name
             ORDER BY c.name
@@ -239,15 +358,17 @@ async def add_student_to_class(class_id: str, student_data: AddStudentRequest):
 @router.get("/classes/{class_id}/students")
 async def get_class_students(class_id: str):
     """
-    Get all students in a class with performance metrics
+    Get all students in a class with performance metrics and class info
     """
     await ensure_attendance_schema()
     query = """
-        SELECT 
+        SELECT
             u.id,
             u.email,
             u.full_name,
             u.profile_picture_url,
+            c.name AS class_name,
+            c.section,
             e.enrolled_at,
             sp.video_completion_rate,
             COALESCE(att.attendance_rate, sp.attendance_rate, 0) AS attendance_rate,
@@ -258,8 +379,9 @@ async def get_class_students(class_id: str):
             hw.homework_avg_pct AS homework_avg
         FROM enrollments e
         JOIN users u ON e.student_id = u.id
+        JOIN classes c ON e.class_id = c.id
         LEFT JOIN student_performance sp ON (
-            u.id = sp.student_id 
+            u.id = sp.student_id
             AND e.class_id = sp.class_id
             AND sp.date = CURRENT_DATE
         )
@@ -293,7 +415,7 @@ async def get_class_students(class_id: str):
         WHERE e.class_id = $1 AND e.is_active = true
         ORDER BY sp.ranking NULLS LAST, u.full_name
     """
-    
+
     students = await execute_query(query, class_id)
     return [dict(student) for student in students]
 

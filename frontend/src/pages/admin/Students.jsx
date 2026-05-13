@@ -23,6 +23,7 @@ import {
   PencilSquareIcon,
   TrashIcon,
   PlusCircleIcon,
+  KeyIcon,
 } from "@heroicons/react/24/outline";
 
 const COUNTRY_CODES = [
@@ -79,6 +80,12 @@ export default function AdminStudents() {
   const [repairClassId, setRepairClassId] = useState("");
   const [repairSession, setRepairSession] = useState("");
   const [repairSaving, setRepairSaving] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState({});
+  const [editSaving, setEditSaving] = useState(false);
+  const [pwdStudent, setPwdStudent] = useState(null);
+  const [newStudentPassword, setNewStudentPassword] = useState("");
+  const [savingStudentPwd, setSavingStudentPwd] = useState(false);
   const [sectionManagerOpen, setSectionManagerOpen] = useState(false);
   const [sectionSaving, setSectionSaving] = useState(false);
   const [editingSectionId, setEditingSectionId] = useState("");
@@ -462,6 +469,41 @@ export default function AdminStudents() {
       toast.error(err?.response?.data?.detail || "Failed to set enrollment");
     } finally {
       setRepairSaving(false);
+    }
+  };
+
+  const openEditStudent = () => {
+    if (!detail) return;
+    const p = detail.profile;
+    setEditForm({
+      full_name: p.full_name || "",
+      email: p.email || "",
+      student_roll_no: p.student_roll_no || "",
+      guardian_name: p.guardian_name || "",
+      primary_contact: p.primary_contact || "",
+      emergency_contact: p.emergency_contact || "",
+      date_of_birth: p.date_of_birth ? p.date_of_birth.slice(0, 10) : "",
+      gender: p.gender || "",
+      address: p.address || "",
+      blood_group: p.blood_group || "",
+      medical_notes: p.medical_notes || "",
+    });
+    setEditOpen(true);
+  };
+
+  const handleEditStudent = async (e) => {
+    e.preventDefault();
+    if (!selectedStudent) return;
+    setEditSaving(true);
+    try {
+      await adminService.updateStudent(selectedStudent.id, editForm);
+      toast.success("Student updated");
+      setEditOpen(false);
+      await openDetail(selectedStudent);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to update student");
+    } finally {
+      setEditSaving(false);
     }
   };
 
@@ -900,10 +942,47 @@ export default function AdminStudents() {
               <Info label="Name" value={detail.profile.full_name} />
               <Info label="Email" value={detail.profile.email} />
               <Info label="Student ID (Roll No)" value={detail.profile.student_roll_no} />
-              <Info
-                label="Account status"
-                value={detail.profile.is_active ? "Active (can log in)" : "Inactive"}
-              />
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+                <p className="text-xs text-gray-500">Account status</p>
+                <div className="flex items-center justify-between mt-1">
+                  <p className={`font-medium ${detail.profile.is_active ? "text-green-700" : "text-red-600"}`}>
+                    {detail.profile.is_active ? "Active (can log in)" : "Inactive (cannot log in)"}
+                  </p>
+                  {detail.profile.is_active ? (
+                    <button
+                      onClick={async () => {
+                        const ok = window.confirm(`Deactivate ${detail.profile.full_name}? They won't be able to log in.`);
+                        if (!ok) return;
+                        try {
+                          await adminService.deactivateUser(selectedStudent.id);
+                          toast.success("Account deactivated");
+                          await openDetail(selectedStudent);
+                        } catch {
+                          toast.error("Failed to deactivate");
+                        }
+                      }}
+                      className="text-xs px-2 py-1 rounded-lg border border-red-200 text-red-700 hover:bg-red-50"
+                    >
+                      Deactivate
+                    </button>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await adminService.activateUser(selectedStudent.id);
+                          toast.success("Account activated");
+                          await openDetail(selectedStudent);
+                        } catch {
+                          toast.error("Failed to activate");
+                        }
+                      }}
+                      className="text-xs px-2 py-1 rounded-lg border border-green-200 text-green-700 hover:bg-green-50"
+                    >
+                      Activate
+                    </button>
+                  )}
+                </div>
+              </div>
               <Info label="Profile school (record)" value={detail.profile.school_name} />
               <Info label="Profile branch (record)" value={detail.profile.branch_name} />
               <Info label="Guardian" value={detail.profile.guardian_name} />
@@ -912,6 +991,12 @@ export default function AdminStudents() {
               <Info label="DOB" value={detail.profile.date_of_birth} />
             </div>
             <div className="flex flex-wrap gap-2">
+              <button onClick={openEditStudent} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700">
+                <PencilSquareIcon className="h-4 w-4" /> Edit Info
+              </button>
+              <button onClick={() => { setPwdStudent(selectedStudent); setNewStudentPassword(""); }} className="inline-flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700">
+                <KeyIcon className="h-4 w-4" /> Set Password
+              </button>
               <button onClick={() => openActionModal("promote")} className="inline-flex items-center gap-1.5 rounded-lg bg-green-50 px-3 py-1.5 text-xs font-semibold text-green-700">
                 <ArrowUpCircleIcon className="h-4 w-4" /> Promote
               </button>
@@ -1015,6 +1100,119 @@ export default function AdminStudents() {
           />
           <Button onClick={submitRepair} loading={repairSaving} fullWidth>
             Set as Current
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={editOpen}
+        onClose={() => setEditOpen(false)}
+        title="Edit Student"
+        size="xl"
+      >
+        <form onSubmit={handleEditStudent} className="space-y-3 max-h-[70vh] overflow-y-auto">
+          <Input
+            label="Full Name"
+            value={editForm.full_name || ""}
+            onChange={(e) => setEditForm((f) => ({ ...f, full_name: e.target.value }))}
+            required
+          />
+          <Input
+            label="Student ID (Roll No)"
+            value={editForm.student_roll_no || ""}
+            onChange={(e) => setEditForm((f) => ({ ...f, student_roll_no: e.target.value }))}
+            hint="Also used as the login password — update password separately if needed"
+          />
+          <Input
+            label="Email"
+            value={editForm.email || ""}
+            onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
+            hint="Leave blank to keep current email"
+          />
+          <Input
+            label="Guardian Name"
+            value={editForm.guardian_name || ""}
+            onChange={(e) => setEditForm((f) => ({ ...f, guardian_name: e.target.value }))}
+          />
+          <Input
+            label="Primary Contact"
+            value={editForm.primary_contact || ""}
+            onChange={(e) => setEditForm((f) => ({ ...f, primary_contact: e.target.value }))}
+          />
+          <Input
+            label="Emergency Contact"
+            value={editForm.emergency_contact || ""}
+            onChange={(e) => setEditForm((f) => ({ ...f, emergency_contact: e.target.value }))}
+          />
+          <Input
+            label="Date of Birth"
+            type="date"
+            value={editForm.date_of_birth || ""}
+            onChange={(e) => setEditForm((f) => ({ ...f, date_of_birth: e.target.value }))}
+          />
+          <Input
+            label="Gender"
+            value={editForm.gender || ""}
+            onChange={(e) => setEditForm((f) => ({ ...f, gender: e.target.value }))}
+          />
+          <Input
+            label="Address"
+            value={editForm.address || ""}
+            onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))}
+          />
+          <Input
+            label="Blood Group"
+            value={editForm.blood_group || ""}
+            onChange={(e) => setEditForm((f) => ({ ...f, blood_group: e.target.value }))}
+          />
+          <Input
+            label="Medical Notes"
+            value={editForm.medical_notes || ""}
+            onChange={(e) => setEditForm((f) => ({ ...f, medical_notes: e.target.value }))}
+          />
+          <Button type="submit" fullWidth loading={editSaving}>Save Changes</Button>
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(pwdStudent)}
+        onClose={() => setPwdStudent(null)}
+        title={`Set Password — ${pwdStudent?.full_name || ""}`}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">
+            Enter a new password for this student. They will use it to log in.
+          </p>
+          <Input
+            label="New Password"
+            type="password"
+            value={newStudentPassword}
+            onChange={(e) => setNewStudentPassword(e.target.value)}
+            hint="Tip: use their Student ID / Roll No as the password"
+            required
+          />
+          <Button
+            fullWidth
+            loading={savingStudentPwd}
+            onClick={async () => {
+              if (!newStudentPassword || newStudentPassword.length < 4) {
+                toast.error("Password must be at least 4 characters.");
+                return;
+              }
+              setSavingStudentPwd(true);
+              try {
+                await adminService.setStudentPassword(pwdStudent.id, newStudentPassword);
+                toast.success("Password updated. Student can now log in.");
+                setPwdStudent(null);
+                setNewStudentPassword("");
+              } catch (err) {
+                toast.error(err?.response?.data?.detail || "Failed to set password.");
+              } finally {
+                setSavingStudentPwd(false);
+              }
+            }}
+          >
+            Save Password
           </Button>
         </div>
       </Modal>

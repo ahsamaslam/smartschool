@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Link, useParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import homeworkService from "../../services/homeworkService";
 import { PageSpinner } from "../../components/common/Spinner";
 import Alert from "../../components/common/Alert";
 import Button from "../../components/common/Button";
+import { IntegrityTracker } from "../../utils/IntegrityTracker";
 
 const API_BASE = (import.meta.env.VITE_API_URL || "http://localhost:8000/api").replace(
   "/api",
@@ -19,6 +20,11 @@ export default function StudentHomeworkDetail() {
   const [answers, setAnswers] = useState({});
   const [files, setFiles] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+  const [savingProgress, setSavingProgress] = useState(false);
+
+  // Integrity tracking
+  const trackersRef = useRef({});
+  const textareaRefsRef = useRef({});
 
   const load = () => {
     setLoading(true);
@@ -40,6 +46,39 @@ export default function StudentHomeworkDetail() {
     load();
   }, [homeworkId]);
 
+  // Initialize integrity tracking for text questions
+  useEffect(() => {
+    if (!payload?.questions) return;
+
+    payload.questions.forEach((q) => {
+      const isMcq = (q.question_type || "text") === "mcq";
+      if (!isMcq && !trackersRef.current[q.id]) {
+        // Create a tracker for this question
+        trackersRef.current[q.id] = new IntegrityTracker(
+          payload.submission?.id || `temp-${homeworkId}`,
+          q.id,
+          textareaRefsRef.current[q.id]
+        );
+      }
+    });
+
+    // Start tracking after refs are attached (small delay)
+    const startTracking = setTimeout(() => {
+      Object.values(trackersRef.current).forEach((tracker) => {
+        if (tracker && tracker.answerElement) {
+          tracker.startTracking();
+        }
+      });
+    }, 100);
+
+    return () => {
+      clearTimeout(startTracking);
+      Object.values(trackersRef.current).forEach((tracker) => {
+        tracker?.stopTracking();
+      });
+    };
+  }, [payload?.questions, payload?.submission?.id, homeworkId]);
+
   if (loading) return <PageSpinner />;
   if (error || !payload?.homework) {
     return (
@@ -54,9 +93,39 @@ export default function StudentHomeworkDetail() {
 
   const hw = payload.homework;
   const sub = payload.submission;
-  const locked =
-    sub &&
-    ["submitted", "late", "reviewed", "returned"].includes(sub.submission_status);
+  const submittedLock =
+    sub && ["submitted", "late", "reviewed"].includes(sub.submission_status);
+  const now = Date.now();
+  const dueTime = hw.due_at ? new Date(hw.due_at).getTime() : null;
+  const pastDue = dueTime != null && now > dueTime;
+  const allowLate = Boolean(hw.allow_late_submission);
+  const isReturned = sub?.submission_status === "returned";
+  const st = sub?.submission_status || "pending";
+  const deadlineHard =
+    pastDue &&
+    !allowLate &&
+    !isReturned &&
+    (!sub || ["pending", "in_progress"].includes(st));
+  const editable = !submittedLock && !deadlineHard;
+
+  const handleSaveProgress = async () => {
+    if (hw.homework_type !== "interactive") return;
+    const list = (payload.questions || []).map((q) => ({
+      homework_question_id: q.id,
+      answer_text: answers[q.id] || "",
+    }));
+    setSavingProgress(true);
+    try {
+      await homeworkService.saveProgress(hw.id, list);
+      toast.success("Progress saved");
+      load();
+    } catch (e) {
+      const d = e?.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Could not save progress");
+    } finally {
+      setSavingProgress(false);
+    }
+  };
 
   const handleSubmitInteractive = async (e) => {
     e.preventDefault();
@@ -78,11 +147,41 @@ export default function StudentHomeworkDetail() {
         homework_question_id: q.id,
         answer_text: answers[q.id] || "",
       }));
+
+      // Collect integrity reports before submitting
+      const integrityReports = Object.entries(trackersRef.current)
+        .filter(([_, tracker]) => tracker && tracker.answerElement)
+        .map(([qId, tracker]) => tracker.getReport());
+
+      // Send submission with integrity data
       await homeworkService.submitInteractive(hw.id, list);
+
+      // Send integrity reports separately to backend
+      if (integrityReports.length > 0) {
+        try {
+          await fetch(
+            `${(import.meta.env.VITE_API_URL || "http://localhost:8000/api")}/homework/submissions/integrity`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({
+                homework_id: hw.id,
+                reports: integrityReports,
+              }),
+            }
+          );
+        } catch (err) {
+          console.warn("Could not submit integrity data:", err);
+          // Don't fail submission if integrity reporting fails
+        }
+      }
+
       toast.success("Submitted");
       load();
-    } catch {
-      toast.error("Submit failed");
+    } catch (e) {
+      const d = e?.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Submit failed");
     } finally {
       setSubmitting(false);
     }
@@ -100,8 +199,9 @@ export default function StudentHomeworkDetail() {
       toast.success("Files uploaded");
       setFiles([]);
       load();
-    } catch {
-      toast.error("Upload failed");
+    } catch (e) {
+      const d = e?.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Upload failed");
     } finally {
       setSubmitting(false);
     }
@@ -129,8 +229,16 @@ export default function StudentHomeworkDetail() {
           <p className="text-sm text-gray-600 mt-3 whitespace-pre-wrap">{hw.instructions}</p>
         )}
         <div className="mt-4 flex flex-wrap gap-3 text-xs text-gray-500">
+          <span>Subject: {hw.subject_name || "—"}</span>
+          <span>Book: {hw.book_title || "—"}</span>
           <span>Topic: {hw.topic_title || "—"}</span>
-          {hw.due_at && <span>Due: {new Date(hw.due_at).toLocaleString()}</span>}
+          <span>Teacher: {hw.teacher_name || "—"}</span>
+          {hw.due_at && (
+            <span>
+              Due: {new Date(hw.due_at).toLocaleString()}
+              {allowLate ? " · Late submission allowed" : ""}
+            </span>
+          )}
           {hw.total_marks != null && <span>Total marks: {hw.total_marks}</span>}
         </div>
         {sub && (
@@ -140,6 +248,18 @@ export default function StudentHomeworkDetail() {
             {sub.is_late ? " · Late" : ""}
           </p>
         )}
+        {submittedLock && (
+          <p className="mt-3 text-sm text-gray-600">
+            This homework is submitted or graded — answers and files are locked.
+          </p>
+        )}
+        {deadlineHard && !submittedLock && (
+          <Alert
+            type="warning"
+            className="mt-3"
+            message="Submission deadline has passed. You can no longer save drafts or submit unless your teacher allows late submission or returns the work for correction."
+          />
+        )}
         {sub?.teacher_feedback && (
           <div className="mt-4 rounded-xl bg-gray-50 border border-gray-100 p-4 text-sm">
             <p className="text-xs font-semibold text-gray-500 uppercase">Teacher feedback</p>
@@ -148,7 +268,24 @@ export default function StudentHomeworkDetail() {
         )}
       </div>
 
-      {hw.homework_type === "interactive" && (
+      {hw.homework_type === "interactive" && !(payload.questions || []).length && (
+        <Alert
+          type="warning"
+          className="mb-6"
+          message="There are no questions on this homework yet. Your teacher may still be editing it. Check back later, or ask them to add questions in the homework editor and publish. You should still see the title and any instructions above."
+        />
+      )}
+
+      {hw.homework_type === "interactive" && (payload.questions || []).length > 0 && (
+        <>
+          <h2 className="text-lg font-bold text-gray-900 mb-1">Your questions</h2>
+          <p className="text-sm text-gray-600 mb-4">
+            Type your answers or select options, then use <strong>Save progress</strong> or <strong>Submit all answers</strong>.
+          </p>
+        </>
+      )}
+
+      {hw.homework_type === "interactive" && (payload.questions || []).length > 0 && (
         <form onSubmit={handleSubmitInteractive} className="space-y-6">
           {(payload.questions || []).map((q) => {
             const isMcq = (q.question_type || "text") === "mcq";
@@ -171,7 +308,7 @@ export default function StudentHomeworkDetail() {
                       <input
                         type="radio"
                         name={`hq-${q.id}`}
-                        disabled={locked}
+                        disabled={!editable}
                         checked={String(answers[q.id]) === String(oi)}
                         onChange={() =>
                           setAnswers((prev) => ({ ...prev, [q.id]: String(oi) }))
@@ -184,29 +321,56 @@ export default function StudentHomeworkDetail() {
                 </div>
               ) : (
               <textarea
-                required={!locked && !isMcq}
-                disabled={locked}
+                ref={(el) => {
+                  if (el) {
+                    textareaRefsRef.current[q.id] = el;
+                    // Reinitialize tracker if refs changed
+                    if (!trackersRef.current[q.id]) {
+                      trackersRef.current[q.id] = new IntegrityTracker(
+                        payload.submission?.id || `temp-${homeworkId}`,
+                        q.id,
+                        el
+                      );
+                      trackersRef.current[q.id].startTracking();
+                    }
+                  }
+                }}
+                required={editable && !isMcq}
+                disabled={!editable}
                 value={answers[q.id] || ""}
-                onChange={(e) =>
-                  setAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
-                }
-                className="mt-3 w-full min-h-[100px] rounded-xl border border-gray-200 px-3 py-2 text-sm"
-                placeholder="Your answer"
+                onChange={(e) => {
+                  setAnswers((prev) => ({ ...prev, [q.id]: e.target.value }));
+                  e.target.style.height = "auto";
+                  e.target.style.height = e.target.scrollHeight + "px";
+                }}
+                rows={4}
+                className="mt-3 w-full rounded-xl border border-gray-200 px-3 py-2 text-sm resize-none overflow-hidden"
+                placeholder="Write your answer here…"
+                style={{ minHeight: "100px" }}
               />
               )}
             </div>
             );
           })}
-          {!locked && (
-            <Button type="submit" variant="primary" loading={submitting}>
-              Submit all answers
-            </Button>
+          {editable && (
+            <div className="flex flex-wrap gap-3 pt-2">
+              <Button type="button" variant="secondary" loading={savingProgress} onClick={handleSaveProgress}>
+                Save progress
+              </Button>
+              <Button type="submit" variant="primary" loading={submitting}>
+                Submit all answers
+              </Button>
+            </div>
           )}
         </form>
       )}
 
       {hw.homework_type === "upload" && (
         <form onSubmit={handleSubmitUpload} className="space-y-4">
+          <h2 className="text-lg font-bold text-gray-900 mb-1">Your submission</h2>
+          <p className="text-sm text-gray-600 mb-2">
+            Follow the instructions above, choose file(s), then <strong>Submit files</strong>.
+          </p>
           {hw.allowed_file_extensions && (
             <p className="text-xs text-gray-500">
               Allowed types: {hw.allowed_file_extensions}
@@ -231,7 +395,7 @@ export default function StudentHomeworkDetail() {
               </ul>
             </div>
           )}
-          {!locked && (
+          {editable && (
             <>
               <input
                 type="file"

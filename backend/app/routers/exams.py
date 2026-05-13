@@ -2,11 +2,13 @@
 Exam Module Router
 Handles AI-generated and manual exam papers for teachers.
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, File, UploadFile
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import json
 import logging
+import os
+import uuid
 from uuid import NAMESPACE_URL, uuid5
 
 from app.utils.database import execute_query, execute_one, execute_write
@@ -1031,3 +1033,215 @@ async def get_my_exam_result(
         "passed": percentage >= 50,
         "answers": [dict(a) for a in answers],
     }
+
+
+@router.post("/submissions/integrity")
+async def submit_exam_integrity_report(
+    body: dict,
+    user: dict = Depends(get_user_from_token),
+):
+    """Store integrity tracking data for exam submission."""
+    if user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    exam_id = body.get("exam_id")
+    reports = body.get("reports", [])
+
+    if not exam_id or not reports:
+        return {"status": "ok"}
+
+    # Create integrity tracking table for exams if not exists
+    await execute_write(
+        """
+        CREATE TABLE IF NOT EXISTS exam_integrity_reports (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            exam_id UUID NOT NULL REFERENCES exams(id),
+            student_id UUID NOT NULL REFERENCES users(id),
+            question_id UUID,
+            paste_events JSONB,
+            typing_analysis JSONB,
+            focus_losses JSONB,
+            draft_history JSONB,
+            flags JSONB,
+            risk_level VARCHAR(20),
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+        """
+    )
+
+    student_id = user["user_id"]
+
+    # Store each report
+    for report in reports:
+        await execute_write(
+            """
+            INSERT INTO exam_integrity_reports
+            (exam_id, student_id, question_id, paste_events, typing_analysis,
+             focus_losses, draft_history, flags, risk_level)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            """,
+            exam_id,
+            student_id,
+            report.get("questionId"),
+            json.dumps(report.get("pasteEvents", [])),
+            json.dumps(report.get("typingAnalysis", {})),
+            json.dumps(report.get("focusLosses", [])),
+            json.dumps(report.get("draftHistory", [])),
+            json.dumps(report.get("flags", [])),
+            report.get("riskLevel"),
+        )
+
+    return {"status": "ok", "stored": len(reports)}
+
+
+@router.get("/{exam_id}/integrity-reports")
+async def get_exam_integrity_reports(
+    exam_id: str,
+    user: dict = Depends(get_user_from_token),
+):
+    """Get integrity reports for all submissions of an exam (teacher/admin only)."""
+    if user.get("role") not in ("teacher", "admin"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # Verify teacher owns this exam
+    exam = await execute_one(
+        "SELECT id, teacher_id FROM exams WHERE id = $1::uuid",
+        exam_id,
+    )
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+
+    if user.get("role") != "admin" and str(exam["teacher_id"]) != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # Get all integrity reports grouped by submission
+    reports = await execute_query(
+        """
+        SELECT
+            ir.id,
+            ir.student_id,
+            u.full_name,
+            u.email,
+            ir.question_id,
+            ir.paste_events,
+            ir.typing_analysis,
+            ir.focus_losses,
+            ir.flags,
+            ir.risk_level,
+            ir.created_at,
+            sea.is_correct
+        FROM exam_integrity_reports ir
+        JOIN users u ON u.id = ir.student_id
+        LEFT JOIN student_exam_answers sea ON sea.exam_id = ir.exam_id AND sea.student_id = ir.student_id
+        WHERE ir.exam_id = $1::uuid
+        ORDER BY ir.created_at DESC, ir.student_id
+        """,
+        exam_id,
+    )
+
+    # Group by student
+    grouped = {}
+    for row in reports:
+        sid = str(row["student_id"])
+        if sid not in grouped:
+            grouped[sid] = {
+                "student_id": sid,
+                "student_name": row["full_name"],
+                "student_email": row["email"],
+                "reports": [],
+            }
+        grouped[sid]["reports"].append({
+            "id": str(row["id"]),
+            "question_id": str(row["question_id"]) if row["question_id"] else None,
+            "paste_events": row["paste_events"] or [],
+            "typing_analysis": row["typing_analysis"] or {},
+            "focus_losses": row["focus_losses"] or [],
+            "flags": row["flags"] or [],
+            "risk_level": row["risk_level"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        })
+
+    return {"data": list(grouped.values())}
+
+
+@router.post("/{exam_id}/submit-files")
+async def submit_exam_files(
+    exam_id: str,
+    user: dict = Depends(get_user_from_token),
+    files: List[UploadFile] = File(...),
+):
+    """Student submits exam via file upload."""
+    if user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    student_id = user["user_id"]
+
+    exam = await execute_one(
+        "SELECT id, class_id FROM exams WHERE id = $1::uuid",
+        exam_id,
+    )
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+
+    # Check if student can access this exam (enrolled in class)
+    enrollment = await execute_one(
+        "SELECT id FROM enrollments WHERE student_id = $1::uuid AND class_id = $2::uuid AND is_active = true",
+        student_id,
+        exam["class_id"],
+    )
+    if not enrollment:
+        raise HTTPException(status_code=403, detail="Not enrolled in this class")
+
+    # Create or update submission record
+    assignment = await execute_one(
+        "SELECT id FROM student_exam_assignments WHERE student_id = $1::uuid AND exam_id = $2::uuid",
+        student_id,
+        exam_id,
+    )
+
+    submission_id = str(assignment["id"]) if assignment else str(uuid.uuid4())
+
+    # Create folder for uploads
+    folder = os.path.join("static", "exam_uploads", submission_id)
+    os.makedirs(folder, exist_ok=True)
+
+    stored = []
+    for f in files:
+        fname = f"{uuid.uuid4().hex}_{f.filename}"
+        path = os.path.join(folder, fname)
+        content = await f.read()
+        with open(path, "wb") as out:
+            out.write(content)
+        rel = f"/static/exam_uploads/{submission_id}/{fname}"
+        stored.append(
+            {
+                "path": rel,
+                "original_name": f.filename or fname,
+                "mime": f.content_type or "application/octet-stream",
+            }
+        )
+
+    # Store files as JSON
+    if assignment:
+        await execute_write(
+            """
+            UPDATE student_exam_assignments
+            SET upload_files_json = $2::jsonb, submitted_at = NOW(), status = 'submitted'
+            WHERE id = $1::uuid
+            """,
+            assignment["id"],
+            json.dumps(stored),
+        )
+    else:
+        await execute_write(
+            """
+            INSERT INTO student_exam_assignments (id, student_id, exam_id, status, submitted_at, upload_files_json)
+            VALUES ($1::uuid, $2::uuid, $3::uuid, 'submitted', NOW(), $4::jsonb)
+            """,
+            submission_id,
+            student_id,
+            exam_id,
+            json.dumps(stored),
+        )
+
+    return {"ok": True, "submission_id": submission_id, "files": stored}

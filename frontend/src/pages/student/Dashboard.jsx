@@ -5,6 +5,7 @@ import studentService from "../../services/studentService";
 import learningService from "../../services/learningService";
 import SubjectCard from "../../components/student/SubjectCard";
 import PerformanceChart from "../../components/student/PerformanceChart";
+import AttendanceBarChart from "../../components/student/AttendanceBarChart";
 import { PageSpinner } from "../../components/common/Spinner";
 import Alert from "../../components/common/Alert";
 import { ChevronRightIcon } from "@heroicons/react/24/outline";
@@ -13,6 +14,7 @@ export default function StudentDashboard() {
   const { user } = useAuth();
   const [subjects, setSubjects] = useState([]);
   const [learnSummary, setLearnSummary] = useState(null);
+  const [attendanceSummary, setAttendanceSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -22,10 +24,12 @@ export default function StudentDashboard() {
     Promise.all([
       studentService.getDashboard(user.id).catch(() => ({ data: {} })),
       learningService.getDashboardSummary().catch(() => null),
+      studentService.getAttendanceSummary(user.id).catch(() => ({ data: null })),
     ])
-      .then(([dash, summary]) => {
+      .then(([dash, summary, attendance]) => {
         setSubjects(dash.data?.subjects || []);
         setLearnSummary(summary?.data || null);
+        setAttendanceSummary(attendance?.data || null);
       })
       .catch(() => setError("Failed to load dashboard."))
       .finally(() => setLoading(false));
@@ -109,6 +113,121 @@ export default function StudentDashboard() {
           <p className="text-sm text-gray-500 mt-1">
             Finalized for your enrolled sections.
           </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 mb-8">
+        <div className="xl:col-span-2 bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">
+              Attendance
+            </h2>
+            <p className="text-sm font-semibold text-gray-700">
+              Overall: {attendanceSummary?.overall?.attendance_percent ?? 0}%
+            </p>
+          </div>
+          <AttendanceBarChart data={attendanceSummary?.graph || []} />
+        </div>
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+          <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide mb-3">
+            Attendance Summary
+          </h3>
+          <div className="space-y-3">
+            <div className="rounded-xl border border-gray-200 px-3 py-2">
+              <p className="text-xs text-gray-500">Present</p>
+              <p className="text-2xl font-bold text-green-700">
+                {attendanceSummary?.overall?.present_days ?? 0}
+              </p>
+            </div>
+            <div className="rounded-xl border border-gray-200 px-3 py-2">
+              <p className="text-xs text-gray-500">Total Classes Marked</p>
+              <p className="text-2xl font-bold text-gray-900">
+                {attendanceSummary?.overall?.total_days ?? 0}
+              </p>
+            </div>
+            <div className="rounded-xl border border-gray-200 px-3 py-2">
+              <p className="text-xs text-gray-500">Attendance %</p>
+              <p className="text-2xl font-bold text-indigo-700">
+                {attendanceSummary?.overall?.attendance_percent ?? 0}%
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden mb-8">
+        <div className="px-5 py-4 border-b border-gray-100">
+          <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">
+            Current Course Enrolled
+          </h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                <th className="text-left px-4 py-3">Course Name</th>
+                <th className="text-left px-4 py-3">Teacher Name</th>
+                <th className="text-left px-4 py-3">Type</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {(attendanceSummary?.courses || []).map((c) => (
+                <tr key={c.class_id}>
+                  <td className="px-4 py-3 font-medium text-gray-900">{c.class_name}</td>
+                  <td className="px-4 py-3 text-gray-800">{c.teacher_name}</td>
+                  <td className="px-4 py-3 text-gray-700">{c.teaching_type}</td>
+                </tr>
+              ))}
+              {(attendanceSummary?.courses || []).length === 0 && (
+                <tr>
+                  <td className="px-4 py-6 text-center text-gray-400" colSpan={3}>
+                    No enrolled classes found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden mb-8">
+        <div className="px-5 py-4 border-b border-gray-100">
+          <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">
+            Attendance by Teacher
+          </h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                <th className="text-left px-4 py-3">Teacher Name</th>
+                <th className="text-left px-4 py-3">T/L</th>
+                <th className="text-left px-4 py-3">P</th>
+                <th className="text-left px-4 py-3">A</th>
+                <th className="text-left px-4 py-3">%</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {(attendanceSummary?.courses || []).map((c) => (
+                <tr key={`${c.class_id}-attendance`}>
+                  <td className="px-4 py-3 font-medium text-gray-900">{c.teacher_name}</td>
+                  <td className="px-4 py-3 text-gray-700">{c.teaching_type}</td>
+                  <td className="px-4 py-3 text-gray-700">{c.present_days}</td>
+                  <td className="px-4 py-3 text-gray-700">{c.absent_days}</td>
+                  <td className="px-4 py-3 font-semibold text-indigo-700">
+                    {Number(c.attendance_percent || 0).toFixed(2)}
+                  </td>
+                </tr>
+              ))}
+              {(attendanceSummary?.courses || []).length === 0 && (
+                <tr>
+                  <td className="px-4 py-6 text-center text-gray-400" colSpan={5}>
+                    Attendance has not been marked yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

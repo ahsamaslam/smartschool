@@ -189,10 +189,37 @@ export default function ExamEditor() {
     <>
       {/* ── Print styles ── */}
       <style>{`
+        @page {
+          size: A4;
+          margin: 10mm;
+        }
         @media print {
+          * { margin: 0 !important; padding: 0 !important; }
+          body { background: white !important; margin: 0 !important; padding: 0 !important; }
+          html { margin: 0 !important; padding: 0 !important; background: white !important; }
+
+          /* Hide all UI elements */
           .no-print { display: none !important; }
-          .print-area { display: block !important; }
-          body { background: white; }
+          nav { display: none !important; }
+          header { display: none !important; }
+          aside { display: none !important; }
+          [role="navigation"] { display: none !important; }
+          .sidebar { display: none !important; }
+          .navbar { display: none !important; }
+          .topbar { display: none !important; }
+
+          /* Show only print area */
+          .print-area {
+            display: block !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+            height: auto !important;
+            position: static !important;
+          }
+
+          /* Hide scrollbars and overflow */
+          body, html { overflow: visible !important; }
         }
         @media screen {
           .print-area { display: none; }
@@ -919,10 +946,14 @@ function PrintView({ exam, questions }) {
     <div
       style={{
         fontFamily: "serif",
-        padding: "40px",
-        maxWidth: "800px",
+        padding: "15mm 20mm",
+        width: "100%",
+        maxWidth: "210mm",
         margin: "0 auto",
         color: "#000",
+        lineHeight: "1.4",
+        pageBreakAfter: "always",
+        boxSizing: "border-box",
       }}
     >
       {/* Header */}
@@ -973,8 +1004,8 @@ function PrintView({ exam, questions }) {
       </div>
 
       {/* Sections */}
-      {typesUsed.map((type) => (
-        <div key={type} style={{ marginBottom: "24px" }}>
+      {typesUsed.map((type, typeIdx) => (
+        <div key={type} style={{ marginBottom: "24px", pageBreakInside: "avoid", pageBreakBefore: typeIdx > 0 ? "auto" : "avoid" }}>
           <h2
             style={{
               fontSize: "13px",
@@ -983,6 +1014,8 @@ function PrintView({ exam, questions }) {
               borderBottom: "1px solid #000",
               paddingBottom: "4px",
               marginBottom: "12px",
+              marginTop: typeIdx > 0 ? "0" : "0",
+              pageBreakBefore: typeIdx > 0 ? "auto" : "avoid",
             }}
           >
             Section: {TYPE_LABEL[type]}
@@ -990,7 +1023,7 @@ function PrintView({ exam, questions }) {
           {grouped[type].map((q, idx) => {
             const num = numbered.find((n) => n.id === q.id)?._num || idx + 1;
             return (
-              <div key={q.id} style={{ marginBottom: "16px" }}>
+              <div key={q.id} style={{ marginBottom: "16px", pageBreakInside: "avoid", breakInside: "avoid" }}>
                 <p
                   style={{
                     fontSize: "12px",

@@ -6,6 +6,8 @@ import { PageSpinner } from "../../components/common/Spinner";
 import Modal from "../../components/common/Modal";
 import Button from "../../components/common/Button";
 import toast from "react-hot-toast";
+import adminService from "../../services/adminService";
+import Input from "../../components/common/Input";
 import {
   AcademicCapIcon,
   PlusIcon,
@@ -14,6 +16,7 @@ import {
   PencilSquareIcon,
   TrashIcon,
   EyeIcon,
+  KeyIcon,
 } from "@heroicons/react/24/outline";
 import TeacherProfileModal from "../../components/admin/TeacherProfileModal";
 import { setAdminPreviewTeacher } from "../../utils/adminPreviewTeacher";
@@ -21,26 +24,39 @@ import { setAdminPreviewTeacher } from "../../utils/adminPreviewTeacher";
 export default function AdminTeachers() {
   const navigate = useNavigate();
   const [teachers, setTeachers] = useState([]);
+  const [schools, setSchools] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [filterSchoolId, setFilterSchoolId] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState(null);
   const [selectedTeacher, setSelectedTeacher] = useState(null);
+  const [pwdTeacher, setPwdTeacher] = useState(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [savingPwd, setSavingPwd] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletingTeacher, setDeletingTeacher] = useState(null);
 
   const loadTeachers = () => {
     setLoading(true);
-    api
-      .get("/admins/users", { params: { role: "teacher" } })
-      .then((res) =>
+    Promise.all([
+      api.get("/admins/users", { params: { role: "teacher" } }),
+      api.get("/admins/schools")
+    ])
+      .then(([teachersRes, schoolsRes]) => {
         setTeachers(
-          (res.data || []).map((teacher) => ({
+          (teachersRes.data || []).map((teacher) => ({
             ...teacher,
             subjects: normalizeStringArray(teacher.subjects),
             subject_names: normalizeStringArray(teacher.subject_names),
           })),
-        ),
-      )
-      .catch(() => setTeachers([]))
+        );
+        setSchools(schoolsRes.data || []);
+      })
+      .catch(() => {
+        setTeachers([]);
+        setSchools([]);
+      })
       .finally(() => setLoading(false));
   };
 
@@ -49,10 +65,26 @@ export default function AdminTeachers() {
   }, []);
 
   const filtered = teachers.filter(
-    (t) =>
-      t.full_name?.toLowerCase().includes(search.toLowerCase()) ||
-      t.email?.toLowerCase().includes(search.toLowerCase())
+    (t) => {
+      const matchesSearch = t.full_name?.toLowerCase().includes(search.toLowerCase()) ||
+        t.email?.toLowerCase().includes(search.toLowerCase());
+      const matchesSchool = !filterSchoolId || t.school_id === filterSchoolId;
+      return matchesSearch && matchesSchool;
+    }
   );
+
+  const handleDeleteTeacher = async () => {
+    if (!deletingTeacher?.id) return;
+    try {
+      await adminService.deactivateUser(deletingTeacher.id);
+      toast.success("Teacher deleted successfully!");
+      setShowDeleteConfirm(false);
+      setDeletingTeacher(null);
+      loadTeachers();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to delete teacher");
+    }
+  };
 
   if (loading) return <PageSpinner />;
 
@@ -84,16 +116,30 @@ export default function AdminTeachers() {
         initialData={editingTeacher}
       />
 
-      {/* Search */}
-      <div className="relative mb-5 max-w-sm">
-        <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
-        <input
-          type="text"
-          placeholder="Search teachers…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-9 pr-4 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-        />
+      {/* Filters */}
+      <div className="flex gap-3 mb-5">
+        <select
+          value={filterSchoolId}
+          onChange={(e) => setFilterSchoolId(e.target.value)}
+          className="rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+        >
+          <option value="">All Schools</option>
+          {schools.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+        <div className="relative flex-1 max-w-sm">
+          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Search teachers…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+          />
+        </div>
       </div>
 
       {/* Table */}
@@ -119,16 +165,16 @@ export default function AdminTeachers() {
                   Email
                 </th>
                 <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  School
+                </th>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  Branch
+                </th>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   Designation
                 </th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  Subjects
-                </th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">
                   Status
-                </th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  Joined
                 </th>
                 <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   Actions
@@ -155,12 +201,15 @@ export default function AdminTeachers() {
                     </span>
                   </td>
                   <td className="px-5 py-3 text-sm text-gray-700">
-                    {formatDesignation(teacher.designation) || "—"}
+                    {teacher.school_name || "—"}
                   </td>
                   <td className="px-5 py-3 text-sm text-gray-700">
-                    {renderSubjectSummary(teacher.subject_names)}
+                    {teacher.branch_name || "—"}
                   </td>
-                  <td className="px-5 py-3">
+                  <td className="px-5 py-3 text-sm text-gray-700">
+                    {formatDesignation(teacher.designation) || "—"}
+                  </td>
+                  <td className="px-5 py-3 hidden lg:table-cell">
                     <span
                       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                         teacher.is_active
@@ -171,29 +220,8 @@ export default function AdminTeachers() {
                       {teacher.is_active ? "Active" : "Inactive"}
                     </span>
                   </td>
-                  <td className="px-5 py-3 text-sm text-gray-400">
-                    {teacher.created_at
-                      ? new Date(teacher.created_at).toLocaleDateString()
-                      : "—"}
-                  </td>
                   <td className="px-5 py-3">
-                    <div className="flex items-center justify-end gap-2">
-                      <button
-                        className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-50"
-                        onClick={() => {
-                          setAdminPreviewTeacher(teacher.id, teacher.full_name);
-                          navigate(`/admin/teachers/${teacher.id}/sections`);
-                        }}
-                      >
-                        Sections
-                      </button>
-                      <button
-                        className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
-                        onClick={() => setSelectedTeacher(teacher)}
-                      >
-                        <EyeIcon className="h-3.5 w-3.5" />
-                        Teacher Info
-                      </button>
+                    <div className="flex items-center justify-end gap-2 flex-wrap">
                       <button
                         className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
                         onClick={() => {
@@ -206,17 +234,9 @@ export default function AdminTeachers() {
                       </button>
                       <button
                         className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
-                        onClick={async () => {
-                          const ok = window.confirm(`Delete teacher "${teacher.full_name}"?`);
-                          if (!ok) return;
-                          try {
-                            await api.delete(`/admins/users/${teacher.id}`);
-                            toast.success("Teacher deleted");
-                            if (selectedTeacher?.id === teacher.id) setSelectedTeacher(null);
-                            loadTeachers();
-                          } catch {
-                            toast.error("Failed to delete teacher");
-                          }
+                        onClick={() => {
+                          setDeletingTeacher(teacher);
+                          setShowDeleteConfirm(true);
                         }}
                       >
                         <TrashIcon className="h-3.5 w-3.5" />
@@ -276,6 +296,83 @@ export default function AdminTeachers() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(pwdTeacher)}
+        onClose={() => setPwdTeacher(null)}
+        title={`Set Password — ${pwdTeacher?.full_name || ""}`}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">
+            Enter a new password for this teacher. They will use it to log in.
+          </p>
+          <Input
+            label="New Password"
+            type="password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            hint="Tip: use their Employee ID as the password"
+            required
+          />
+          <Button
+            fullWidth
+            loading={savingPwd}
+            onClick={async () => {
+              if (!newPassword || newPassword.length < 4) {
+                toast.error("Password must be at least 4 characters.");
+                return;
+              }
+              setSavingPwd(true);
+              try {
+                await adminService.setUserPassword(pwdTeacher.id, newPassword);
+                toast.success("Password updated. Teacher can now log in.");
+                setPwdTeacher(null);
+                setNewPassword("");
+              } catch (err) {
+                toast.error(err?.response?.data?.detail || "Failed to set password.");
+              } finally {
+                setSavingPwd(false);
+              }
+            }}
+          >
+            Save Password
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showDeleteConfirm}
+        onClose={() => {
+          setShowDeleteConfirm(false);
+          setDeletingTeacher(null);
+        }}
+        title="Delete Teacher"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Are you sure you want to delete <span className="font-semibold">{deletingTeacher?.full_name}</span>? This action cannot be undone.
+          </p>
+          <div className="flex gap-3">
+            <Button
+              variant="secondary"
+              fullWidth
+              onClick={() => {
+                setShowDeleteConfirm(false);
+                setDeletingTeacher(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              fullWidth
+              onClick={handleDeleteTeacher}
+            >
+              Delete
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

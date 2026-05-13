@@ -29,8 +29,15 @@ export default function TeacherHomeworkEditor() {
   const [due, setDue] = useState("");
   const [totalMarks, setTotalMarks] = useState("");
   const [allowedExt, setAllowedExt] = useState("pdf,jpg,jpeg,png");
+  const [allowLate, setAllowLate] = useState(false);
   const [questions, setQuestions] = useState([emptyQuestion()]);
   const [saving, setSaving] = useState(false);
+
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiNumMcq, setAiNumMcq] = useState(4);
+  const [aiNumText, setAiNumText] = useState(2);
+  const [aiDifficulty, setAiDifficulty] = useState("medium");
+  const [aiGenerating, setAiGenerating] = useState(false);
 
   const [boardId, setBoardId] = useState("");
   const [subjectId, setSubjectId] = useState("");
@@ -64,6 +71,7 @@ export default function TeacherHomeworkEditor() {
         setTopicId(h.library_topic_id || "");
         setType(h.homework_type || "interactive");
         if (h.due_at) setDue(h.due_at.slice(0, 16));
+        setAllowLate(Boolean(h.allow_late_submission));
         setTotalMarks(h.total_marks != null ? String(h.total_marks) : "");
         setAllowedExt(h.allowed_file_extensions || "");
         const qs = res.data?.questions || [];
@@ -122,6 +130,7 @@ export default function TeacherHomeworkEditor() {
           total_marks: totalMarks ? Number(totalMarks) : null,
           due_at: due ? new Date(due).toISOString() : null,
           allowed_file_extensions: type === "upload" ? allowedExt : null,
+          allow_late_submission: allowLate,
           questions:
             type === "interactive" ? filled : undefined,
         };
@@ -136,6 +145,7 @@ export default function TeacherHomeworkEditor() {
           total_marks: totalMarks ? Number(totalMarks) : null,
           due_at: due ? new Date(due).toISOString() : null,
           allowed_file_extensions: type === "upload" ? allowedExt : null,
+          allow_late_submission: allowLate,
         });
         if (type === "interactive") {
           const filled = questions.filter((q) => q.question_text.trim()).map(buildQuestionPayload);
@@ -147,6 +157,52 @@ export default function TeacherHomeworkEditor() {
       toast.error("Save failed");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const generateWithAi = async () => {
+    const prompt = aiPrompt.trim();
+    if (!prompt) {
+      toast.error("Enter a topic or paste content for the AI to use.");
+      return;
+    }
+    if (!classId) {
+      toast.error("Missing class.");
+      return;
+    }
+    setAiGenerating(true);
+    try {
+      const res = await homeworkService.aiGenerateDraft({
+        topic_or_content: prompt,
+        class_id: classId,
+        library_topic_id: topicId?.trim() || null,
+        num_mcq: type === "interactive" ? Number(aiNumMcq) || 0 : 0,
+        num_text: type === "interactive" ? Number(aiNumText) || 0 : 0,
+        difficulty: aiDifficulty,
+      });
+      const d = res.data;
+      if (d?.title) setTitle(d.title);
+      if (d?.instructions != null) setInstructions(d.instructions);
+      const qs = d?.questions;
+      if (type === "interactive" && Array.isArray(qs) && qs.length) {
+        setQuestions(qs.map((q) => normalizeQuestionFromApi({
+          question_text: q.question_text,
+          marks: q.marks,
+          question_type: q.question_type,
+          options_json: q.options,
+          correct_option_index: q.correct_option_index,
+        })));
+      }
+      if (type === "interactive" && Array.isArray(qs) && qs.length) {
+        toast.success("Draft generated — review questions, then save draft.");
+      } else {
+        toast.success("Title and instructions updated — review, then save draft.");
+      }
+    } catch (e) {
+      const msg = e?.response?.data?.detail;
+      toast.error(typeof msg === "string" ? msg : "AI generation failed");
+    } finally {
+      setAiGenerating(false);
     }
   };
 
@@ -312,12 +368,86 @@ export default function TeacherHomeworkEditor() {
           </p>
         )}
 
+        <div className="rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50/90 to-white p-5 space-y-4 shadow-sm">
+          <div>
+            <h2 className="text-sm font-bold text-violet-950 uppercase tracking-wide">
+              Generate with AI
+            </h2>
+            <p className="text-xs text-violet-800/90 mt-1">
+              Describe a topic or paste lesson notes. Optionally pick a curriculum topic above — it is sent to the AI
+              for scope. Everything stays a draft until you save.
+            </p>
+          </div>
+          <textarea
+            value={aiPrompt}
+            onChange={(e) => setAiPrompt(e.target.value)}
+            placeholder="e.g. Photosynthesis — stages, chloroplast role, equations… OR paste textbook paragraphs / your outline."
+            className="w-full rounded-xl border border-violet-200 bg-white px-3 py-2 text-sm min-h-[96px]"
+          />
+          {type === "interactive" ? (
+            <div className="grid sm:grid-cols-3 gap-3 items-end">
+              <Input
+                label="MCQ count"
+                type="number"
+                min={0}
+                max={15}
+                value={String(aiNumMcq)}
+                onChange={(e) => setAiNumMcq(Math.min(15, Math.max(0, Number(e.target.value) || 0)))}
+              />
+              <Input
+                label="Written questions"
+                type="number"
+                min={0}
+                max={15}
+                value={String(aiNumText)}
+                onChange={(e) => setAiNumText(Math.min(15, Math.max(0, Number(e.target.value) || 0)))}
+              />
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Difficulty</label>
+                <select
+                  value={aiDifficulty}
+                  onChange={(e) => setAiDifficulty(e.target.value)}
+                  className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm bg-white"
+                >
+                  <option value="easy">Easy</option>
+                  <option value="medium">Medium</option>
+                  <option value="hard">Hard</option>
+                </select>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-600">
+              For <strong>Upload</strong> homework, AI fills the title and instructions from your topic or pasted
+              content (no auto-questions). Switch to <strong>Interactive</strong> to generate MCQs and written
+              questions.
+            </p>
+          )}
+          <Button type="button" variant="secondary" onClick={generateWithAi} loading={aiGenerating}>
+            {type === "interactive" ? "Generate homework draft" : "Generate title & instructions"}
+          </Button>
+        </div>
+
         <Input
           type="datetime-local"
           label="Due date"
           value={due}
           onChange={(e) => setDue(e.target.value)}
         />
+        <label className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer max-w-xl">
+          <input
+            type="checkbox"
+            checked={allowLate}
+            onChange={(e) => setAllowLate(e.target.checked)}
+            className="mt-1 rounded border-gray-300"
+          />
+          <span>
+            <span className="font-medium">Allow late submission</span>
+            <span className="block text-xs text-gray-500 mt-0.5">
+              If unchecked, students cannot save drafts or submit after the due date (unless you return work for
+              correction).
+            </span>
+          </span>
+        </label>
         <Input
           label="Total marks (optional)"
           value={totalMarks}

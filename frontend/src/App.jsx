@@ -44,12 +44,14 @@ const LectureViewer = lazy(() => import("./pages/teacher/LectureViewerPage"));
 const GenerateExam = lazy(() => import("./pages/teacher/GenerateExam"));
 const ExamsPage = lazy(() => import("./pages/teacher/Exams"));
 const ExamEditor = lazy(() => import("./pages/teacher/ExamEditor"));
+const TeacherExamSubmissions = lazy(() => import("./pages/teacher/TeacherExamSubmissions"));
 const TeacherReports = lazy(() => import("./pages/teacher/Reports"));
 const TeacherClassHomework = lazy(() => import("./pages/teacher/TeacherClassHomework"));
 const TeacherHomeworkEditor = lazy(() => import("./pages/teacher/TeacherHomeworkEditor"));
 const TeacherHomeworkSubmissions = lazy(() =>
   import("./pages/teacher/TeacherHomeworkSubmissions"),
 );
+const TeacherHomework = lazy(() => import("./pages/teacher/Homework"));
 const TeacherMyCurriculum = lazy(() => import("./pages/teacher/MyCurriculum"));
 
 // Manager
@@ -88,6 +90,12 @@ const AdminSectionDetail = lazy(() => import("./pages/admin/SectionDetail"));
 const AdminTeacherSectionsPreview = lazy(
   () => import("./pages/admin/AdminTeacherSectionsPreview"),
 );
+
+// Chat
+const StudentChat = lazy(() => import("./pages/student/StudentChat"));
+const TeacherChat = lazy(() => import("./pages/teacher/TeacherChat"));
+const ManagerChat = lazy(() => import("./pages/manager/ManagerChat"));
+const AdminChat = lazy(() => import("./pages/admin/AdminChat"));
 
 // Shared
 const ProfilePage = lazy(() => import("./pages/shared/ProfilePage"));
@@ -145,11 +153,13 @@ export default function App() {
               element={<QuizResults />}
             />
             {/* /student/profile handled by shared ProfilePage below */}
+            <Route path="/student/chat" element={<StudentChat />} />
 
             {/* ── TEACHER (students cannot open these URLs — see TeacherRoute) ── */}
             <Route element={<TeacherRoute />}>
               <Route path="/teacher/dashboard" element={<TeacherDashboard />} />
               <Route path="/teacher/classes" element={<TeacherClasses />} />
+              <Route path="/teacher/homework" element={<TeacherHomework />} />
               <Route path="/teacher/classes/:classId" element={<ClassDetail />} />
               <Route path="/teacher/classes/:classId/homework" element={<TeacherClassHomework />} />
               <Route path="/teacher/classes/:classId/homework/new" element={<TeacherHomeworkEditor />} />
@@ -172,8 +182,10 @@ export default function App() {
               <Route path="/teacher/generate-exam" element={<GenerateExam />} />
               <Route path="/teacher/exams" element={<ExamsPage />} />
               <Route path="/teacher/exams/:examId" element={<ExamEditor />} />
+              <Route path="/teacher/exams/:examId/submissions" element={<TeacherExamSubmissions />} />
               <Route path="/teacher/reports" element={<TeacherReports />} />
               <Route path="/teacher/curriculum" element={<TeacherMyCurriculum />} />
+              <Route path="/teacher/chat" element={<TeacherChat />} />
             </Route>
 
             {/* ── MANAGER ── */}
@@ -198,6 +210,7 @@ export default function App() {
             />
             <Route path="/manager/teachers" element={<ManagerTeachers />} />
             <Route path="/manager/students" element={<ManagerStudents />} />
+            <Route path="/manager/chat" element={<ManagerChat />} />
 
             {/* ── ADMIN ── */}
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
@@ -237,6 +250,7 @@ export default function App() {
               element={<AdminRecordLecture />}
             />
             <Route path="/admin/settings" element={<AdminSettings />} />
+            <Route path="/admin/chat" element={<AdminChat />} />
 
             {/* Profile — shared across all roles */}
             <Route path="/student/profile" element={<ProfilePage />} />

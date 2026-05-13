@@ -97,6 +97,7 @@ const NAV_BY_ROLE = {
     { label: "My Homework", to: "/student/homework", icon: "ClipboardDocumentListIcon" },
     { label: "My Exams", to: "/student/exams", icon: "ClipboardDocumentCheckIcon" },
     { label: "My Enrollment", to: "/student/enrollment", icon: "AcademicCapIcon" },
+    { label: "Messages", to: "/student/chat", icon: "ChatBubbleLeftIcon" },
     { label: "Profile", to: "/student/profile", icon: "UserCircleIcon" },
   ],
   teacher: [
@@ -128,6 +129,7 @@ const NAV_BY_ROLE = {
       to: "/teacher/exams",
       icon: "DocumentTextIcon",
     },
+    { label: "Messages", to: "/teacher/chat", icon: "ChatBubbleLeftIcon" },
     { label: "Reports", to: "/teacher/reports", icon: "ChartBarIcon" },
   ],
   manager: [
@@ -135,6 +137,7 @@ const NAV_BY_ROLE = {
     { label: "My School", to: "/manager/schools", icon: "BuildingOfficeIcon" },
     { label: "Teachers", to: "/manager/teachers", icon: "AcademicCapIcon" },
     { label: "Students", to: "/manager/students", icon: "UserGroupIcon" },
+    { label: "Messages", to: "/manager/chat", icon: "ChatBubbleLeftIcon" },
     { divider: true, label: "Reports" },
     { label: "Student Reports", to: "/manager/student-reports", icon: "ChartBarIcon" },
     { label: "Class Reports", to: "/manager/class-reports", icon: "TableCellsIcon" },
@@ -152,6 +155,7 @@ const NAV_BY_ROLE = {
     { label: "Slides", to: "/admin/slides", icon: "PresentationChartBarIcon" },
     { label: "Recorded lectures", to: "/admin/recorded-lectures", icon: "FilmIcon" },
     { label: "Settings", to: "/admin/settings", icon: "CogIcon" },
+    { label: "Messages", to: "/admin/chat", icon: "ChatBubbleLeftIcon" },
     { divider: true, label: "Teacher" },
     { label: "My Classes", to: "/teacher/classes", icon: "AcademicCapIcon" },
     {

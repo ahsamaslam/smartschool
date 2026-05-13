@@ -49,6 +49,7 @@ export default function TeacherClasses() {
     setLoading(true);
     setError("");
 
+    let fetchTeacherId = user.id;
     if (isAdmin) {
       const previewId = getAdminPreviewTeacherId();
       if (!previewId) {

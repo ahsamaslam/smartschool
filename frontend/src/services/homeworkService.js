@@ -14,6 +14,9 @@ const homeworkService = {
   teacherSubmissions: (homeworkId) =>
     api.get(`${BASE}/teacher/${homeworkId}/submissions`),
 
+  /** AI-generated draft (title, instructions, questions) — not saved until teacher saves draft */
+  aiGenerateDraft: (data) => api.post(`${BASE}/ai/generate-draft`, data),
+
   create: (data) => api.post(BASE, data),
 
   update: (homeworkId, data) => api.patch(`${BASE}/${homeworkId}`, data),
@@ -30,10 +33,17 @@ const homeworkService = {
 
   studentList: () => api.get(`${BASE}/student/list`),
 
+  /** Admin-only: same payload as student list for enrollment + curriculum visibility checks */
+  adminStudentHomeworkList: (studentId) =>
+    api.get(`${BASE}/admin/student/${studentId}/homework-list`),
+
   studentGet: (homeworkId) => api.get(`${BASE}/student/${homeworkId}`),
 
   submitInteractive: (homeworkId, answers) =>
     api.post(`${BASE}/student/${homeworkId}/submit-interactive`, { answers }),
+
+  saveProgress: (homeworkId, answers) =>
+    api.post(`${BASE}/student/${homeworkId}/save-progress`, { answers }),
 
   submitUpload: (homeworkId, files) => {
     const form = new FormData();

@@ -12,6 +12,14 @@ const managerService = {
   // Teachers
   getTeachers: () => api.get(`${API_ROUTES.MANAGERS}/teachers`),
   createTeacher: (data) => api.post(`${API_ROUTES.MANAGERS}/teachers`, data),
+  updateTeacher: (teacherId, data) => api.put(`${API_ROUTES.MANAGERS}/teachers/${teacherId}`, data),
+  deleteTeacher: (teacherId) => api.post(`${API_ROUTES.MANAGERS}/teachers/${teacherId}/remove`),
+  deleteTeachers: (teacherIds) => api.post(`${API_ROUTES.MANAGERS}/teachers/bulk-remove`, { teacher_ids: teacherIds }),
+  importTeachers: (file) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return api.post(`${API_ROUTES.MANAGERS}/import-teachers`, formData);
+  },
   assignTeacherClass: (teacherId, classId) =>
     api.post(`${API_ROUTES.MANAGERS}/teachers/${teacherId}/assign-class`, { class_id: classId }),
 

@@ -1,11 +1,13 @@
 """
 Manager Portal Routes
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 from datetime import datetime, date, timedelta
 import uuid as uuid_lib
+import csv
+import io
 
 from app.utils.database import execute_query, execute_one, execute_write
 from app.routers.auth import get_user_from_token
@@ -25,10 +27,35 @@ class CreateTeacherRequest(BaseModel):
     branch_id: Optional[str] = None
     designation: Optional[str] = None
     contact: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    employment_status: Optional[str] = None
+    date_of_joining: Optional[str] = None
+    qualifications: Optional[str] = None
+    experience_years: Optional[int] = None
+    languages: Optional[str] = None
+
+
+class UpdateTeacherRequest(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
+    branch_id: Optional[str] = None
+    designation: Optional[str] = None
+    contact: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    employment_status: Optional[str] = None
+    date_of_joining: Optional[str] = None
+    qualifications: Optional[str] = None
+    experience_years: Optional[int] = None
+    languages: Optional[str] = None
 
 
 class AssignTeacherClassRequest(BaseModel):
     class_id: str
+
+
+class BulkDeleteTeachersRequest(BaseModel):
+    teacher_ids: list[str]
 
 
 class CreateClassRequest(BaseModel):
@@ -119,28 +146,44 @@ async def get_school_teachers(current_user: dict = Depends(require_manager)):
 
     if school_id:
         teachers = await execute_query(
-            """SELECT u.id, u.full_name, u.email, u.designation, u.contact, u.is_active,
+            """SELECT u.id, u.full_name, u.email, u.is_active, u.branch_id,
+                      u.designation, u.contact, u.emergency_contact, u.employment_status,
+                      u.date_of_joining, u.qualifications, u.experience_years, u.languages,
                       b.name as branch_name,
                       COUNT(DISTINCT c.id) as class_count
                FROM users u
                LEFT JOIN branches b ON b.id = u.branch_id
-               LEFT JOIN classes c ON c.teacher_id = u.id
+               LEFT JOIN classes c ON c.teacher_id = u.id OR c.id IN (
+                   SELECT class_id FROM teacher_class_assignments WHERE teacher_id = u.id
+               ) OR c.id IN (
+                   SELECT class_id FROM teacher_class_subject_assignments WHERE teacher_id = u.id
+               )
                WHERE u.role = 'teacher' AND u.school_id = $1
-               GROUP BY u.id, b.name
+               GROUP BY u.id, u.full_name, u.email, u.is_active, u.branch_id, u.designation, u.contact,
+                        u.emergency_contact, u.employment_status, u.date_of_joining, u.qualifications,
+                        u.experience_years, u.languages, b.name
                ORDER BY u.full_name""",
             school_id,
         )
     else:
         teachers = await execute_query(
-            """SELECT u.id, u.full_name, u.email, u.designation, u.contact, u.is_active,
+            """SELECT u.id, u.full_name, u.email, u.is_active, u.branch_id,
+                      u.designation, u.contact, u.emergency_contact, u.employment_status,
+                      u.date_of_joining, u.qualifications, u.experience_years, u.languages,
                       s.name as school_name, b.name as branch_name,
                       COUNT(DISTINCT c.id) as class_count
                FROM users u
                LEFT JOIN schools s ON s.id = u.school_id
                LEFT JOIN branches b ON b.id = u.branch_id
-               LEFT JOIN classes c ON c.teacher_id = u.id
+               LEFT JOIN classes c ON c.teacher_id = u.id OR c.id IN (
+                   SELECT class_id FROM teacher_class_assignments WHERE teacher_id = u.id
+               ) OR c.id IN (
+                   SELECT class_id FROM teacher_class_subject_assignments WHERE teacher_id = u.id
+               )
                WHERE u.role = 'teacher'
-               GROUP BY u.id, s.name, b.name
+               GROUP BY u.id, u.full_name, u.email, u.is_active, u.branch_id, u.designation, u.contact,
+                        u.emergency_contact, u.employment_status, u.date_of_joining, u.qualifications,
+                        u.experience_years, u.languages, s.name, b.name
                ORDER BY u.full_name""",
         )
     return [dict(t) for t in teachers]
@@ -161,13 +204,262 @@ async def create_school_teacher(body: CreateTeacherRequest, current_user: dict =
             raise HTTPException(status_code=403, detail="Branch does not belong to your school")
 
     teacher = await execute_one(
-        """INSERT INTO users (id, email, full_name, password_hash, role, school_id, branch_id, designation, contact, is_active)
-           VALUES ($1, $2, $3, $4, 'teacher', $5, $6, $7, $8, true)
-           RETURNING id, email, full_name, role, school_id, branch_id, designation, contact""",
+        """INSERT INTO users (id, email, full_name, password_hash, role, school_id, branch_id, is_active,
+                             designation, contact, emergency_contact, employment_status, date_of_joining,
+                             qualifications, experience_years, languages)
+           VALUES ($1, $2, $3, $4, 'teacher', $5, $6, true, $7, $8, $9, $10, $11, $12, $13, $14)
+           RETURNING id, email, full_name, role, school_id, branch_id""",
         str(uuid_lib.uuid4()), body.email, body.full_name, hash_password(body.password),
-        school_id, body.branch_id or None, body.designation or None, body.contact or None,
+        school_id, body.branch_id or None, body.designation, body.contact, body.emergency_contact,
+        body.employment_status, body.date_of_joining, body.qualifications, body.experience_years, body.languages,
     )
     return {**dict(teacher), "plain_password": body.password}
+
+
+@router.post("/import-teachers")
+async def import_teachers_from_file(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_manager),
+):
+    """Import teachers from CSV/Excel file."""
+    school_id = current_user.get("school_id") if current_user.get("role") == "manager" else None
+    if not school_id:
+        raise HTTPException(status_code=403, detail="Manager access required")
+
+    try:
+        contents = await file.read()
+        text = contents.decode("utf-8")
+
+        reader = csv.DictReader(io.StringIO(text))
+        success_count = 0
+        error_count = 0
+        errors = []
+
+        for idx, row in enumerate(reader, start=2):
+            try:
+                full_name = row.get("Full Name", "").strip()
+                email = row.get("Email", "").strip()
+                password = row.get("Password", "").strip()
+                branch_name = row.get("Branch", "").strip()
+
+                if not full_name or not email or not password:
+                    error_count += 1
+                    errors.append(f"Row {idx}: Missing required fields (Full Name, Email, Password)")
+                    continue
+
+                # Check if email already exists
+                existing = await execute_one("SELECT id FROM users WHERE email = $1", email)
+                if existing:
+                    error_count += 1
+                    errors.append(f"Row {idx}: Email {email} already exists")
+                    continue
+
+                # Resolve branch_id from branch_name if provided
+                branch_id = None
+                if branch_name:
+                    branch = await execute_one(
+                        "SELECT id FROM branches WHERE LOWER(name) = LOWER($1) AND school_id = $2",
+                        branch_name, school_id
+                    )
+                    if branch:
+                        branch_id = branch["id"]
+                    else:
+                        error_count += 1
+                        errors.append(f"Row {idx}: Branch '{branch_name}' not found")
+                        continue
+
+                # Get other optional fields
+                designation = row.get("Designation", "").strip() or None
+                contact = row.get("Contact", "").strip() or None
+                emergency_contact = row.get("Emergency Contact", "").strip() or None
+                employment_status = row.get("Employment Status", "").strip() or None
+
+                # Parse date of joining from various formats (relaxed)
+                date_of_joining_sql = "NULL"
+                date_str = row.get("Date of Joining", "").strip()
+                if date_str:
+                    # Try multiple date formats without strict validation
+                    formats = ["%m/%d/%Y", "%Y-%m-%d", "%d/%m/%Y", "%m-%d-%Y"]
+                    parsed_date = None
+                    for fmt in formats:
+                        try:
+                            parsed_date = datetime.strptime(date_str, fmt).date()
+                            date_of_joining_sql = f"'{parsed_date.isoformat()}'"
+                            break
+                        except ValueError:
+                            continue
+                    # If all formats fail, just leave as NULL
+
+                qualifications = row.get("Qualifications", "").strip() or None
+                experience_years = row.get("Experience Years", "").strip()
+                experience_years = int(experience_years) if experience_years else None
+                languages = row.get("Languages", "").strip() or None
+
+                # Create teacher with all fields (date_of_joining as SQL literal to avoid codec issues)
+                teacher_id = str(uuid_lib.uuid4())
+                await execute_write(
+                    f"""INSERT INTO users (id, email, full_name, password_hash, role, school_id, branch_id, is_active,
+                                         designation, contact, emergency_contact, employment_status, date_of_joining,
+                                         qualifications, experience_years, languages)
+                       VALUES ($1, $2, $3, $4, 'teacher', $5, $6, true, $7, $8, $9, $10, {date_of_joining_sql}, $11, $12, $13)""",
+                    teacher_id,
+                    email,
+                    full_name,
+                    hash_password(password),
+                    school_id,
+                    branch_id,
+                    designation,
+                    contact,
+                    emergency_contact,
+                    employment_status,
+                    qualifications,
+                    experience_years,
+                    languages,
+                )
+                success_count += 1
+            except Exception as e:
+                error_count += 1
+                errors.append(f"Row {idx}: {str(e)}")
+
+        return {
+            "success_count": success_count,
+            "error_count": error_count,
+            "errors": errors[:20],  # Return first 20 errors
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to process file: {str(e)}")
+
+
+@router.put("/teachers/{teacher_id}")
+async def update_school_teacher(
+    teacher_id: str,
+    body: UpdateTeacherRequest,
+    current_user: dict = Depends(require_manager),
+):
+    """Update a teacher's information."""
+    school_id = current_user.get("school_id") if current_user.get("role") == "manager" else None
+
+    teacher = await execute_one("SELECT id, school_id FROM users WHERE id = $1 AND role = 'teacher'", teacher_id)
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+
+    if school_id and str(teacher["school_id"]) != str(school_id):
+        raise HTTPException(status_code=403, detail="Access denied to this teacher")
+
+    if body.email:
+        existing = await execute_one("SELECT id FROM users WHERE email = $1 AND id != $2", body.email, teacher_id)
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Email {body.email} is already registered")
+
+    if body.branch_id and school_id:
+        branch = await execute_one("SELECT school_id FROM branches WHERE id = $1", body.branch_id)
+        if not branch or str(branch["school_id"]) != str(school_id):
+            raise HTTPException(status_code=403, detail="Branch does not belong to your school")
+
+    updates = {}
+    if body.full_name is not None:
+        updates["full_name"] = body.full_name
+    if body.email is not None:
+        updates["email"] = body.email
+    if body.password is not None:
+        updates["password_hash"] = hash_password(body.password)
+    if body.branch_id is not None:
+        updates["branch_id"] = body.branch_id
+    if body.designation is not None:
+        updates["designation"] = body.designation
+    if body.contact is not None:
+        updates["contact"] = body.contact
+    if body.emergency_contact is not None:
+        updates["emergency_contact"] = body.emergency_contact
+    if body.employment_status is not None:
+        updates["employment_status"] = body.employment_status
+    if body.date_of_joining is not None:
+        updates["date_of_joining"] = body.date_of_joining
+    if body.qualifications is not None:
+        updates["qualifications"] = body.qualifications
+    if body.experience_years is not None:
+        updates["experience_years"] = body.experience_years
+    if body.languages is not None:
+        updates["languages"] = body.languages
+
+    if not updates:
+        return dict(teacher)
+
+    set_clause = ", ".join([f"{k} = ${i+2}" for i, k in enumerate(updates.keys())])
+    values = list(updates.values()) + [teacher_id]
+    query = f"UPDATE users SET {set_clause} WHERE id = $1 RETURNING id, email, full_name, role, school_id, branch_id"
+
+    updated = await execute_one(query, *values)
+    return dict(updated)
+
+
+@router.post("/teachers/{teacher_id}/remove")
+async def remove_teacher(teacher_id: str, current_user: dict = Depends(require_manager)):
+    """Remove a teacher from the school."""
+    school_id = current_user.get("school_id")
+
+    # Check teacher exists and belongs to manager's school
+    teacher = await execute_one(
+        "SELECT school_id FROM users WHERE id = $1 AND role = 'teacher'",
+        teacher_id
+    )
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+
+    if school_id and str(teacher["school_id"]) != str(school_id):
+        raise HTTPException(status_code=403, detail="Cannot delete teacher from another school")
+
+    # Clean up associations
+    await execute_write("DELETE FROM teacher_class_assignments WHERE teacher_id = $1", teacher_id)
+    await execute_write("DELETE FROM teacher_class_subject_assignments WHERE teacher_id = $1", teacher_id)
+    await execute_write("UPDATE classes SET teacher_id = NULL WHERE teacher_id = $1", teacher_id)
+
+    # Delete the teacher
+    await execute_write("DELETE FROM users WHERE id = $1", teacher_id)
+
+    return {"success": True, "message": "Teacher removed successfully"}
+
+
+@router.post("/teachers/bulk-remove")
+async def bulk_remove_teachers(body: BulkDeleteTeachersRequest, current_user: dict = Depends(require_manager)):
+    """Remove multiple teachers from the school."""
+    school_id = current_user.get("school_id")
+    deleted_count = 0
+    errors = []
+
+    for teacher_id in body.teacher_ids:
+        try:
+            # Check teacher exists and belongs to manager's school
+            teacher = await execute_one(
+                "SELECT school_id FROM users WHERE id = $1 AND role = 'teacher'",
+                teacher_id
+            )
+            if not teacher:
+                errors.append(f"Teacher {teacher_id} not found")
+                continue
+
+            if school_id and str(teacher["school_id"]) != str(school_id):
+                errors.append(f"Cannot delete teacher {teacher_id} from another school")
+                continue
+
+            # Clean up associations
+            await execute_write("DELETE FROM teacher_class_assignments WHERE teacher_id = $1", teacher_id)
+            await execute_write("DELETE FROM teacher_class_subject_assignments WHERE teacher_id = $1", teacher_id)
+            await execute_write("UPDATE classes SET teacher_id = NULL WHERE teacher_id = $1", teacher_id)
+
+            # Delete the teacher
+            await execute_write("DELETE FROM users WHERE id = $1", teacher_id)
+            deleted_count += 1
+        except Exception as e:
+            errors.append(f"Error deleting teacher {teacher_id}: {str(e)}")
+
+    return {
+        "success": True,
+        "deleted_count": deleted_count,
+        "errors": errors,
+        "message": f"Deleted {deleted_count} teacher(s)"
+    }
 
 
 @router.post("/teachers/{teacher_id}/assign-class")
@@ -230,7 +522,7 @@ async def get_school_students(
         f"""SELECT u.id, u.full_name, u.email, u.is_active,
                    c.name as class_name, c.grade_level,
                    b.name as branch_name,
-                   e.created_at as enrolled_at
+                   e.academic_session
             FROM users u
             JOIN enrollments e ON e.student_id = u.id
             JOIN classes c ON c.id = e.class_id
@@ -270,16 +562,25 @@ async def get_school_classes(
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
     classes = await execute_query(
-        f"""SELECT c.id, c.name, c.grade_level, c.section,
+        f"""SELECT DISTINCT c.id, c.name, c.grade_level, c.section,
                    b.name as branch_name, b.id as branch_id,
-                   u.full_name as teacher_name,
+                   COALESCE(u.full_name,
+                       (SELECT full_name FROM users WHERE id IN (
+                           SELECT teacher_id FROM teacher_class_assignments WHERE class_id = c.id LIMIT 1
+                       )),
+                       (SELECT full_name FROM users WHERE id IN (
+                           SELECT teacher_id FROM teacher_class_subject_assignments WHERE class_id = c.id LIMIT 1
+                       ))
+                   ) as teacher_name,
                    COUNT(DISTINCT e.student_id) as student_count
             FROM classes c
             JOIN branches b ON b.id = c.branch_id
             LEFT JOIN users u ON u.id = c.teacher_id
             LEFT JOIN enrollments e ON e.class_id = c.id AND e.is_active = true
+            LEFT JOIN teacher_class_assignments tca ON c.id = tca.class_id
+            LEFT JOIN teacher_class_subject_assignments tcsa ON c.id = tcsa.class_id
             {where_sql}
-            GROUP BY c.id, b.name, b.id, u.full_name
+            GROUP BY c.id, c.name, c.grade_level, c.section, b.name, b.id, u.full_name
             ORDER BY b.name, c.grade_level, c.section, c.name""",
         *params,
     )

@@ -5,6 +5,7 @@ import { Toaster } from "react-hot-toast";
 
 import App from "./App";
 import { AuthProvider } from "./context/AuthContext";
+import { ChatProvider } from "./context/ChatContext";
 import "./index.css";
 
 // React prints a dev-only hint to install browser DevTools — not an error or "loading".
@@ -29,8 +30,9 @@ root.render(
       }}
     >
       <AuthProvider>
-        <App />
-        <Toaster
+        <ChatProvider>
+          <App />
+          <Toaster
           position="top-right"
           toastOptions={{
             duration: 4000,
@@ -44,6 +46,7 @@ root.render(
             error: { iconTheme: { primary: "#ef4444", secondary: "#fff" } },
           }}
         />
+        </ChatProvider>
       </AuthProvider>
     </BrowserRouter>
   </React.StrictMode>,

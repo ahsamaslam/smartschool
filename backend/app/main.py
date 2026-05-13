@@ -28,6 +28,7 @@ from app.routers import (
     library,
     exams,
     homework,
+    chat,
 )
 from app.schemas.slides_ai import GenerateSlidesRequest, GenerateSlidesResponse
 from app.utils.ai_slide_deck import generate_slide_deck as run_generate_slide_deck
@@ -54,15 +55,21 @@ app = FastAPI(
 
 # CORS — browsers require Access-Control-Allow-Origin on API responses from another port (e.g. :3000 → :8000).
 # If .env CORS_ORIGINS is wrong or empty, requests fail with "blocked by CORS policy".
-# In DEBUG we also allow any localhost / 127.0.0.1 origin via regex (covers alternate dev ports).
-_cors_kw = dict(
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# In DEBUG mode, allow all localhost origins to support any dev port.
 if settings.DEBUG:
-    _cors_kw["allow_origin_regex"] = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+    _cors_kw = dict(
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    _cors_kw = dict(
+        allow_origins=settings.cors_origins_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 app.add_middleware(CORSMiddleware, **_cors_kw)
 
@@ -150,15 +157,22 @@ app.include_router(exams.router, prefix="/api/exams", tags=["Exams"])
 # Homework (interactive + upload, topic-scoped)
 app.include_router(homework.router, prefix="/api/homework", tags=["Homework"])
 
+# Chat (academic communication, WebSocket + REST)
+app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
+
 # Spec alias: POST /api/generate-slides (same handler as admin route)
 @app.post("/api/generate-slides", response_model=GenerateSlidesResponse, tags=["AI Slides"])
 async def standalone_generate_slides(body: GenerateSlidesRequest):
     return await run_generate_slide_deck(body)
 
-# Serve generated audio/video/image files
+# Serve generated audio/video/image files + chat uploads
 os.makedirs("static/audio", exist_ok=True)
 os.makedirs("static/videos", exist_ok=True)
 os.makedirs("static/teacher_faces", exist_ok=True)
+os.makedirs("static/chat_uploads", exist_ok=True)
+os.makedirs("static/chat_uploads/images", exist_ok=True)
+os.makedirs("static/chat_uploads/files", exist_ok=True)
+os.makedirs("static/chat_uploads/voice", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ============================================
@@ -220,6 +234,15 @@ async def startup_event():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id UUID REFERENCES branches(id);",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS employee_id VARCHAR(50);",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20);",
+            # Teacher-specific fields
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS designation VARCHAR(100);",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS contact VARCHAR(20);",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS emergency_contact VARCHAR(20);",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_status VARCHAR(50);",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_joining DATE;",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS qualifications TEXT;",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS experience_years INTEGER;",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS languages TEXT;",
             # Design Templates tables
             """CREATE TABLE IF NOT EXISTS design_templates (
                 id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -321,6 +344,162 @@ async def startup_event():
                 is_correct BOOLEAN,
                 marks_awarded NUMERIC(5,2) DEFAULT 0,
                 UNIQUE(student_id, question_id)
+            );""",
+            """ALTER TABLE student_exam_assignments ADD COLUMN IF NOT EXISTS upload_files_json JSONB DEFAULT '[]'::jsonb;""",
+            # Chat system — 9 tables + 3 users columns + constraints + indexes
+            # Users table additions for chat
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT false;",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP;",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS accept_new_requests BOOLEAN DEFAULT true;",
+            # Conversations table
+            """CREATE TABLE IF NOT EXISTS chat_conversations (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                school_id UUID REFERENCES schools(id) ON DELETE CASCADE,
+                participant_a_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                participant_b_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                conversation_key VARCHAR(200) NOT NULL,
+                initiator_id UUID NOT NULL REFERENCES users(id),
+                status VARCHAR(30) NOT NULL DEFAULT 'pending',
+                is_muted BOOLEAN DEFAULT false,
+                is_restricted BOOLEAN DEFAULT false,
+                blocked_by_teacher BOOLEAN DEFAULT false,
+                blocked_at TIMESTAMP,
+                slow_mode_seconds INTEGER DEFAULT 0,
+                attachments_allowed BOOLEAN DEFAULT true,
+                request_message TEXT,
+                request_responded_at TIMESTAMP,
+                last_message_at TIMESTAMP,
+                last_message_preview TEXT,
+                last_message_sender_id UUID REFERENCES users(id),
+                archived_by_teacher BOOLEAN DEFAULT false,
+                deleted_by_a BOOLEAN DEFAULT false,
+                deleted_by_b BOOLEAN DEFAULT false,
+                auto_flagged BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(conversation_key),
+                CHECK (status IN ('pending','active','rejected','blocked','archived','closed'))
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_chat_conv_a ON chat_conversations(participant_a_id);",
+            "CREATE INDEX IF NOT EXISTS idx_chat_conv_b ON chat_conversations(participant_b_id);",
+            "CREATE INDEX IF NOT EXISTS idx_chat_conv_key ON chat_conversations(conversation_key);",
+            "CREATE INDEX IF NOT EXISTS idx_chat_conv_school ON chat_conversations(school_id);",
+            # Messages table
+            """CREATE TABLE IF NOT EXISTS chat_messages (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                conversation_id UUID NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+                sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                message_type VARCHAR(20) NOT NULL DEFAULT 'text',
+                content TEXT,
+                file_url TEXT,
+                file_name TEXT,
+                file_size_bytes INTEGER,
+                mime_type VARCHAR(100),
+                duration_seconds INTEGER,
+                delivery_status VARCHAR(20) DEFAULT 'sent',
+                is_read BOOLEAN DEFAULT false,
+                is_deleted BOOLEAN DEFAULT false,
+                edited_at TIMESTAMP,
+                deleted_at TIMESTAMP,
+                reply_to_message_id UUID REFERENCES chat_messages(id),
+                attachment_category VARCHAR(30),
+                scan_status VARCHAR(20) DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT NOW(),
+                CHECK (delivery_status IN ('sent','delivered','read')),
+                CHECK (attachment_category IN ('image','pdf','document','voice','generic_file'))
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_chat_msg_conv ON chat_messages(conversation_id);",
+            "CREATE INDEX IF NOT EXISTS idx_chat_msg_created ON chat_messages(created_at);",
+            "CREATE INDEX IF NOT EXISTS idx_unread_messages ON chat_messages(conversation_id, is_read) WHERE is_read = false;",
+            "CREATE INDEX IF NOT EXISTS idx_chat_msg_content_gin ON chat_messages USING GIN(to_tsvector('english', content));",
+            # Announcements table
+            """CREATE TABLE IF NOT EXISTS chat_announcements (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                teacher_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                class_id UUID REFERENCES classes(id) ON DELETE CASCADE,
+                subject_id UUID,
+                book_id UUID,
+                topic_id UUID,
+                homework_id UUID,
+                exam_id UUID,
+                lecture_id UUID,
+                school_id UUID REFERENCES schools(id),
+                title VARCHAR(255),
+                content TEXT NOT NULL,
+                file_url TEXT,
+                file_name TEXT,
+                message_type VARCHAR(20) DEFAULT 'text',
+                priority VARCHAR(20) DEFAULT 'normal',
+                requires_acknowledgement BOOLEAN DEFAULT false,
+                expires_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT NOW(),
+                CHECK (priority IN ('normal','important','urgent'))
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_announce_teacher ON chat_announcements(teacher_id);",
+            "CREATE INDEX IF NOT EXISTS idx_announce_class ON chat_announcements(class_id);",
+            # Announcement reads table
+            """CREATE TABLE IF NOT EXISTS chat_announcement_reads (
+                announcement_id UUID NOT NULL REFERENCES chat_announcements(id) ON DELETE CASCADE,
+                student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                acknowledged BOOLEAN DEFAULT false,
+                read_at TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (announcement_id, student_id)
+            );""",
+            # Slow mode log table
+            """CREATE TABLE IF NOT EXISTS chat_slow_mode_log (
+                conversation_id UUID NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+                student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                last_message_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (conversation_id, student_id)
+            );""",
+            # School chat settings table
+            """CREATE TABLE IF NOT EXISTS school_chat_settings (
+                school_id UUID PRIMARY KEY REFERENCES schools(id) ON DELETE CASCADE,
+                exam_chat_mode VARCHAR(30) DEFAULT 'moderated',
+                student_monthly_upload_limit INTEGER DEFAULT 100,
+                student_voice_monthly_limit INTEGER DEFAULT 50,
+                max_voice_seconds INTEGER DEFAULT 180,
+                allow_manager_student_chat BOOLEAN DEFAULT false,
+                allow_admin_student_chat BOOLEAN DEFAULT true,
+                enable_read_receipts BOOLEAN DEFAULT true,
+                enable_typing_indicators BOOLEAN DEFAULT true,
+                message_retention_days INTEGER DEFAULT 30,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            );""",
+            # Audit logs table
+            """CREATE TABLE IF NOT EXISTS audit_logs (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                actor_id UUID REFERENCES users(id),
+                school_id UUID REFERENCES schools(id),
+                action_type VARCHAR(100) NOT NULL,
+                entity_type VARCHAR(50),
+                entity_id UUID,
+                metadata JSONB,
+                created_at TIMESTAMP DEFAULT NOW()
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_audit_school ON audit_logs(school_id);",
+            "CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_logs(actor_id);",
+            # Notifications table
+            """CREATE TABLE IF NOT EXISTS notifications (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                type VARCHAR(50) NOT NULL,
+                title VARCHAR(255),
+                body TEXT,
+                entity_type VARCHAR(50),
+                entity_id UUID,
+                is_read BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT NOW()
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id);",
+            "CREATE INDEX IF NOT EXISTS idx_notif_read ON notifications(user_id, is_read);",
+            # Conversation reads table
+            """CREATE TABLE IF NOT EXISTS chat_conversation_reads (
+                conversation_id UUID NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                last_seen_message_id UUID REFERENCES chat_messages(id),
+                updated_at TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (conversation_id, user_id)
             );""",
         ]
         for sql in migrations:

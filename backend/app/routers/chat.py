@@ -335,19 +335,39 @@ async def list_conversations(
         # Query conversations where user is a participant
         offset = (page - 1) * page_size
         conversations = await execute_query(
-            """SELECT * FROM chat_conversations
-               WHERE school_id = $1
-               AND (participant_a_id = $2 OR participant_b_id = $2)
-               ORDER BY last_message_at DESC NULLS LAST
+            """SELECT
+                cc.id, cc.status, cc.last_message_at, cc.last_message_preview,
+                cc.participant_a_id, cc.participant_b_id,
+                (CASE
+                    WHEN cc.participant_a_id = $2 THEN (SELECT full_name FROM users WHERE id = cc.participant_b_id)
+                    ELSE (SELECT full_name FROM users WHERE id = cc.participant_a_id)
+                END) as full_name
+               FROM chat_conversations cc
+               WHERE cc.school_id = $1
+               AND (cc.participant_a_id = $2 OR cc.participant_b_id = $2)
+               ORDER BY cc.last_message_at DESC NULLS LAST
                LIMIT $3 OFFSET $4""",
             school_id, user_id, page_size, offset
         )
 
+        # Convert to simple format
+        result = [
+            {
+                'id': conv.get('id'),
+                'status': conv.get('status'),
+                'last_message_at': conv.get('last_message_at'),
+                'last_message_preview': conv.get('last_message_preview'),
+                'full_name': conv.get('full_name') or 'Unknown',
+                'unread_count': 0
+            }
+            for conv in conversations
+        ]
+
         return {
-            "data": conversations or [],
+            "data": result,
             "page": page,
             "page_size": page_size,
-            "total": len(conversations or [])
+            "total": len(result)
         }
     except Exception as e:
         print(f"ERROR in list_conversations: {str(e)}")

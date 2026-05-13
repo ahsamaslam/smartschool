@@ -6,13 +6,14 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, List, Literal, Optional, Set, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.routers.auth import get_user_from_token
+from app.utils.claude_ai import generate_homework_structured_json
 from app.utils.database import execute_one, execute_query, execute_write
 
 router = APIRouter()
@@ -67,6 +68,9 @@ async def ensure_homework_schema():
         "CREATE INDEX IF NOT EXISTS idx_homeworks_teacher ON homeworks(teacher_id)"
     )
     await execute_write(
+        "ALTER TABLE homeworks ADD COLUMN IF NOT EXISTS allow_late_submission BOOLEAN NOT NULL DEFAULT false"
+    )
+    await execute_write(
         """
         CREATE TABLE IF NOT EXISTS homework_questions (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -97,7 +101,9 @@ async def ensure_homework_schema():
             homework_id UUID NOT NULL REFERENCES homeworks(id) ON DELETE CASCADE,
             student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             submission_status VARCHAR(20) NOT NULL DEFAULT 'pending'
-                CHECK (submission_status IN ('pending', 'submitted', 'late', 'reviewed', 'returned')),
+                CHECK (submission_status IN (
+                    'pending', 'in_progress', 'submitted', 'late', 'reviewed', 'returned', 'missing'
+                )),
             submitted_at TIMESTAMPTZ,
             is_late BOOLEAN DEFAULT FALSE,
             teacher_feedback TEXT,
@@ -107,6 +113,18 @@ async def ensure_homework_schema():
             upload_files_json JSONB,
             UNIQUE (homework_id, student_id)
         )
+        """
+    )
+    # Widen status check on existing DBs (CREATE IF NOT EXISTS does not update constraint)
+    await execute_write(
+        "ALTER TABLE homework_submissions DROP CONSTRAINT IF EXISTS homework_submissions_submission_status_check"
+    )
+    await execute_write(
+        """
+        ALTER TABLE homework_submissions ADD CONSTRAINT homework_submissions_submission_status_check
+        CHECK (submission_status IN (
+            'pending', 'in_progress', 'submitted', 'late', 'reviewed', 'returned', 'missing'
+        ))
         """
     )
     await execute_write(
@@ -331,6 +349,43 @@ def _is_late(due: Optional[datetime]) -> bool:
     return _now_utc() > due if due.tzinfo else _now_utc() > due.replace(tzinfo=timezone.utc)
 
 
+def _deadline_hard_lock(hw: dict) -> bool:
+    """After due, block edits/submits unless teacher enabled late submission."""
+    if hw.get("allow_late_submission"):
+        return False
+    return _is_late(hw.get("due_at"))
+
+
+def _submission_status_str(row: Optional[dict]) -> str:
+    if not row:
+        return "pending"
+    return str(row.get("submission_status") or "pending")
+
+
+async def _require_student_may_edit_homework(
+    hw: dict, homework_id: str, student_id: str
+) -> Optional[dict]:
+    """Raises 400 if student cannot save draft or submit. Returns submission row if it exists."""
+    ex = await execute_one(
+        """
+        SELECT id, submission_status, submitted_at
+        FROM homework_submissions
+        WHERE homework_id = $1::uuid AND student_id = $2::uuid
+        """,
+        homework_id,
+        student_id,
+    )
+    row = dict(ex) if ex else None
+    st = _submission_status_str(row)
+    if st == "reviewed":
+        raise HTTPException(status_code=400, detail="This homework is already reviewed.")
+    if st in ("submitted", "late"):
+        raise HTTPException(status_code=400, detail="This homework is already submitted.")
+    if st != "returned" and _deadline_hard_lock(hw):
+        raise HTTPException(status_code=400, detail="Submission deadline has passed")
+    return row
+
+
 def _prepare_question_row(q: "HomeworkQuestionIn") -> tuple:
     qtype = (q.question_type or "text").lower()
     if qtype not in ("text", "mcq"):
@@ -416,6 +471,7 @@ class CreateHomeworkBody(BaseModel):
     total_marks: Optional[float] = None
     due_at: Optional[datetime] = None
     allowed_file_extensions: Optional[str] = None  # e.g. "pdf,jpg,png"
+    allow_late_submission: bool = False
     questions: Optional[List[HomeworkQuestionIn]] = None
 
 
@@ -425,10 +481,22 @@ class UpdateHomeworkBody(BaseModel):
     total_marks: Optional[float] = None
     due_at: Optional[datetime] = None
     allowed_file_extensions: Optional[str] = None
+    allow_late_submission: Optional[bool] = None
 
 
 class ReplaceQuestionsBody(BaseModel):
     questions: List[HomeworkQuestionIn]
+
+
+class AiGenerateHomeworkBody(BaseModel):
+    """Topic title and/or pasted lesson content the model should base questions on."""
+
+    topic_or_content: str = Field(..., min_length=1, max_length=20000)
+    class_id: Optional[str] = None
+    library_topic_id: Optional[str] = None
+    num_mcq: int = Field(default=4, ge=0, le=15)
+    num_text: int = Field(default=2, ge=0, le=15)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
 
 
 class SubmitInteractiveBody(BaseModel):
@@ -438,8 +506,30 @@ class SubmitInteractiveBody(BaseModel):
 class GradeSubmissionBody(BaseModel):
     teacher_feedback: Optional[str] = None
     marks_awarded: Optional[float] = None
-    submission_status: Optional[str] = None  # reviewed | returned
+    submission_status: Optional[str] = None  # reviewed | returned | pending (re-open)
     answers: Optional[List[dict]] = None
+
+
+# Visibility: enrolled in class AND (
+#   legacy rows without subject/book on homework OR
+#   no curriculum assignment rows for this section OR
+#   homework subject+book matches at least one section assignment row
+# )
+HOMEWORK_CURRICULUM_GATE_SQL = """
+  AND (
+    h.library_subject_id IS NULL OR h.library_book_id IS NULL
+    OR NOT EXISTS (
+      SELECT 1 FROM teacher_class_subject_assignments t
+      WHERE t.class_id = h.class_id
+    )
+    OR EXISTS (
+      SELECT 1 FROM teacher_class_subject_assignments t
+      WHERE t.class_id = h.class_id
+        AND t.library_subject_id = h.library_subject_id
+        AND t.library_book_id = h.library_book_id
+    )
+  )
+"""
 
 
 @router.get("/teacher/{teacher_id}/curriculum/{class_id}")
@@ -476,6 +566,97 @@ async def get_teacher_homework_curriculum(
     pairs = {(r["sid"], r["bid"]) for r in rows}
     filtered = filter_library_tree_by_teacher_assignments(boards, pairs)
     return {"mode": "library_tree", "boards": filtered, "scoped": True}
+
+
+@router.post("/ai/generate-draft")
+async def ai_generate_homework_draft(
+    body: AiGenerateHomeworkBody,
+    user: dict = Depends(get_user_from_token),
+):
+    """
+    Generate homework title, instructions, and interactive questions (MCQ + written) from
+    a topic line and/or pasted lesson content. Does not persist — teacher reviews then saves.
+    """
+    await ensure_homework_schema()
+    uid = user["user_id"]
+    role = user.get("role")
+    if role not in ("teacher", "admin"):
+        raise HTTPException(status_code=403, detail="Teachers only")
+
+    if body.class_id and not await teacher_can_manage_class(str(uid), body.class_id):
+        raise HTTPException(status_code=403, detail="Not assigned to this class")
+
+    meta = None
+    if body.library_topic_id:
+        meta = await resolve_topic_hierarchy(str(body.library_topic_id).strip())
+        if not meta:
+            raise HTTPException(status_code=400, detail="Invalid library topic")
+
+    if (
+        role != "admin"
+        and body.class_id
+        and meta
+        and not await teacher_topic_allowed_for_homework(str(uid), body.class_id, meta)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Choose a topic from a subject and book assigned to you for this class.",
+        )
+
+    class_hint: Optional[str] = None
+    if body.class_id:
+        crow = await execute_one(
+            "SELECT name FROM classes WHERE id = $1::uuid",
+            body.class_id,
+        )
+        class_hint = crow["name"] if crow else None
+
+    subject_hint = (meta or {}).get("topic_title")
+
+    raw = await generate_homework_structured_json(
+        body.topic_or_content.strip(),
+        subject_hint=subject_hint,
+        class_hint=class_hint,
+        num_mcq=body.num_mcq,
+        num_text=body.num_text,
+        difficulty=body.difficulty,
+    )
+
+    questions_out: List[dict] = []
+    for q in raw.get("questions") or []:
+        qtype = (q.get("question_type") or "text").lower()
+        qt = str(q.get("question_text") or "").strip()
+        marks = float(q.get("marks") or 1)
+        if qtype == "mcq":
+            raw_opts = q.get("options") or []
+            if not isinstance(raw_opts, list):
+                raw_opts = []
+            opts = [str(x).strip() for x in raw_opts if str(x).strip()]
+            try:
+                ci = int(q.get("correct_option_index"))
+            except (TypeError, ValueError):
+                continue
+            if len(opts) < 2:
+                continue
+            if ci < 0 or ci >= len(opts):
+                continue
+            questions_out.append(
+                {
+                    "question_type": "mcq",
+                    "question_text": qt,
+                    "marks": marks,
+                    "options": opts,
+                    "correct_option_index": ci,
+                }
+            )
+        elif qt:
+            questions_out.append({"question_type": "text", "question_text": qt, "marks": marks})
+
+    return {
+        "title": raw.get("title") or "Homework",
+        "instructions": raw.get("instructions") or "",
+        "questions": questions_out,
+    }
 
 
 @router.post("")
@@ -521,12 +702,14 @@ async def create_homework(
             id, teacher_id, homework_type, title, instructions, class_id,
             library_board_id, library_subject_id, library_book_id, library_chapter_id,
             library_topic_id, total_marks, due_at, allowed_file_extensions,
+            allow_late_submission,
             status, school_id, branch_id, updated_at
         ) VALUES (
             $1::uuid, $2::uuid, $3, $4, $5, $6::uuid,
             $7::uuid, $8::uuid, $9::uuid, $10::uuid,
             $11::uuid, $12, $13, $14,
-            'draft', $15::uuid, $16::uuid, NOW()
+            $15,
+            'draft', $16::uuid, $17::uuid, NOW()
         )
         """,
         hw_id,
@@ -543,6 +726,7 @@ async def create_homework(
         body.total_marks,
         body.due_at,
         body.allowed_file_extensions,
+        bool(body.allow_late_submission),
         sch["school_id"] if sch else None,
         sch["branch_id"] if sch else None,
     )
@@ -568,6 +752,79 @@ async def create_homework(
             )
 
     row = await execute_one("SELECT * FROM homeworks WHERE id = $1::uuid", hw_id)
+    return {"data": dict(row)}
+
+
+@router.patch("/submissions/{submission_id}")
+async def grade_submission(
+    submission_id: str,
+    body: GradeSubmissionBody,
+    user: dict = Depends(get_user_from_token),
+):
+    await ensure_homework_schema()
+    uid = user["user_id"]
+    if user.get("role") not in ("teacher", "admin"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    sub = await execute_one(
+        """
+        SELECT hs.*, h.teacher_id, h.class_id, h.homework_type
+        FROM homework_submissions hs
+        JOIN homeworks h ON h.id = hs.homework_id
+        WHERE hs.id = $1::uuid
+        """,
+        submission_id,
+    )
+    if not sub:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    hw_teacher = str(sub["teacher_id"])
+    if user.get("role") != "admin" and hw_teacher != uid:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not await teacher_can_manage_class(uid, str(sub["class_id"])):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    new_status = body.submission_status or "reviewed"
+    if new_status not in ("reviewed", "returned", "pending"):
+        new_status = "reviewed"
+    await execute_write(
+        """
+        UPDATE homework_submissions
+        SET teacher_feedback = COALESCE($2, teacher_feedback),
+            marks_awarded = COALESCE($3, marks_awarded),
+            submission_status = $4::text,
+            reviewed_at = CASE WHEN $4::text = 'pending' THEN NULL ELSE NOW() END,
+            reviewed_by = CASE WHEN $4::text = 'pending' THEN NULL ELSE $5::uuid END
+        WHERE id = $1::uuid
+        """,
+        submission_id,
+        body.teacher_feedback,
+        body.marks_awarded,
+        new_status,
+        uid,
+    )
+
+    if body.answers:
+        for a in body.answers:
+            qid = a.get("homework_question_id")
+            if not qid:
+                continue
+            await execute_write(
+                """
+                UPDATE homework_answers
+                SET marks_awarded = COALESCE($3, marks_awarded),
+                    teacher_comment = COALESCE($4, teacher_comment)
+                WHERE submission_id = $1::uuid AND homework_question_id = $2::uuid
+                """,
+                submission_id,
+                qid,
+                a.get("marks_awarded"),
+                a.get("teacher_comment"),
+            )
+
+    row = await execute_one(
+        "SELECT * FROM homework_submissions WHERE id = $1::uuid",
+        submission_id,
+    )
     return {"data": dict(row)}
 
 
@@ -677,6 +934,36 @@ async def publish_homework(
             raise HTTPException(
                 status_code=400, detail="Add at least one question before publishing"
             )
+
+    has_slots = await execute_one(
+        """
+        SELECT 1 FROM teacher_class_subject_assignments t
+        WHERE t.class_id = $1::uuid AND t.teacher_id = $2::uuid
+        LIMIT 1
+        """,
+        str(hw["class_id"]),
+        str(hw["teacher_id"]),
+    )
+    meta = await resolve_topic_hierarchy(str(hw["library_topic_id"]))
+    if has_slots and meta:
+        ok = await execute_one(
+            """
+            SELECT 1 FROM teacher_class_subject_assignments t
+            WHERE t.class_id = $1::uuid AND t.teacher_id = $2::uuid
+              AND t.library_subject_id = $3::uuid AND t.library_book_id = $4::uuid
+            LIMIT 1
+            """,
+            str(hw["class_id"]),
+            str(hw["teacher_id"]),
+            str(meta["library_subject_id"]),
+            str(meta["library_book_id"]),
+        )
+        if not ok:
+            raise HTTPException(
+                status_code=400,
+                detail="Homework topic subject/book must match your teaching assignment for this class.",
+            )
+
     await execute_write(
         "UPDATE homeworks SET status = 'published', updated_at = NOW() WHERE id = $1::uuid",
         homework_id,
@@ -779,7 +1066,15 @@ async def list_submissions(
 ):
     await ensure_homework_schema()
     uid = user["user_id"]
-    hw = await execute_one("SELECT * FROM homeworks WHERE id = $1::uuid", homework_id)
+    hw = await execute_one(
+        """
+        SELECT h.*, lt.title AS topic_title
+        FROM homeworks h
+        JOIN library_topics lt ON lt.id = h.library_topic_id
+        WHERE h.id = $1::uuid
+        """,
+        homework_id,
+    )
     if not hw:
         raise HTTPException(status_code=404, detail="Not found")
     if user.get("role") != "admin" and str(hw["teacher_id"]) != uid:
@@ -787,138 +1082,425 @@ async def list_submissions(
     if not await teacher_can_manage_class(uid, str(hw["class_id"])):
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    rows = await execute_query(
+    class_id = str(hw["class_id"])
+    due = hw.get("due_at")
+
+    roster = await execute_query(
         """
-        SELECT hs.*, u.full_name, u.email
-        FROM homework_submissions hs
-        JOIN users u ON u.id = hs.student_id
-        WHERE hs.homework_id = $1::uuid
-        ORDER BY hs.submitted_at DESC NULLS LAST, u.full_name
+        SELECT
+            u.id AS student_id,
+            u.full_name,
+            u.email,
+            hs.id AS id,
+            hs.homework_id,
+            hs.submission_status,
+            hs.submitted_at,
+            hs.is_late,
+            hs.marks_awarded,
+            hs.teacher_feedback,
+            hs.upload_files_json,
+            hs.reviewed_at,
+            CASE
+              WHEN $2::timestamptz IS NOT NULL AND $2::timestamptz < NOW()
+                   AND COALESCE(hs.submission_status, 'pending') IN ('pending', 'in_progress')
+                   AND hs.submitted_at IS NULL
+                THEN 'missing'
+              WHEN COALESCE(hs.submission_status, 'pending') = 'returned' THEN 'returned'
+              WHEN COALESCE(hs.submission_status, 'pending') = 'reviewed' THEN 'reviewed'
+              WHEN COALESCE(hs.submission_status, 'pending') IN ('submitted', 'late')
+                   AND COALESCE(hs.is_late, false) = true
+                THEN 'late_awaiting'
+              WHEN COALESCE(hs.submission_status, 'pending') IN ('submitted', 'late')
+                THEN 'submitted_awaiting'
+              WHEN hs.submission_status = 'in_progress' THEN 'in_progress'
+              ELSE 'pending'
+            END AS effective_status
+        FROM enrollments e
+        JOIN users u ON u.id = e.student_id
+        LEFT JOIN homework_submissions hs
+            ON hs.homework_id = $1::uuid AND hs.student_id = u.id
+        WHERE e.class_id = $3::uuid AND e.is_active = true
+        ORDER BY u.full_name
         """,
         homework_id,
+        due,
+        class_id,
     )
-    out = []
-    for r in rows:
-        rid = str(r["id"])
-        answers = await execute_query(
+
+    sub_ids = [str(r["id"]) for r in roster if r.get("id")]
+    answers_by_sub: dict = {}
+    if sub_ids:
+        ans_rows = await execute_query(
             """
             SELECT ha.*, hq.question_text, hq.sort_order, hq.question_type,
                    hq.options_json, hq.correct_option_index, hq.marks AS question_marks
             FROM homework_answers ha
             JOIN homework_questions hq ON hq.id = ha.homework_question_id
-            WHERE ha.submission_id = $1::uuid
-            ORDER BY hq.sort_order
+            WHERE ha.submission_id = ANY($1::uuid[])
+            ORDER BY ha.submission_id, hq.sort_order
             """,
-            rid,
+            sub_ids,
         )
+        for a in ans_rows:
+            sid = str(a["submission_id"])
+            answers_by_sub.setdefault(sid, []).append(dict(a))
+
+    out = []
+    marks_vals: List[float] = []
+    for r in roster:
         d = dict(r)
-        d["answers"] = [dict(a) for a in answers]
+        sid_sub = d.get("id")
+        if sid_sub:
+            d["answers"] = answers_by_sub.get(str(sid_sub), [])
+            if d.get("marks_awarded") is not None:
+                try:
+                    marks_vals.append(float(d["marks_awarded"]))
+                except (TypeError, ValueError):
+                    pass
+        else:
+            d["answers"] = []
+            d["submission_status"] = d.get("submission_status") or "pending"
         out.append(d)
-    return {"data": out}
+
+    analytics = {
+        "total_students": len(out),
+        "missing": sum(1 for x in out if x.get("effective_status") == "missing"),
+        "pending": sum(1 for x in out if x.get("effective_status") == "pending"),
+        "in_progress": sum(1 for x in out if x.get("effective_status") == "in_progress"),
+        "awaiting_review": sum(
+            1 for x in out if x.get("effective_status") in ("submitted_awaiting", "late_awaiting")
+        ),
+        "reviewed": sum(1 for x in out if x.get("effective_status") == "reviewed"),
+        "returned": sum(1 for x in out if x.get("effective_status") == "returned"),
+        "average_marks_awarded": round(sum(marks_vals) / len(marks_vals), 2) if marks_vals else None,
+    }
+
+    return {"data": out, "analytics": analytics, "homework": dict(hw)}
 
 
-@router.patch("/submissions/{submission_id}")
-async def grade_submission(
-    submission_id: str,
-    body: GradeSubmissionBody,
+@router.post("/submissions/integrity")
+async def submit_integrity_report(
+    body: dict,
     user: dict = Depends(get_user_from_token),
 ):
+    """Store integrity tracking data for homework submission."""
     await ensure_homework_schema()
-    uid = user["user_id"]
+    if user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    homework_id = body.get("homework_id")
+    reports = body.get("reports", [])
+
+    if not homework_id or not reports:
+        return {"status": "ok"}  # Silent success for empty data
+
+    # Create integrity tracking table if not exists
+    await execute_write(
+        """
+        CREATE TABLE IF NOT EXISTS submission_integrity_reports (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            homework_id UUID NOT NULL REFERENCES homeworks(id),
+            student_id UUID NOT NULL REFERENCES users(id),
+            question_id UUID,
+            paste_events JSONB,
+            typing_analysis JSONB,
+            focus_losses JSONB,
+            draft_history JSONB,
+            flags JSONB,
+            risk_level VARCHAR(20),
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+        """
+    )
+
+    student_id = user["user_id"]
+
+    # Store each report
+    for report in reports:
+        await execute_write(
+            """
+            INSERT INTO submission_integrity_reports
+            (homework_id, student_id, question_id, paste_events, typing_analysis,
+             focus_losses, draft_history, flags, risk_level)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            """,
+            homework_id,
+            student_id,
+            report.get("questionId"),
+            json.dumps(report.get("pasteEvents", [])),
+            json.dumps(report.get("typingAnalysis", {})),
+            json.dumps(report.get("focusLosses", [])),
+            json.dumps(report.get("draftHistory", [])),
+            json.dumps(report.get("flags", [])),
+            report.get("riskLevel"),
+        )
+
+    return {"status": "ok", "stored": len(reports)}
+
+
+@router.get("/teacher/{homework_id}/integrity-reports")
+async def get_integrity_reports(
+    homework_id: str,
+    user: dict = Depends(get_user_from_token),
+):
+    """Get integrity reports for all submissions of a homework (teacher only)."""
     if user.get("role") not in ("teacher", "admin"):
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    sub = await execute_one(
-        """
-        SELECT hs.*, h.teacher_id, h.class_id, h.homework_type
-        FROM homework_submissions hs
-        JOIN homeworks h ON h.id = hs.homework_id
-        WHERE hs.id = $1::uuid
-        """,
-        submission_id,
+    # Verify teacher owns this homework
+    hw = await execute_one(
+        "SELECT id, teacher_id FROM homeworks WHERE id = $1::uuid",
+        homework_id,
     )
-    if not sub:
-        raise HTTPException(status_code=404, detail="Submission not found")
-    hw_teacher = str(sub["teacher_id"])
-    if user.get("role") != "admin" and hw_teacher != uid:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    if not await teacher_can_manage_class(uid, str(sub["class_id"])):
+    if not hw:
+        raise HTTPException(status_code=404, detail="Homework not found")
+
+    if user.get("role") != "admin" and str(hw["teacher_id"]) != user["user_id"]:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    new_status = body.submission_status or "reviewed"
-    if new_status not in ("reviewed", "returned"):
-        new_status = "reviewed"
-    await execute_write(
-        """
-        UPDATE homework_submissions
-        SET teacher_feedback = COALESCE($2, teacher_feedback),
-            marks_awarded = COALESCE($3, marks_awarded),
-            submission_status = $4,
-            reviewed_at = NOW(),
-            reviewed_by = $5::uuid
-        WHERE id = $1::uuid
-        """,
-        submission_id,
-        body.teacher_feedback,
-        body.marks_awarded,
-        new_status,
-        uid,
-    )
-
-    if body.answers:
-        for a in body.answers:
-            qid = a.get("homework_question_id")
-            if not qid:
-                continue
-            await execute_write(
-                """
-                UPDATE homework_answers
-                SET marks_awarded = COALESCE($3, marks_awarded),
-                    teacher_comment = COALESCE($4, teacher_comment)
-                WHERE submission_id = $1::uuid AND homework_question_id = $2::uuid
-                """,
-                submission_id,
-                qid,
-                a.get("marks_awarded"),
-                a.get("teacher_comment"),
-            )
-
-    row = await execute_one(
-        "SELECT * FROM homework_submissions WHERE id = $1::uuid",
-        submission_id,
-    )
-    return {"data": dict(row)}
-
-
-@router.get("/student/list")
-async def list_student_homework(user: dict = Depends(get_user_from_token)):
-    await ensure_homework_schema()
-    sid = user["user_id"]
-    if user.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Students only")
-
-    rows = await execute_query(
+    # Get all integrity reports grouped by submission
+    reports = await execute_query(
         """
         SELECT
-            h.*,
+            ir.id,
+            ir.student_id,
+            u.full_name,
+            u.email,
+            ir.question_id,
+            ir.paste_events,
+            ir.typing_analysis,
+            ir.focus_losses,
+            ir.flags,
+            ir.risk_level,
+            ir.created_at,
+            hs.submission_status,
+            hs.submitted_at
+        FROM submission_integrity_reports ir
+        JOIN users u ON u.id = ir.student_id
+        LEFT JOIN homework_submissions hs ON hs.homework_id = ir.homework_id AND hs.student_id = ir.student_id
+        WHERE ir.homework_id = $1::uuid
+        ORDER BY ir.created_at DESC, ir.student_id
+        """,
+        homework_id,
+    )
+
+    # Group by student
+    grouped = {}
+    for row in reports:
+        sid = str(row["student_id"])
+        if sid not in grouped:
+            grouped[sid] = {
+                "student_id": sid,
+                "student_name": row["full_name"],
+                "student_email": row["email"],
+                "submission_status": row["submission_status"],
+                "submitted_at": row["submitted_at"],
+                "reports": [],
+            }
+        grouped[sid]["reports"].append({
+            "id": str(row["id"]),
+            "question_id": str(row["question_id"]) if row["question_id"] else None,
+            "paste_events": row["paste_events"] or [],
+            "typing_analysis": row["typing_analysis"] or {},
+            "focus_losses": row["focus_losses"] or [],
+            "flags": row["flags"] or [],
+            "risk_level": row["risk_level"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        })
+
+    return {"data": list(grouped.values())}
+
+
+async def assert_student_can_access_homework(student_id: str, homework_id: str) -> dict:
+    """Published homework visible to this student: enrolled in class + curriculum gate."""
+    row = await execute_one(
+        f"""
+        SELECT h.*
+        FROM homeworks h
+        JOIN enrollments e ON e.class_id = h.class_id AND e.student_id = $2::uuid AND e.is_active = true
+        WHERE h.id = $1::uuid AND h.status = 'published'
+        {HOMEWORK_CURRICULUM_GATE_SQL}
+        """,
+        homework_id,
+        student_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Homework not available")
+    return dict(row)
+
+
+async def build_student_homework_dashboard(student_id: str) -> dict:
+    rows = await execute_query(
+        f"""
+        SELECT
+            h.id,
+            h.title,
+            h.instructions,
+            h.homework_type,
+            h.class_id,
+            h.due_at,
+            h.total_marks,
+            h.library_topic_id,
+            h.created_at,
+            COALESCE(h.allow_late_submission, false) AS allow_late_submission,
             lt.title AS topic_title,
+            ls.name AS subject_name,
+            lb.title AS book_title,
+            lbo.name AS board_name,
+            tu.full_name AS teacher_name,
             hs.id AS submission_id,
             hs.submission_status,
             hs.submitted_at,
             hs.is_late,
             hs.marks_awarded,
-            hs.teacher_feedback
+            hs.teacher_feedback,
+            hs.reviewed_at,
+            CASE
+              WHEN hs.submission_status = 'missing'
+                   AND (h.due_at IS NULL OR h.due_at >= NOW())
+                THEN 'pending'
+              WHEN COALESCE(hs.submission_status, 'pending') = 'returned' THEN 'returned'
+              WHEN COALESCE(hs.submission_status, 'pending') = 'reviewed' THEN 'reviewed'
+              WHEN COALESCE(hs.submission_status, 'pending') IN ('submitted', 'late')
+                   AND COALESCE(hs.is_late, false) = true
+                THEN 'late_awaiting'
+              WHEN COALESCE(hs.submission_status, 'pending') IN ('submitted', 'late')
+                THEN 'submitted_awaiting'
+              WHEN h.due_at IS NOT NULL AND h.due_at < NOW()
+                   AND COALESCE(h.allow_late_submission, false) = false
+                   AND COALESCE(hs.submission_status, 'pending') IN ('pending', 'in_progress', 'missing')
+                   AND (hs.submitted_at IS NULL OR hs.submission_status = 'missing')
+                THEN 'missing'
+              WHEN h.due_at IS NOT NULL AND h.due_at < NOW()
+                   AND COALESCE(h.allow_late_submission, false) = true
+                   AND COALESCE(hs.submission_status, 'pending') IN ('pending', 'in_progress', 'missing')
+                   AND (hs.submitted_at IS NULL OR hs.submission_status = 'missing')
+                THEN 'late_open'
+              WHEN hs.submission_status = 'in_progress' THEN 'in_progress'
+              ELSE 'pending'
+            END AS ui_bucket
         FROM homeworks h
         JOIN enrollments e ON e.class_id = h.class_id AND e.is_active = true
         JOIN library_topics lt ON lt.id = h.library_topic_id
-        LEFT JOIN homework_submissions hs
-            ON hs.homework_id = h.id AND hs.student_id = e.student_id
+        LEFT JOIN library_subjects ls ON ls.id = h.library_subject_id
+        LEFT JOIN library_books lb ON lb.id = h.library_book_id
+        LEFT JOIN library_boards lbo ON lbo.id = h.library_board_id
+        JOIN users tu ON tu.id = h.teacher_id
+        LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = e.student_id
         WHERE e.student_id = $1::uuid AND h.status = 'published'
+        {HOMEWORK_CURRICULUM_GATE_SQL}
         ORDER BY h.due_at NULLS LAST, h.created_at DESC
         """,
-        sid,
+        student_id,
     )
-    return {"data": [dict(r) for r in rows]}
+    data = [dict(r) for r in rows]
+    now = _now_utc()
+    summary = {
+        "missing": 0,
+        "late_open": 0,
+        "pending": 0,
+        "in_progress": 0,
+        "submitted_awaiting": 0,
+        "late_awaiting": 0,
+        "reviewed": 0,
+        "returned": 0,
+        "overdue_not_submitted": 0,
+        "action_open": 0,
+    }
+    for r in data:
+        b = r.get("ui_bucket") or "pending"
+        if b in summary:
+            summary[b] += 1
+        if b == "missing":
+            summary["overdue_not_submitted"] += 1
+        if b in (
+            "missing",
+            "late_open",
+            "pending",
+            "in_progress",
+            "returned",
+            "submitted_awaiting",
+            "late_awaiting",
+        ):
+            summary["action_open"] += 1
+
+    notifications: List[dict] = []
+    for r in data:
+        hid = str(r["id"])
+        title = r.get("title") or "Homework"
+        due = r.get("due_at")
+        bucket = r.get("ui_bucket")
+        created = r.get("created_at")
+        reviewed_at = r.get("reviewed_at")
+        st = r.get("submission_status") or "pending"
+
+        if created:
+            ca = created if created.tzinfo else created.replace(tzinfo=timezone.utc)
+            if (now - ca).total_seconds() < 7 * 86400 and bucket in ("pending", "in_progress", "late_open"):
+                notifications.append(
+                    {
+                        "type": "new_homework",
+                        "homework_id": hid,
+                        "title": title,
+                        "message": f"New homework assigned: {title}",
+                    }
+                )
+        if due:
+            due_dt = due if due.tzinfo else due.replace(tzinfo=timezone.utc)
+            if due_dt - now <= timedelta(days=1) and due_dt > now and bucket not in (
+                "reviewed",
+                "submitted_awaiting",
+                "late_awaiting",
+            ):
+                notifications.append(
+                    {
+                        "type": "due_tomorrow",
+                        "homework_id": hid,
+                        "title": title,
+                        "message": f"Homework due soon: {title}",
+                    }
+                )
+        if st == "reviewed" and reviewed_at:
+            ra = reviewed_at if reviewed_at.tzinfo else reviewed_at.replace(tzinfo=timezone.utc)
+            if (now - ra).total_seconds() < 5 * 86400:
+                notifications.append(
+                    {
+                        "type": "homework_reviewed",
+                        "homework_id": hid,
+                        "title": title,
+                        "message": f"Homework reviewed: {title}",
+                    }
+                )
+        if st == "returned":
+            notifications.append(
+                {
+                    "type": "homework_returned",
+                    "homework_id": hid,
+                    "title": title,
+                    "message": f"Homework returned for correction: {title}",
+                }
+            )
+
+    return {"data": data, "summary": summary, "notifications": notifications[:25]}
+
+
+@router.get("/student/list")
+async def list_student_homework(user: dict = Depends(get_user_from_token)):
+    await ensure_homework_schema()
+    if user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Students only")
+    return await build_student_homework_dashboard(str(user["user_id"]))
+
+
+@router.get("/admin/student/{student_id}/homework-list")
+async def admin_student_homework_list(
+    student_id: str,
+    user: dict = Depends(get_user_from_token),
+):
+    await ensure_homework_schema()
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return await build_student_homework_dashboard(str(student_id))
 
 
 @router.get("/student/{homework_id}")
@@ -932,12 +1514,21 @@ async def get_student_homework_view(
         raise HTTPException(status_code=403, detail="Students only")
 
     hw = await execute_one(
-        """
-        SELECT h.*, lt.title AS topic_title
+        f"""
+        SELECT h.*, lt.title AS topic_title,
+               ls.name AS subject_name,
+               lb.title AS book_title,
+               lbo.name AS board_name,
+               tu.full_name AS teacher_name
         FROM homeworks h
         JOIN library_topics lt ON lt.id = h.library_topic_id
+        LEFT JOIN library_subjects ls ON ls.id = h.library_subject_id
+        LEFT JOIN library_books lb ON lb.id = h.library_book_id
+        LEFT JOIN library_boards lbo ON lbo.id = h.library_board_id
+        JOIN users tu ON tu.id = h.teacher_id
         JOIN enrollments e ON e.class_id = h.class_id AND e.student_id = $2::uuid AND e.is_active = true
         WHERE h.id = $1::uuid AND h.status = 'published'
+        {HOMEWORK_CURRICULUM_GATE_SQL}
         """,
         homework_id,
         sid,
@@ -985,6 +1576,61 @@ async def get_student_homework_view(
     }
 
 
+@router.post("/student/{homework_id}/save-progress")
+async def save_homework_progress(
+    homework_id: str,
+    body: SubmitInteractiveBody,
+    user: dict = Depends(get_user_from_token),
+):
+    await ensure_homework_schema()
+    sid = user["user_id"]
+    if user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    hw = await assert_student_can_access_homework(sid, homework_id)
+    if hw["homework_type"] != "interactive":
+        raise HTTPException(status_code=400, detail="Only interactive homework supports saving progress")
+
+    await _require_student_may_edit_homework(hw, homework_id, str(sid))
+
+    sub_id_row = await execute_one(
+        """
+        INSERT INTO homework_submissions (
+            homework_id, student_id, submission_status, submitted_at, is_late
+        ) VALUES ($1::uuid, $2::uuid, 'in_progress', NULL, false)
+        ON CONFLICT (homework_id, student_id) DO UPDATE SET
+            submission_status = CASE
+                WHEN homework_submissions.submission_status IN ('submitted', 'late', 'reviewed')
+                    THEN homework_submissions.submission_status
+                ELSE 'in_progress'
+            END
+        RETURNING id
+        """,
+        homework_id,
+        sid,
+    )
+    sid_row = str(sub_id_row["id"])
+
+    for a in body.answers:
+        qid = a.get("homework_question_id")
+        if not qid:
+            continue
+        txt = a.get("answer_text") or ""
+        await execute_write(
+            """
+            INSERT INTO homework_answers (submission_id, homework_question_id, answer_text)
+            VALUES ($1::uuid, $2::uuid, $3)
+            ON CONFLICT (submission_id, homework_question_id) DO UPDATE SET
+                answer_text = EXCLUDED.answer_text
+            """,
+            sid_row,
+            qid,
+            txt,
+        )
+
+    return {"ok": True, "submission_id": sid_row, "status": "in_progress"}
+
+
 @router.post("/student/{homework_id}/submit-interactive")
 async def submit_interactive(
     homework_id: str,
@@ -996,18 +1642,11 @@ async def submit_interactive(
     if user.get("role") != "student":
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    hw = await execute_one(
-        """
-        SELECT h.*
-        FROM homeworks h
-        JOIN enrollments e ON e.class_id = h.class_id AND e.student_id = $2::uuid AND e.is_active = true
-        WHERE h.id = $1::uuid AND h.status = 'published' AND h.homework_type = 'interactive'
-        """,
-        homework_id,
-        sid,
-    )
-    if not hw:
+    hw = await assert_student_can_access_homework(sid, homework_id)
+    if hw["homework_type"] != "interactive":
         raise HTTPException(status_code=400, detail="Invalid homework")
+
+    await _require_student_may_edit_homework(hw, homework_id, str(sid))
 
     due = hw.get("due_at")
     late = _is_late(due)
@@ -1019,9 +1658,21 @@ async def submit_interactive(
             homework_id, student_id, submission_status, submitted_at, is_late
         ) VALUES ($1::uuid, $2::uuid, $3, NOW(), $4)
         ON CONFLICT (homework_id, student_id) DO UPDATE SET
-            submission_status = EXCLUDED.submission_status,
-            submitted_at = NOW(),
-            is_late = EXCLUDED.is_late
+            submission_status = CASE
+                WHEN homework_submissions.submission_status = 'reviewed'
+                    THEN homework_submissions.submission_status
+                ELSE EXCLUDED.submission_status
+            END,
+            submitted_at = CASE
+                WHEN homework_submissions.submission_status = 'reviewed'
+                    THEN homework_submissions.submitted_at
+                ELSE NOW()
+            END,
+            is_late = CASE
+                WHEN homework_submissions.submission_status = 'reviewed'
+                    THEN homework_submissions.is_late
+                ELSE EXCLUDED.is_late
+            END
         RETURNING id
         """,
         homework_id,
@@ -1064,17 +1715,8 @@ async def submit_upload(
     if user.get("role") != "student":
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    hw = await execute_one(
-        """
-        SELECT h.*
-        FROM homeworks h
-        JOIN enrollments e ON e.class_id = h.class_id AND e.student_id = $2::uuid AND e.is_active = true
-        WHERE h.id = $1::uuid AND h.status = 'published' AND h.homework_type = 'upload'
-        """,
-        homework_id,
-        sid,
-    )
-    if not hw:
+    hw = await assert_student_can_access_homework(sid, homework_id)
+    if hw["homework_type"] != "upload":
         raise HTTPException(status_code=400, detail="Invalid upload homework")
 
     allowed = (hw.get("allowed_file_extensions") or "").lower()
@@ -1083,14 +1725,7 @@ async def submit_upload(
     late_flag = _is_late(hw.get("due_at"))
     st_after = "late" if late_flag else "submitted"
 
-    existing_sub = await execute_one(
-        """
-        SELECT id FROM homework_submissions
-        WHERE homework_id = $1::uuid AND student_id = $2::uuid
-        """,
-        homework_id,
-        sid,
-    )
+    existing_sub = await _require_student_may_edit_homework(hw, homework_id, str(sid))
     if existing_sub:
         submission_id = str(existing_sub["id"])
     else:

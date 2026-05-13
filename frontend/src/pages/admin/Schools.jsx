@@ -1503,8 +1503,7 @@ export default function AdminSchools() {
     e.preventDefault();
     if (!schoolForm.name.trim()) return toast.error("School name is required.");
     if (!schoolForm.address.trim()) return toast.error("School address is required.");
-    if (showManagerSection && !editingSchool) {
-      if (!managerForm.full_name.trim()) return toast.error("Manager name is required.");
+    if (showManagerSection && managerForm.full_name.trim()) {
       if (!managerForm.email.trim()) return toast.error("Manager email is required.");
       if (!managerForm.password.trim()) return toast.error("Manager password is required.");
     }
@@ -1512,11 +1511,26 @@ export default function AdminSchools() {
     try {
       if (editingSchool) {
         await adminService.updateSchool(editingSchool.id, schoolForm);
-        toast.success("School updated!");
+        // Add manager to existing school if provided
+        if (showManagerSection && managerForm.email && managerForm.full_name) {
+          try {
+            const res = await adminService.createSchoolManager(editingSchool.id, managerForm);
+            const resData = res?.data?.data ?? res?.data ?? {};
+            if (resData.manager) {
+              setCreatedSchool({ id: editingSchool.id, name: editingSchool.name });
+              setCreatedManager(resData.manager);
+            }
+            toast.success("School updated and manager created!");
+          } catch (managerErr) {
+            toast.error("School updated but failed to create manager: " + (managerErr?.response?.data?.detail || ""));
+          }
+        } else {
+          toast.success("School updated!");
+        }
         setShowSchoolModal(false);
       } else {
         const payload = { ...schoolForm };
-        if (showManagerSection && managerForm.email) {
+        if (showManagerSection && managerForm.email && managerForm.full_name) {
           payload.manager = managerForm;
         }
         const res = await adminService.createSchool(payload);
@@ -1674,66 +1688,68 @@ export default function AdminSchools() {
             />
           </div>
 
-          {/* Manager Account Section (only for new schools) */}
-          {!editingSchool && (
-            <div className="border border-gray-200 rounded-xl overflow-hidden">
-              <button
-                type="button"
-                onClick={() => setShowManagerSection((v) => !v)}
-                className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-sm font-medium text-gray-700"
-              >
-                <span className="flex items-center gap-2">
-                  <UserCircleIcon className="h-4 w-4 text-indigo-500" />
-                  Create Manager Account
-                  <span className="text-xs text-gray-400 font-normal">(optional)</span>
-                </span>
-                {showManagerSection
-                  ? <ChevronDownIcon className="h-4 w-4 text-gray-400" />
-                  : <ChevronRightIcon className="h-4 w-4 text-gray-400" />
-                }
-              </button>
-              {showManagerSection && (
-                <div className="px-4 py-3 space-y-3 border-t border-gray-100">
-                  <p className="text-xs text-gray-500">The manager will be able to log in and manage only this school.</p>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
-                      Full Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      value={managerForm.full_name}
-                      onChange={(e) => setManagerForm((f) => ({ ...f, full_name: e.target.value }))}
-                      placeholder="Manager's full name"
-                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
-                      Email (Login) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="email"
-                      value={managerForm.email}
-                      onChange={(e) => setManagerForm((f) => ({ ...f, email: e.target.value }))}
-                      placeholder="manager@school.com"
-                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
-                      Password <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={managerForm.password}
-                      onChange={(e) => setManagerForm((f) => ({ ...f, password: e.target.value }))}
-                      placeholder="Set a strong password"
-                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
+          {/* Manager Account Section */}
+          <div className="border border-gray-200 rounded-xl overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowManagerSection((v) => !v)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-sm font-medium text-gray-700"
+            >
+              <span className="flex items-center gap-2">
+                <UserCircleIcon className="h-4 w-4 text-indigo-500" />
+                {editingSchool ? "Add New Manager" : "Create Manager Account"}
+                <span className="text-xs text-gray-400 font-normal">(optional)</span>
+              </span>
+              {showManagerSection
+                ? <ChevronDownIcon className="h-4 w-4 text-gray-400" />
+                : <ChevronRightIcon className="h-4 w-4 text-gray-400" />
+              }
+            </button>
+            {showManagerSection && (
+              <div className="px-4 py-3 space-y-3 border-t border-gray-100">
+                <p className="text-xs text-gray-500">
+                  {editingSchool
+                    ? "Create a new manager account for this school. They will receive login credentials."
+                    : "The manager will be able to log in and manage only this school."}
+                </p>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    Full Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    value={managerForm.full_name}
+                    onChange={(e) => setManagerForm((f) => ({ ...f, full_name: e.target.value }))}
+                    placeholder="Manager's full name"
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
                 </div>
-              )}
-            </div>
-          )}
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    Email (Login) <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="email"
+                    value={managerForm.email}
+                    onChange={(e) => setManagerForm((f) => ({ ...f, email: e.target.value }))}
+                    placeholder="manager@school.com"
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    Password <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={managerForm.password}
+                    onChange={(e) => setManagerForm((f) => ({ ...f, password: e.target.value }))}
+                    placeholder="Set a strong password"
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
 
           <button
             type="submit"

@@ -2,7 +2,7 @@
 Claude AI integration for Q&A and quiz grading
 """
 from anthropic import AsyncAnthropic
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 import logging
 import json
 import re
@@ -682,6 +682,235 @@ Return ONLY the JSON array."""
     except Exception as e:
         logger.error(f"Error generating structured exam: {str(e)}")
         return []
+
+
+# ============================================
+# AI HOMEWORK (interactive MCQ + written)
+# ============================================
+
+
+def _fallback_homework_payload(
+    topic_or_content: str,
+    num_mcq: int,
+    num_text: int,
+    subject_hint: Optional[str],
+) -> Dict[str, Any]:
+    raw = (topic_or_content or "").strip() or "General practice"
+    title_base = raw.replace("\n", " ").strip()
+    if len(title_base) > 80:
+        title_base = title_base[:77] + "..."
+    title = f"Homework · {title_base}"
+
+    ctx = raw[:1200]
+    subject_line = f" Subject focus: {subject_hint}." if subject_hint else ""
+
+    questions: List[Dict[str, Any]] = []
+    marks_mcq = 1.0
+    marks_text = 2.0
+    for i in range(max(0, num_mcq)):
+        questions.append(
+            {
+                "question_type": "mcq",
+                "question_text": (
+                    f"Based on the topic/context below, choose the best answer ({i + 1}):\n\n"
+                    f"{ctx[:400]}{'…' if len(ctx) > 400 else ''}"
+                ),
+                "marks": marks_mcq,
+                "options": [
+                    "A correct interpretation of key ideas",
+                    "A partially correct but incomplete choice",
+                    "An unrelated distractor",
+                    "Another plausible but incorrect distractor",
+                ],
+                "correct_option_index": 0,
+            }
+        )
+    for i in range(max(0, num_text)):
+        questions.append(
+            {
+                "question_type": "text",
+                "question_text": (
+                    f"In 3–6 sentences, explain one main concept from this topic/context ({i + 1}):\n\n"
+                    f"{ctx[:600]}{'…' if len(ctx) > 600 else ''}"
+                ),
+                "marks": marks_text,
+            }
+        )
+
+    instructions = (
+        f"Answer all questions.{subject_line}\n\n"
+        "Note: Scaffolded offline because the Claude API key is missing or invalid — "
+        "replace these items or retry **Generate with AI** after configuring Claude."
+    )
+
+    return {"title": title, "instructions": instructions, "questions": questions}
+
+
+async def generate_homework_structured_json(
+    topic_or_content: str,
+    *,
+    subject_hint: Optional[str] = None,
+    class_hint: Optional[str] = None,
+    num_mcq: int = 3,
+    num_text: int = 2,
+    difficulty: str = "medium",
+) -> Dict[str, Any]:
+    """
+    Return JSON-shaped homework draft: title, instructions, questions[].
+    Each question: question_type ('mcq'|'text'), question_text, marks,
+    optional options[] and correct_option_index for mcq.
+    """
+    text_in = (topic_or_content or "").strip()
+    if not text_in:
+        return {"title": "Homework", "instructions": "", "questions": []}
+
+    nm = max(0, min(int(num_mcq or 0), 15))
+    nt = max(0, min(int(num_text or 0), 15))
+    if nm + nt == 0:
+        if _has_configured_anthropic_key():
+            try:
+                hint = (
+                    f"Subject / class hint: {subject_hint or 'General'} / {class_hint or 'students'}"
+                )
+                prompt = (
+                    "From TEACHER_INPUT, produce a concise homework assignment title (not a lesson plan) "
+                    "and instructions for upload-based homework.\nReturn ONLY JSON: "
+                    '{"title":"...","instructions":"..."}\n'
+                    + hint
+                    + "\n\nTEACHER_INPUT:\n"
+                    + text_in[:6000]
+                )
+                msg = await client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=800,
+                    temperature=0.5,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                rsp = (msg.content[0].text or "").strip()
+                rsp = re.sub(r"^```(?:json)?\s*", "", rsp, flags=re.IGNORECASE)
+                rsp = re.sub(r"\s*```\s*$", "", rsp)
+                mini = json.loads(rsp)
+                return {
+                    "title": str(mini.get("title") or "Homework assignment").strip(),
+                    "instructions": str(mini.get("instructions") or text_in[:2000]).strip(),
+                    "questions": [],
+                }
+            except Exception:
+                pass
+        first = text_in.replace("\r\n", "\n").split("\n")[0].strip()[:100]
+        return {
+            "title": (
+                first if first else "Homework assignment"
+            ),
+            "instructions": text_in[:4000],
+            "questions": [],
+        }
+
+    if not _has_configured_anthropic_key():
+        return _fallback_homework_payload(text_in, nm, nt, subject_hint)
+
+    subj = subject_hint or "General"
+    cls = class_hint or "your class"
+
+    system_prompt = f"""You are an expert educator creating homework for {cls}, subject context: {subj}.
+
+RULES:
+1. Ground every question ONLY in the teacher's TOPIC_OR_CONTENT below (topic title or pasted lesson notes).
+2. Difficulty level: {difficulty}.
+3. MCQs must have exactly 4 distinct, plausible options; exactly one clearly correct answer.
+4. Written questions ask for explanations, comparisons, short worked examples — not copy-paste from the passage.
+5. Use clear, classroom-appropriate wording.
+
+IMPORTANT: Respond with ONLY valid JSON — no markdown code fences, no commentary.
+
+Required JSON shape:
+{{
+  "title": "short homework title string",
+  "instructions": "2-5 sentences for students",
+  "questions": [
+    {{
+      "question_type": "mcq",
+      "question_text": "...",
+      "marks": number,
+      "options": ["A text", "B text", "C text", "D text"],
+      "correct_option_index": 0-based integer index of correct option in options array
+    }},
+    {{
+      "question_type": "text",
+      "question_text": "...",
+      "marks": number
+    }}
+  ]
+}}
+
+You MUST output exactly {nm} mcq-type questions and exactly {nt} text-type questions, in logical teaching order."""
+
+    user_prompt = f"""TOPIC_OR_CONTENT:\n{text_in[:8000]}"""
+
+    try:
+        message = await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            temperature=0.65,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        response_text = (message.content[0].text or "").strip()
+        if response_text.startswith("```"):
+            response_text = re.sub(r"^```[a-z]*\n?", "", response_text)
+            response_text = re.sub(r"\n?```$", "", response_text)
+        parsed = json.loads(response_text)
+
+        questions_out: List[Dict[str, Any]] = []
+        for q in parsed.get("questions") or []:
+            qtype = (q.get("question_type") or "text").lower()
+            qt = q.get("question_text") or ""
+            marks = float(q.get("marks") or 1)
+            if qtype == "mcq":
+                opts_raw = q.get("options") or []
+                opts = [
+                    str(x).strip()
+                    for x in (opts_raw if isinstance(opts_raw, list) else [])
+                    if str(x).strip()
+                ]
+                ci = q.get("correct_option_index")
+                try:
+                    ci = int(ci)
+                except (TypeError, ValueError):
+                    ci = None
+                if len(opts) < 2 or ci is None:
+                    continue
+                if ci < 0 or ci >= len(opts):
+                    continue
+                questions_out.append(
+                    {
+                        "question_type": "mcq",
+                        "question_text": str(qt).strip(),
+                        "marks": marks,
+                        "options": opts[:8],
+                        "correct_option_index": ci,
+                    }
+                )
+            else:
+                qt_clean = str(qt).strip()
+                if qt_clean:
+                    questions_out.append(
+                        {
+                            "question_type": "text",
+                            "question_text": qt_clean,
+                            "marks": marks,
+                        }
+                    )
+
+        return {
+            "title": str(parsed.get("title") or "").strip()
+            or f"Homework — {subject_hint or 'Practice'}",
+            "instructions": str(parsed.get("instructions") or "").strip(),
+            "questions": questions_out,
+        }
+    except Exception as e:
+        logger.warning("Structured homework AI failed: %s", str(e))
+        return _fallback_homework_payload(text_in, nm, nt, subject_hint)
 
 
 # ============================================
