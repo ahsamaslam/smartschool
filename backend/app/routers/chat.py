@@ -17,10 +17,19 @@ import magic
 import bleach
 from decimal import Decimal
 
+from pydantic import BaseModel
+
 from app.routers.auth import get_user_from_token
 from app.utils.auth import verify_token
 from app.utils.database import execute_query, execute_one, execute_write
 from app.config import settings
+
+# ============================================
+# PYDANTIC MODELS
+# ============================================
+
+class MessageRequest(BaseModel):
+    content: str
 
 router = APIRouter()
 
@@ -537,12 +546,12 @@ async def get_messages(
 @router.post("/conversations/{conversation_id}/messages")
 async def send_message(
     conversation_id: str,
+    request: MessageRequest,
     user: dict = Depends(get_user_from_token),
-    body: dict = Body(...),
 ):
     """Send text message"""
     user_id = user["user_id"]
-    content = body.get("content", "")[:MAX_MESSAGE_LENGTH]
+    content = request.content[:MAX_MESSAGE_LENGTH]
 
     # Sanitize content
     content = bleach.clean(content, tags=[], strip=True)
@@ -600,29 +609,33 @@ async def send_message(
 
     # Insert notification for recipient
     recipient_id = conv["participant_b_id"] if conv["participant_a_id"] == user_id else conv["participant_a_id"]
+
+    # Fetch sender's full_name from database
+    sender = await execute_one("SELECT full_name FROM users WHERE id = $1", user_id)
+    sender_name = sender.get("full_name") if sender else "Unknown"
+
     await execute_write(
         """INSERT INTO notifications (user_id, type, title, body, entity_type, entity_id)
            VALUES ($1, 'chat_message', 'New message', $2, 'message', $3)""",
-        recipient_id, f"Message from {user['full_name']}", msg_id
+        recipient_id, f"Message from {sender_name}", msg_id
     )
 
-    # Send via WebSocket
-    await manager.send_to_user(recipient_id, {
+    # Send via WebSocket to both recipient AND sender
+    message_data = {
         "type": "new_message",
         "message_id": msg_id,
         "conversation_id": conversation_id,
         "sender_id": user_id,
-        "sender_name": user.get("full_name"),
+        "sender_name": sender_name,
         "content": content,
         "created_at": datetime.utcnow().isoformat(),
-    })
+    }
 
-    # Send delivery receipt to sender
-    await manager.send_to_user(user_id, {
-        "type": "delivery_receipt",
-        "message_id": msg_id,
-        "status": "sent"
-    })
+    # Send to recipient
+    await manager.send_to_user(recipient_id, message_data)
+
+    # Send to sender (so they see it immediately)
+    await manager.send_to_user(user_id, message_data)
 
     return {"id": msg_id, "status": "sent"}
 
