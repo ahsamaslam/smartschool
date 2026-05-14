@@ -54,15 +54,20 @@ export default function StudentChat() {
 
   // Listen for incoming messages via WebSocket
   useEffect(() => {
-    if (incomingMessage && selectedConversation) {
-      // If the message is for the current conversation, add it to messages
-      if (incomingMessage.conversation_id === selectedConversation.id) {
-        setMessages((prev) => [...prev, {
-          id: incomingMessage.message_id,
-          content: incomingMessage.content,
-          sender_id: incomingMessage.sender_id,
-          created_at: new Date().toISOString(),
-        }]);
+    if (incomingMessage) {
+      console.log('📬 Incoming message in StudentChat:', incomingMessage);
+      if (selectedConversation) {
+        console.log('Selected conversation ID:', selectedConversation.id, 'Message conversation ID:', incomingMessage.conversation_id);
+        // If the message is for the current conversation, add it to messages
+        if (incomingMessage.conversation_id === selectedConversation.id) {
+          console.log('✅ Adding message to current conversation');
+          setMessages((prev) => [...prev, {
+            id: incomingMessage.message_id,
+            content: incomingMessage.content,
+            sender_id: incomingMessage.sender_id,
+            created_at: new Date().toISOString(),
+          }]);
+        }
       }
     }
   }, [incomingMessage, selectedConversation]);
@@ -71,6 +76,7 @@ export default function StudentChat() {
     try {
       const response = await chatService.createConversation(teacherId);
       setSelectedConversation(response.data);
+      loadMessages(response.data.id);
       loadConversations();
       setActiveTab('conversations');
     } catch (err) {
@@ -96,7 +102,7 @@ export default function StudentChat() {
       await chatService.sendMessage(selectedConversation.id, messageInput);
       console.log('Message sent successfully');
       setMessageInput('');
-      await loadMessages(selectedConversation.id);
+      // Don't call loadMessages - WebSocket will deliver the message in real-time
     } catch (err) {
       console.error('Failed to send message:', err);
       console.error('Error response:', err.response?.data);
