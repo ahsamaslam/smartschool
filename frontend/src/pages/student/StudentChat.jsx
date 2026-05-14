@@ -139,6 +139,8 @@ export default function StudentChat() {
       await chatService.sendMessage(selectedConversation.id, messageInput);
       console.log('Message sent successfully');
       setMessageInput('');
+      // Reload messages to show the newly sent message
+      await loadMessages(selectedConversation.id);
       // Reload conversations to ensure it appears in the list
       loadConversations();
     } catch (err) {

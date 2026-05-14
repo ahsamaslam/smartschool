@@ -104,7 +104,10 @@ export default function TeacherChat() {
       await chatService.sendMessage(selectedConversation.id, messageInput);
       console.log('✅ [TeacherChat] Message sent successfully');
       setMessageInput('');
-      // Don't call loadMessages - WebSocket will deliver the message in real-time
+      // Reload messages to show the newly sent message
+      await loadMessages(selectedConversation.id);
+      // Reload conversations to ensure it appears in the list
+      loadConversations();
     } catch (err) {
       console.error('Failed to send message:', err);
     } finally {
