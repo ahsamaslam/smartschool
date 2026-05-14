@@ -23,6 +23,9 @@ export default function TeacherChat() {
   // Listen for incoming messages via WebSocket
   useEffect(() => {
     if (incomingMessage) {
+      console.log('📬 [TeacherChat] Incoming message:', incomingMessage);
+      console.log('📬 [TeacherChat] Selected conversation:', selectedConversation?.id);
+
       // Update conversation list: move conversation to top and update preview
       setConversations((prev) => {
         const updated = prev.map((conv) =>
@@ -46,13 +49,18 @@ export default function TeacherChat() {
       if (selectedConversation) {
         // If the message is for the current conversation, add it to messages
         if (incomingMessage.conversation_id === selectedConversation.id) {
+          console.log('✅ [TeacherChat] Adding message to current conversation');
           setMessages((prev) => [...prev, {
             id: incomingMessage.message_id,
             content: incomingMessage.content,
             sender_id: incomingMessage.sender_id,
             created_at: new Date().toISOString(),
           }]);
+        } else {
+          console.log('❌ [TeacherChat] Message is for different conversation:', incomingMessage.conversation_id, 'vs', selectedConversation.id);
         }
+      } else {
+        console.log('❌ [TeacherChat] No conversation selected');
       }
     }
   }, [incomingMessage, selectedConversation]);
@@ -92,7 +100,9 @@ export default function TeacherChat() {
 
     setSendingMessage(true);
     try {
+      console.log('📤 [TeacherChat] Sending message:', messageInput, 'to conversation:', selectedConversation.id);
       await chatService.sendMessage(selectedConversation.id, messageInput);
+      console.log('✅ [TeacherChat] Message sent successfully');
       setMessageInput('');
       // Don't call loadMessages - WebSocket will deliver the message in real-time
     } catch (err) {
