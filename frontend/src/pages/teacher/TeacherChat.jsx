@@ -6,7 +6,7 @@ import Spinner from '../../components/common/Spinner';
 
 export default function TeacherChat() {
   const { user } = useAuth();
-  const { unreadCount } = useChatContext();
+  const { unreadCount, incomingMessage } = useChatContext();
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyMode, setBusyMode] = useState(false);
@@ -18,6 +18,21 @@ export default function TeacherChat() {
   useEffect(() => {
     loadConversations();
   }, []);
+
+  // Listen for incoming messages via WebSocket
+  useEffect(() => {
+    if (incomingMessage && selectedConversation) {
+      // If the message is for the current conversation, add it to messages
+      if (incomingMessage.conversation_id === selectedConversation.id) {
+        setMessages((prev) => [...prev, {
+          id: incomingMessage.message_id,
+          content: incomingMessage.content,
+          sender_id: incomingMessage.sender_id,
+          created_at: new Date().toISOString(),
+        }]);
+      }
+    }
+  }, [incomingMessage, selectedConversation]);
 
   const loadConversations = async () => {
     try {

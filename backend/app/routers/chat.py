@@ -11,7 +11,7 @@ import json
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Set, Dict, List
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, UploadFile, File, Query, status
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, UploadFile, File, Query, Body, status
 from fastapi.responses import JSONResponse
 import magic
 import bleach
@@ -537,8 +537,8 @@ async def get_messages(
 @router.post("/conversations/{conversation_id}/messages")
 async def send_message(
     conversation_id: str,
-    body: dict,
     user: dict = Depends(get_user_from_token),
+    body: dict = Body(...),
 ):
     """Send text message"""
     user_id = user["user_id"]
