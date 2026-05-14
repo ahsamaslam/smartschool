@@ -12,5 +12,12 @@ export default function ProtectedRoute() {
     return <Navigate to="/login" replace />;
   }
 
+  if (
+    user?.must_change_password &&
+    window.location.pathname !== "/auth/force-password-change"
+  ) {
+    return <Navigate to="/auth/force-password-change" replace />;
+  }
+
   return <Outlet />;
 }

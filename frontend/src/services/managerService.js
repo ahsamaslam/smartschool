@@ -4,6 +4,14 @@ import { API_ROUTES } from "../utils/constants";
 const managerService = {
   // Schools
   getSchools: () => api.get(`${API_ROUTES.MANAGERS}/schools`),
+  getUsers: (params) => api.get(`${API_ROUTES.MANAGERS}/users`, { params }),
+  createUser: (data) => api.post(`${API_ROUTES.MANAGERS}/users`, data),
+  deactivateUser: (userId) =>
+    api.delete(`${API_ROUTES.MANAGERS}/users/${userId}`),
+  activateUser: (userId) =>
+    api.post(`${API_ROUTES.MANAGERS}/users/${userId}/activate`),
+  resetUserTemporaryPassword: (userId) =>
+    api.post(`${API_ROUTES.MANAGERS}/users/${userId}/temporary-password`),
   getSchoolBranches: (schoolId) =>
     api.get(`${API_ROUTES.MANAGERS}/schools/${schoolId}/branches`),
   getBranchOverview: (branchId) =>
@@ -12,24 +20,50 @@ const managerService = {
   // Teachers
   getTeachers: () => api.get(`${API_ROUTES.MANAGERS}/teachers`),
   createTeacher: (data) => api.post(`${API_ROUTES.MANAGERS}/teachers`, data),
-  updateTeacher: (teacherId, data) => api.put(`${API_ROUTES.MANAGERS}/teachers/${teacherId}`, data),
-  deleteTeacher: (teacherId) => api.post(`${API_ROUTES.MANAGERS}/teachers/${teacherId}/remove`),
-  deleteTeachers: (teacherIds) => api.post(`${API_ROUTES.MANAGERS}/teachers/bulk-remove`, { teacher_ids: teacherIds }),
+  updateTeacher: (teacherId, data) =>
+    api.put(`${API_ROUTES.MANAGERS}/teachers/${teacherId}`, data),
+  deleteTeacher: (teacherId) =>
+    api.post(`${API_ROUTES.MANAGERS}/teachers/${teacherId}/remove`),
+  deleteTeachers: (teacherIds) =>
+    api.post(`${API_ROUTES.MANAGERS}/teachers/bulk-remove`, {
+      teacher_ids: teacherIds,
+    }),
   importTeachers: (file) => {
     const formData = new FormData();
     formData.append("file", file);
     return api.post(`${API_ROUTES.MANAGERS}/import-teachers`, formData);
   },
+  downloadTeacherImportTemplate: () =>
+    api.get(`${API_ROUTES.MANAGERS}/teachers/import-template`, {
+      responseType: "blob",
+    }),
   assignTeacherClass: (teacherId, classId) =>
-    api.post(`${API_ROUTES.MANAGERS}/teachers/${teacherId}/assign-class`, { class_id: classId }),
+    api.post(`${API_ROUTES.MANAGERS}/teachers/${teacherId}/assign-class`, {
+      class_id: classId,
+    }),
 
   // Students
   getStudents: (params) =>
     api.get(`${API_ROUTES.MANAGERS}/students`, { params }),
+  createStudent: (data) => api.post(`${API_ROUTES.MANAGERS}/students`, data),
+  updateStudent: (studentId, data) =>
+    api.patch(`${API_ROUTES.MANAGERS}/students/${studentId}`, data),
+  deleteStudent: (studentId) =>
+    api.delete(`${API_ROUTES.MANAGERS}/students/${studentId}`),
+  importStudents: (file) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return api.post(`${API_ROUTES.MANAGERS}/import-students`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+  downloadStudentImportTemplate: () =>
+    api.get(`${API_ROUTES.MANAGERS}/students/import-template`, {
+      responseType: "blob",
+    }),
 
   // Classes
-  getClasses: (params) =>
-    api.get(`${API_ROUTES.MANAGERS}/classes`, { params }),
+  getClasses: (params) => api.get(`${API_ROUTES.MANAGERS}/classes`, { params }),
   createClass: (data) => api.post(`${API_ROUTES.MANAGERS}/classes`, data),
 
   // Reports

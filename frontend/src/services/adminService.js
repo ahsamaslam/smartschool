@@ -12,22 +12,60 @@ const adminService = {
       },
     }),
   getStudentsLedger: () => api.get(`${API_ROUTES.ADMINS}/students`),
-  getStudentDetail: (studentId) => api.get(`${API_ROUTES.ADMINS}/students/${studentId}`),
+  getStudentDetail: (studentId) =>
+    api.get(`${API_ROUTES.ADMINS}/students/${studentId}`),
   createStudent: (data) => api.post(`${API_ROUTES.ADMINS}/students`, data),
-  promoteStudent: (studentId, data) => api.post(`${API_ROUTES.ADMINS}/students/${studentId}/promote`, data),
-  repeatStudent: (studentId, data) => api.post(`${API_ROUTES.ADMINS}/students/${studentId}/repeat`, data),
-  changeStudentSection: (studentId, data) => api.post(`${API_ROUTES.ADMINS}/students/${studentId}/change-section`, data),
-  getStudentSectionOptions: (studentId) => api.get(`${API_ROUTES.ADMINS}/students/${studentId}/section-options`),
-  setCurrentEnrollment: (studentId, data) => api.post(`${API_ROUTES.ADMINS}/students/${studentId}/set-current-enrollment`, data),
-  archiveStudent: (studentId) => api.delete(`${API_ROUTES.ADMINS}/students/${studentId}`),
-  updateStudent: (studentId, data) => api.patch(`${API_ROUTES.ADMINS}/students/${studentId}`, data),
+  downloadStudentImportTemplate: () =>
+    api.get(`${API_ROUTES.ADMINS}/students/import-template`, {
+      responseType: "blob",
+    }),
+  importStudents: (file) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return api.post(`${API_ROUTES.ADMINS}/students/import`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+  promoteStudent: (studentId, data) =>
+    api.post(`${API_ROUTES.ADMINS}/students/${studentId}/promote`, data),
+  repeatStudent: (studentId, data) =>
+    api.post(`${API_ROUTES.ADMINS}/students/${studentId}/repeat`, data),
+  changeStudentSection: (studentId, data) =>
+    api.post(`${API_ROUTES.ADMINS}/students/${studentId}/change-section`, data),
+  getStudentSectionOptions: (studentId) =>
+    api.get(`${API_ROUTES.ADMINS}/students/${studentId}/section-options`),
+  setCurrentEnrollment: (studentId, data) =>
+    api.post(
+      `${API_ROUTES.ADMINS}/students/${studentId}/set-current-enrollment`,
+      data,
+    ),
+  archiveStudent: (studentId) =>
+    api.delete(`${API_ROUTES.ADMINS}/students/${studentId}`),
+  updateStudent: (studentId, data) =>
+    api.patch(`${API_ROUTES.ADMINS}/students/${studentId}`, data),
   setStudentPassword: (studentId, password) =>
-    api.post(`${API_ROUTES.ADMINS}/users/${studentId}/set-password`, { password }),
+    api.post(`${API_ROUTES.ADMINS}/users/${studentId}/set-password`, {
+      password,
+    }),
 
   createUser: (data) => api.post(`${API_ROUTES.ADMINS}/users`, data),
-  updateUser: (userId, data) => api.put(`${API_ROUTES.ADMINS}/users/${userId}`, data),
+  downloadTeacherImportTemplate: () =>
+    api.get(`${API_ROUTES.ADMINS}/teachers/import-template`, {
+      responseType: "blob",
+    }),
+  importTeachers: (file) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return api.post(`${API_ROUTES.ADMINS}/teachers/import`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+  updateUser: (userId, data) =>
+    api.put(`${API_ROUTES.ADMINS}/users/${userId}`, data),
   setUserPassword: (userId, password) =>
     api.post(`${API_ROUTES.ADMINS}/users/${userId}/set-password`, { password }),
+  resetUserTemporaryPassword: (userId) =>
+    api.post(`${API_ROUTES.ADMINS}/users/${userId}/temporary-password`),
 
   assignRole: (userId, newRole) =>
     api.put(`${API_ROUTES.ADMINS}/users/${userId}/role`, {
@@ -37,25 +75,39 @@ const adminService = {
 
   deactivateUser: (userId) =>
     api.delete(`${API_ROUTES.ADMINS}/users/${userId}`),
+  hardDeleteUser: (userId) =>
+    api.delete(`${API_ROUTES.ADMINS}/users/${userId}/hard`),
   activateUser: (userId) =>
     api.post(`${API_ROUTES.ADMINS}/users/${userId}/activate`),
 
   // Schools
+  getTenants: () => api.get(`${API_ROUTES.ADMINS}/tenants`),
+  createTenant: (data) => api.post(`${API_ROUTES.ADMINS}/tenants`, data),
+  updateTenant: (tenantId, data) =>
+    api.patch(`${API_ROUTES.ADMINS}/tenants/${tenantId}`, data),
+  deleteTenant: (tenantId) =>
+    api.delete(`${API_ROUTES.ADMINS}/tenants/${tenantId}`),
+
   getSchools: () => api.get(`${API_ROUTES.ADMINS}/schools`),
   getAllSchoolData: (axiosConfig = {}) =>
     api.get(`${API_ROUTES.ADMINS}/schools/all-data`, axiosConfig),
 
   createSchool: (data) => api.post(`${API_ROUTES.ADMINS}/schools`, data),
-  updateSchool: (schoolId, data) => api.put(`${API_ROUTES.ADMINS}/schools/${schoolId}`, data),
-  deleteSchool: (schoolId) => api.delete(`${API_ROUTES.ADMINS}/schools/${schoolId}`),
-  createSchoolManager: (schoolId, data) => api.post(`${API_ROUTES.ADMINS}/schools/${schoolId}/manager`, data),
+  updateSchool: (schoolId, data) =>
+    api.put(`${API_ROUTES.ADMINS}/schools/${schoolId}`, data),
+  deleteSchool: (schoolId) =>
+    api.delete(`${API_ROUTES.ADMINS}/schools/${schoolId}`),
+  createSchoolManager: (schoolId, data) =>
+    api.post(`${API_ROUTES.ADMINS}/schools/${schoolId}/manager`, data),
 
   getSchoolBranches: (schoolId) =>
     api.get(`${API_ROUTES.ADMINS}/schools/${schoolId}/branches`),
 
   createBranch: (data) => api.post(`${API_ROUTES.ADMINS}/branches`, data),
-  updateBranch: (branchId, data) => api.put(`${API_ROUTES.ADMINS}/branches/${branchId}`, data),
-  deleteBranch: (branchId) => api.delete(`${API_ROUTES.ADMINS}/branches/${branchId}`),
+  updateBranch: (branchId, data) =>
+    api.put(`${API_ROUTES.ADMINS}/branches/${branchId}`, data),
+  deleteBranch: (branchId) =>
+    api.delete(`${API_ROUTES.ADMINS}/branches/${branchId}`),
 
   getBranchClasses: (branchId) =>
     api.get(`${API_ROUTES.ADMINS}/branches/${branchId}/classes`),
@@ -63,8 +115,10 @@ const adminService = {
   getClasses: () => api.get(`${API_ROUTES.ADMINS}/classes`),
 
   createClass: (data) => api.post(`${API_ROUTES.ADMINS}/classes`, data),
-  updateClass: (classId, data) => api.put(`${API_ROUTES.ADMINS}/classes/${classId}`, data),
-  deleteClass: (classId) => api.delete(`${API_ROUTES.ADMINS}/classes/${classId}`),
+  updateClass: (classId, data) =>
+    api.put(`${API_ROUTES.ADMINS}/classes/${classId}`, data),
+  deleteClass: (classId) =>
+    api.delete(`${API_ROUTES.ADMINS}/classes/${classId}`),
 
   // Curriculum
   getSubjects: () => api.get(`${API_ROUTES.ADMINS}/subjects`),
@@ -184,8 +238,7 @@ const adminService = {
       design_template_id: templateId,
     }),
 
-  seedDefaultTemplates: () =>
-    api.post(`${API_ROUTES.ADMINS}/templates/seed`),
+  seedDefaultTemplates: () => api.post(`${API_ROUTES.ADMINS}/templates/seed`),
 
   /** Structured slide deck (Claude when configured, mock fallback). */
   generateAISlides: (data) =>

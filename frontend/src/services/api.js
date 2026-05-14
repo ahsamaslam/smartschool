@@ -38,7 +38,11 @@ const api = axios.create({
 // ── Request interceptor — attach JWT ──────────────────────────────────────────
 api.interceptors.request.use(
   (config) => {
-    if (typeof config.url === "string" && config.url.startsWith("/") && !/^https?:\/\//i.test(config.url)) {
+    if (
+      typeof config.url === "string" &&
+      config.url.startsWith("/") &&
+      !/^https?:\/\//i.test(config.url)
+    ) {
       config.url = config.url.slice(1);
     }
     const token = localStorage.getItem("smart_school_token");
@@ -64,7 +68,7 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 && !error.config?.skipAuthRedirect) {
       // Clear stale credentials and redirect to login
       localStorage.removeItem("smart_school_token");
       localStorage.removeItem("smart_school_user");

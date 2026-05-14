@@ -36,7 +36,9 @@ class LoginResponse(BaseModel):
     full_name: str
     role: str
     profile_picture_url: Optional[str] = None
+    tenant_id: Optional[str] = None
     school_id: Optional[str] = None
+    must_change_password: bool = False
     token: str
 
 
@@ -103,6 +105,7 @@ async def login(credentials: LoginRequest):
             "sub": user_id,
             "role": user["role"],
             "email": user["email"],
+            "tenant_id": str(user["tenant_id"]) if user.get("tenant_id") else None,
             "school_id": str(user["school_id"]) if user.get("school_id") else None,
         }
     )
@@ -112,6 +115,7 @@ async def login(credentials: LoginRequest):
         "user_id": user_id,
         "email": user["email"],
         "role": user["role"],
+        "tenant_id": str(user["tenant_id"]) if user.get("tenant_id") else None,
         "login_time": datetime.now().isoformat(),
     }
     await set_user_session(user_id, session_data, expire=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
@@ -122,7 +126,9 @@ async def login(credentials: LoginRequest):
         full_name=user["full_name"],
         role=user["role"],
         profile_picture_url=user.get("profile_picture_url"),
+        tenant_id=str(user["tenant_id"]) if user.get("tenant_id") else None,
         school_id=str(user["school_id"]) if user.get("school_id") else None,
+        must_change_password=bool(user.get("must_change_password", False)),
         token=token,
     )
 
@@ -192,7 +198,7 @@ async def confirm_password_reset(request: PasswordResetConfirm):
     new_hash = hash_password(request.new_password)
 
     await execute_write(
-        "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2",
+        "UPDATE users SET password_hash = $1, must_change_password = false, updated_at = NOW() WHERE id = $2",
         new_hash,
         token_data["user_id"],
     )
@@ -228,7 +234,7 @@ async def change_password(request: ChangePasswordRequest):
 
     new_hash = hash_password(request.new_password)
     await execute_write(
-        "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2",
+        "UPDATE users SET password_hash = $1, must_change_password = false, updated_at = NOW() WHERE id = $2",
         new_hash,
         request.user_id,
     )
@@ -328,6 +334,7 @@ async def get_user_from_token(authorization: Optional[str] = Header(None)) -> di
         "user_id": payload["sub"],
         "role": payload["role"],
         "email": payload["email"],
+        "tenant_id": payload.get("tenant_id"),
         "school_id": payload.get("school_id"),
     }
 

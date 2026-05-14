@@ -44,22 +44,43 @@ services:
       retries: 5
 
   # ============================================
-  # Backend — FastAPI (uncomment to containerise)
+  # Backend — FastAPI
   # ============================================
-  # backend:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   container_name: smart_school_api
-  #   restart: unless-stopped
-  #   env_file: ./backend/.env
-  #   ports:
-  #     - "8000:8000"
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: smart_school_api
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      # Override localhost references so they point at Docker service names
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/smart_school
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist uploaded/generated files between restarts
+      - ./backend/static:/app/static
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ============================================
+  # Frontend — React (Vite build → Nginx)
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: smart_school_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:

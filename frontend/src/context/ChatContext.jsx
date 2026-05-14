@@ -1,6 +1,12 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import chatService from '../services/chatService';
-import { useChat } from '../hooks/useChat';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useEffect,
+} from "react";
+import chatService from "../services/chatService";
+import { useChat } from "../hooks/useChat";
 
 const ChatContext = createContext(null);
 
@@ -19,7 +25,7 @@ export const ChatProvider = ({ children }) => {
     } catch (err) {
       // Silently ignore errors (user may not be authenticated)
       if (err.response?.status !== 401) {
-        console.error('Failed to refresh unread count:', err);
+        console.error("Failed to refresh unread count:", err);
       }
     }
   }, []);
@@ -32,7 +38,7 @@ export const ChatProvider = ({ children }) => {
   }, []);
 
   const handleTyping = useCallback((data) => {
-    if (data.type === 'typing') {
+    if (data.type === "typing") {
       setTypingState((prev) => ({
         ...prev,
         [data.conversation_id]: {
@@ -57,7 +63,7 @@ export const ChatProvider = ({ children }) => {
           return updated;
         });
       }, 5000);
-    } else if (data.type === 'typing_stop') {
+    } else if (data.type === "typing_stop") {
       setTypingState((prev) => {
         const updated = { ...prev };
         if (updated[data.conversation_id]) {
@@ -82,7 +88,7 @@ export const ChatProvider = ({ children }) => {
   const { isConnected } = useChat(
     handleIncomingMessage,
     handleTyping,
-    handleDelivery
+    handleDelivery,
   );
 
   useEffect(() => {
@@ -92,7 +98,7 @@ export const ChatProvider = ({ children }) => {
   // Initial load of unread count (only if authenticated)
   useEffect(() => {
     // Only refresh if we have a valid auth token
-    const token = localStorage.getItem('authToken');
+    const token = localStorage.getItem("smart_school_token");
     if (token) {
       refreshUnreadCount();
     }
@@ -110,17 +116,13 @@ export const ChatProvider = ({ children }) => {
     refreshUnreadCount,
   };
 
-  return (
-    <ChatContext.Provider value={value}>
-      {children}
-    </ChatContext.Provider>
-  );
+  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
 };
 
 export const useChatContext = () => {
   const context = useContext(ChatContext);
   if (!context) {
-    throw new Error('useChatContext must be used within ChatProvider');
+    throw new Error("useChatContext must be used within ChatProvider");
   }
   return context;
 };

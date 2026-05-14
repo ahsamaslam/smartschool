@@ -25,6 +25,10 @@ export default function Login() {
     setLoading(false);
 
     if (result.success) {
+      if (result.mustChangePassword) {
+        navigate("/auth/force-password-change", { replace: true });
+        return;
+      }
       navigate(ROLE_DASHBOARDS[result.role] || "/", { replace: true });
     } else {
       setError(result.message);

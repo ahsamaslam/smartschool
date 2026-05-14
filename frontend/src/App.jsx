@@ -6,23 +6,35 @@ import Layout from "./components/layout/Layout";
 import ProtectedRoute from "./routes/ProtectedRoute";
 import RoleBasedRedirect from "./routes/RoleBasedRoute";
 import TeacherRoute from "./routes/TeacherRoute";
+import { useAuth } from "./context/AuthContext";
 
 // Auth pages (no lazy — small, always needed)
 import Login from "./pages/auth/Login";
 import ForgotPassword from "./pages/auth/ForgotPassword";
 import ResetPassword from "./pages/auth/ResetPassword";
+import ForcePasswordChange from "./pages/auth/ForcePasswordChange";
 
 // ── Lazy-loaded portals ──────────────────────────────────────────────────────
 // Student
 const StudentDashboard = lazy(() => import("./pages/student/Dashboard"));
 const MyCourses = lazy(() => import("./pages/student/MyCourses"));
-const StudentCourseSubject = lazy(() => import("./pages/student/StudentCourseSubject"));
-const StudentCourseBook = lazy(() => import("./pages/student/StudentCourseBook"));
-const StudentCourseChapter = lazy(() => import("./pages/student/StudentCourseChapter"));
-const StudentTopicLearn = lazy(() => import("./pages/student/StudentTopicLearn"));
+const StudentCourseSubject = lazy(
+  () => import("./pages/student/StudentCourseSubject"),
+);
+const StudentCourseBook = lazy(
+  () => import("./pages/student/StudentCourseBook"),
+);
+const StudentCourseChapter = lazy(
+  () => import("./pages/student/StudentCourseChapter"),
+);
+const StudentTopicLearn = lazy(
+  () => import("./pages/student/StudentTopicLearn"),
+);
 const StudentExams = lazy(() => import("./pages/student/StudentExams"));
 const StudentExamTake = lazy(() => import("./pages/student/StudentExamTake"));
-const StudentExamResults = lazy(() => import("./pages/student/StudentExamResults"));
+const StudentExamResults = lazy(
+  () => import("./pages/student/StudentExamResults"),
+);
 const MyEnrollment = lazy(() => import("./pages/student/MyEnrollment"));
 const SubjectView = lazy(() => import("./pages/student/SubjectView"));
 const VideoLesson = lazy(() => import("./pages/student/VideoLesson"));
@@ -30,7 +42,9 @@ const QuizPage = lazy(() => import("./pages/student/QuizPage"));
 const QuizResults = lazy(() => import("./pages/student/QuizResults"));
 const StudentProfile = lazy(() => import("./pages/student/Profile"));
 const StudentHomework = lazy(() => import("./pages/student/StudentHomework"));
-const StudentHomeworkDetail = lazy(() => import("./pages/student/StudentHomeworkDetail"));
+const StudentHomeworkDetail = lazy(
+  () => import("./pages/student/StudentHomeworkDetail"),
+);
 
 // Teacher
 const TeacherDashboard = lazy(() => import("./pages/teacher/Dashboard"));
@@ -44,12 +58,18 @@ const LectureViewer = lazy(() => import("./pages/teacher/LectureViewerPage"));
 const GenerateExam = lazy(() => import("./pages/teacher/GenerateExam"));
 const ExamsPage = lazy(() => import("./pages/teacher/Exams"));
 const ExamEditor = lazy(() => import("./pages/teacher/ExamEditor"));
-const TeacherExamSubmissions = lazy(() => import("./pages/teacher/TeacherExamSubmissions"));
+const TeacherExamSubmissions = lazy(
+  () => import("./pages/teacher/TeacherExamSubmissions"),
+);
 const TeacherReports = lazy(() => import("./pages/teacher/Reports"));
-const TeacherClassHomework = lazy(() => import("./pages/teacher/TeacherClassHomework"));
-const TeacherHomeworkEditor = lazy(() => import("./pages/teacher/TeacherHomeworkEditor"));
-const TeacherHomeworkSubmissions = lazy(() =>
-  import("./pages/teacher/TeacherHomeworkSubmissions"),
+const TeacherClassHomework = lazy(
+  () => import("./pages/teacher/TeacherClassHomework"),
+);
+const TeacherHomeworkEditor = lazy(
+  () => import("./pages/teacher/TeacherHomeworkEditor"),
+);
+const TeacherHomeworkSubmissions = lazy(
+  () => import("./pages/teacher/TeacherHomeworkSubmissions"),
 );
 const TeacherHomework = lazy(() => import("./pages/teacher/Homework"));
 const TeacherMyCurriculum = lazy(() => import("./pages/teacher/MyCurriculum"));
@@ -64,21 +84,27 @@ const ClassReports = lazy(() => import("./pages/manager/ClassReports"));
 const TeacherReportsMgr = lazy(() => import("./pages/manager/TeacherReports"));
 const ManagerTeachers = lazy(() => import("./pages/manager/Teachers"));
 const ManagerStudents = lazy(() => import("./pages/manager/Students"));
+const ManagerSettings = lazy(() => import("./pages/manager/Settings"));
 
 // Admin
 const AdminDashboard = lazy(() => import("./pages/admin/Dashboard"));
+const AdminTenants = lazy(() => import("./pages/admin/Tenants"));
 const AdminUsers = lazy(() => import("./pages/admin/Users"));
 const AdminSchools = lazy(() => import("./pages/admin/Schools"));
 const AdminTeachers = lazy(() => import("./pages/admin/Teachers"));
 const AdminStudents = lazy(() => import("./pages/admin/Students"));
-const AdminStudentPreview = lazy(() => import("./pages/admin/AdminStudentPreview"));
+const AdminStudentPreview = lazy(
+  () => import("./pages/admin/AdminStudentPreview"),
+);
 const AdminCurriculum = lazy(() => import("./pages/admin/Curriculum"));
 const AdminLibrary = lazy(() => import("./pages/admin/Library"));
 const AdminAIParser = lazy(() => import("./pages/admin/AIParser"));
 const AdminVideos = lazy(() => import("./pages/admin/Videos"));
 const AdminSlides = lazy(() => import("./pages/admin/Slides"));
 const AdminRecordLecture = lazy(() => import("./pages/admin/RecordLecture"));
-const AdminRecordedLectures = lazy(() => import("./pages/admin/RecordedLectures"));
+const AdminRecordedLectures = lazy(
+  () => import("./pages/admin/RecordedLectures"),
+);
 const AdminLibraryTopicPresent = lazy(
   () => import("./pages/admin/LibraryTopicPresent"),
 );
@@ -99,10 +125,18 @@ const AdminChat = lazy(() => import("./pages/admin/AdminChat"));
 
 // Shared
 const ProfilePage = lazy(() => import("./pages/shared/ProfilePage"));
-const TopicLecturePlayer = lazy(() => import("./pages/shared/TopicLecturePlayer"));
+const TopicLecturePlayer = lazy(
+  () => import("./pages/shared/TopicLecturePlayer"),
+);
 
 // ── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
+
+  const superAdminOnly = (element) =>
+    isSuperAdmin ? element : <Navigate to="/admin/dashboard" replace />;
+
   return (
     <Suspense fallback={<PageSpinner />}>
       <Routes>
@@ -116,6 +150,11 @@ export default function App() {
 
         {/* Protected routes — all share the Layout shell */}
         <Route element={<ProtectedRoute />}>
+          <Route
+            path="/auth/force-password-change"
+            element={<ForcePasswordChange />}
+          />
+
           <Route element={<Layout />}>
             {/* ── STUDENT ── */}
             <Route path="/student/dashboard" element={<StudentDashboard />} />
@@ -133,10 +172,19 @@ export default function App() {
             />
             <Route path="/student/courses" element={<MyCourses />} />
             <Route path="/student/homework" element={<StudentHomework />} />
-            <Route path="/student/homework/:homeworkId" element={<StudentHomeworkDetail />} />
+            <Route
+              path="/student/homework/:homeworkId"
+              element={<StudentHomeworkDetail />}
+            />
             <Route path="/student/exams" element={<StudentExams />} />
-            <Route path="/student/exams/:examId" element={<StudentExamTake />} />
-            <Route path="/student/exam/:examId/results" element={<StudentExamResults />} />
+            <Route
+              path="/student/exams/:examId"
+              element={<StudentExamTake />}
+            />
+            <Route
+              path="/student/exam/:examId/results"
+              element={<StudentExamResults />}
+            />
             <Route path="/student/enrollment" element={<MyEnrollment />} />
             <Route
               path="/student/learn/topic/:topicId"
@@ -160,9 +208,18 @@ export default function App() {
               <Route path="/teacher/dashboard" element={<TeacherDashboard />} />
               <Route path="/teacher/classes" element={<TeacherClasses />} />
               <Route path="/teacher/homework" element={<TeacherHomework />} />
-              <Route path="/teacher/classes/:classId" element={<ClassDetail />} />
-              <Route path="/teacher/classes/:classId/homework" element={<TeacherClassHomework />} />
-              <Route path="/teacher/classes/:classId/homework/new" element={<TeacherHomeworkEditor />} />
+              <Route
+                path="/teacher/classes/:classId"
+                element={<ClassDetail />}
+              />
+              <Route
+                path="/teacher/classes/:classId/homework"
+                element={<TeacherClassHomework />}
+              />
+              <Route
+                path="/teacher/classes/:classId/homework/new"
+                element={<TeacherHomeworkEditor />}
+              />
               <Route
                 path="/teacher/classes/:classId/homework/:homeworkId/edit"
                 element={<TeacherHomeworkEditor />}
@@ -175,16 +232,28 @@ export default function App() {
                 path="/teacher/classes/:classId/student/:studentId"
                 element={<StudentDetail />}
               />
-              <Route path="/teacher/attendance" element={<TeacherAttendance />} />
+              <Route
+                path="/teacher/attendance"
+                element={<TeacherAttendance />}
+              />
               <Route path="/teacher/publish-video" element={<PublishVideo />} />
               <Route path="/teacher/avatar-videos" element={<AvatarVideos />} />
-              <Route path="/teacher/lecture-viewer" element={<LectureViewer />} />
+              <Route
+                path="/teacher/lecture-viewer"
+                element={<LectureViewer />}
+              />
               <Route path="/teacher/generate-exam" element={<GenerateExam />} />
               <Route path="/teacher/exams" element={<ExamsPage />} />
               <Route path="/teacher/exams/:examId" element={<ExamEditor />} />
-              <Route path="/teacher/exams/:examId/submissions" element={<TeacherExamSubmissions />} />
+              <Route
+                path="/teacher/exams/:examId/submissions"
+                element={<TeacherExamSubmissions />}
+              />
               <Route path="/teacher/reports" element={<TeacherReports />} />
-              <Route path="/teacher/curriculum" element={<TeacherMyCurriculum />} />
+              <Route
+                path="/teacher/curriculum"
+                element={<TeacherMyCurriculum />}
+              />
               <Route path="/teacher/chat" element={<TeacherChat />} />
             </Route>
 
@@ -199,6 +268,19 @@ export default function App() {
               path="/manager/schools/:schoolId/branches/:branchId"
               element={<BranchView />}
             />
+            <Route path="/manager/library" element={<AdminLibrary />} />
+            <Route
+              path="/manager/library/boards/:boardId"
+              element={<AdminBoardSubjects />}
+            />
+            <Route
+              path="/manager/library/books/:bookId"
+              element={<AdminBookDetail />}
+            />
+            <Route
+              path="/manager/library/topics/:topicId/present"
+              element={<AdminLibraryTopicPresent />}
+            />
             <Route
               path="/manager/student-reports"
               element={<StudentReports />}
@@ -210,13 +292,21 @@ export default function App() {
             />
             <Route path="/manager/teachers" element={<ManagerTeachers />} />
             <Route path="/manager/students" element={<ManagerStudents />} />
+            <Route path="/manager/settings" element={<ManagerSettings />} />
             <Route path="/manager/chat" element={<ManagerChat />} />
 
             {/* ── ADMIN ── */}
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
+            <Route
+              path="/admin/tenants"
+              element={superAdminOnly(<AdminTenants />)}
+            />
             <Route path="/admin/users" element={<AdminUsers />} />
             <Route path="/admin/schools" element={<AdminSchools />} />
-            <Route path="/admin/classes/:classId" element={<AdminClassDetail />} />
+            <Route
+              path="/admin/classes/:classId"
+              element={<AdminClassDetail />}
+            />
             <Route
               path="/admin/schools/:schoolId/branches/:branchId"
               element={<BranchView />}
@@ -230,21 +320,39 @@ export default function App() {
               path="/admin/teachers/:teacherId/sections"
               element={<AdminTeacherSectionsPreview />}
             />
-            <Route path="/admin/students/:studentId/view" element={<AdminStudentPreview />} />
+            <Route
+              path="/admin/students/:studentId/view"
+              element={<AdminStudentPreview />}
+            />
             <Route path="/admin/students" element={<AdminStudents />} />
             <Route path="/admin/curriculum" element={<AdminCurriculum />} />
             <Route path="/admin/library" element={<AdminLibrary />} />
-            <Route path="/admin/library/boards/:boardId" element={<AdminBoardSubjects />} />
-            <Route path="/admin/library/books/:bookId" element={<AdminBookDetail />} />
-            <Route path="/admin/sections/:sectionId" element={<AdminSectionDetail />} />
-            <Route path="/admin/ai-parser" element={<AdminAIParser />} />
+            <Route
+              path="/admin/library/boards/:boardId"
+              element={<AdminBoardSubjects />}
+            />
+            <Route
+              path="/admin/library/books/:bookId"
+              element={<AdminBookDetail />}
+            />
+            <Route
+              path="/admin/sections/:sectionId"
+              element={<AdminSectionDetail />}
+            />
+            <Route
+              path="/admin/ai-parser"
+              element={superAdminOnly(<AdminAIParser />)}
+            />
             <Route path="/admin/videos" element={<AdminVideos />} />
             <Route
               path="/admin/library/topics/:topicId/present"
               element={<AdminLibraryTopicPresent />}
             />
             <Route path="/admin/slides" element={<AdminSlides />} />
-            <Route path="/admin/recorded-lectures" element={<AdminRecordedLectures />} />
+            <Route
+              path="/admin/recorded-lectures"
+              element={<AdminRecordedLectures />}
+            />
             <Route
               path="/admin/record-lecture/:libraryTopicId?"
               element={<AdminRecordLecture />}
@@ -254,11 +362,17 @@ export default function App() {
 
             {/* Profile — shared across all roles */}
             <Route path="/student/profile" element={<ProfilePage />} />
-            <Route path="/student/topics/:topicId/lecture" element={<TopicLecturePlayer />} />
+            <Route
+              path="/student/topics/:topicId/lecture"
+              element={<TopicLecturePlayer />}
+            />
             <Route path="/teacher/profile" element={<ProfilePage />} />
             <Route path="/manager/profile" element={<ProfilePage />} />
             <Route path="/admin/profile" element={<ProfilePage />} />
-            <Route path="/admin/topics/:topicId/lecture" element={<TopicLecturePlayer />} />
+            <Route
+              path="/admin/topics/:topicId/lecture"
+              element={<TopicLecturePlayer />}
+            />
           </Route>
         </Route>
 

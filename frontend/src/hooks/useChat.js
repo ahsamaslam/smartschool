@@ -1,119 +1,122 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { useAuth } from './useAuth';
+import { useEffect, useRef, useState, useCallback } from "react";
+import { io } from "socket.io-client";
+import { useAuth } from "./useAuth";
 
-const WS_BASE_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
+// In production this is the same origin as the API (nginx proxies /socket.io/)
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:8000";
 
 export const useChat = (onMessage, onTyping, onDelivery) => {
-  const { authToken } = useAuth();
-  const wsRef = useRef(null);
-  const reconnectTimeoutRef = useRef(null);
-  const pingIntervalRef = useRef(null);
+  const { token: authToken } = useAuth();
+  const socketRef = useRef(null);
   const [isConnected, setIsConnected] = useState(false);
-  const reconnectAttemptsRef = useRef(0);
 
+  // Keep callback refs up-to-date without triggering socket reconnects
+  const onMessageRef = useRef(onMessage);
+  const onTypingRef = useRef(onTyping);
+  const onDeliveryRef = useRef(onDelivery);
+  useEffect(() => { onMessageRef.current = onMessage; }, [onMessage]);
+  useEffect(() => { onTypingRef.current = onTyping; }, [onTyping]);
+  useEffect(() => { onDeliveryRef.current = onDelivery; }, [onDelivery]);
+
+  // Only depends on authToken — callbacks are accessed via refs
   const connect = useCallback(() => {
     if (!authToken) return;
 
-    const url = `${WS_BASE_URL}/api/chat/ws?token=${authToken}`;
-
-    try {
-      wsRef.current = new WebSocket(url);
-
-      wsRef.current.onopen = () => {
-        console.log('✅ WebSocket connected');
-        setIsConnected(true);
-        reconnectAttemptsRef.current = 0;
-
-        // Setup ping/pong keep-alive (every 25s)
-        pingIntervalRef.current = setInterval(() => {
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ type: 'ping' }));
-          }
-        }, 25000);
-      };
-
-      wsRef.current.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          console.log('📨 WebSocket message received:', data);
-
-          if (data.type === 'pong') {
-            console.log('✅ Pong received');
-          } else if (data.type === 'new_message') {
-            console.log('💬 New message:', data);
-            onMessage?.(data);
-          } else if (data.type === 'typing') {
-            onTyping?.(data);
-          } else if (data.type === 'typing_stop') {
-            onTyping?.({ ...data, type: 'typing_stop' });
-          } else if (data.type === 'delivery_receipt') {
-            onDelivery?.(data);
-          }
-        } catch (err) {
-          console.error('WebSocket message parse error:', err);
-        }
-      };
-
-      wsRef.current.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setIsConnected(false);
-      };
-
-      wsRef.current.onclose = (event) => {
-        setIsConnected(false);
-        clearInterval(pingIntervalRef.current);
-
-        // Handle auth expiry (code 4001)
-        if (event.code === 4001) {
-          console.log('Auth token expired, please refresh');
-          return;
-        }
-
-        // Exponential backoff: 2s, 4s, 8s, 30s cap
-        const delay = Math.min(2000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
-        reconnectAttemptsRef.current += 1;
-
-        reconnectTimeoutRef.current = setTimeout(() => {
-          connect();
-        }, delay);
-      };
-    } catch (err) {
-      console.error('WebSocket connection error:', err);
-      setIsConnected(false);
+    // Tear down any existing connection first
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
     }
-  }, [authToken, onMessage, onTyping, onDelivery]);
+
+    const socket = io(SOCKET_URL, {
+      auth: { token: authToken },
+      transports: ["websocket"],
+      autoConnect: false,
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 30000,
+    });
+
+    socket.on("connect", () => {
+      console.log("✅ Socket.IO connected:", socket.id);
+      setIsConnected(true);
+    });
+
+    socket.on("disconnect", (reason) => {
+      console.log("❌ Socket.IO disconnected:", reason);
+      setIsConnected(false);
+    });
+
+    socket.on("connect_error", (err) => {
+      console.error("Socket.IO connect error:", err.message);
+      setIsConnected(false);
+      // Auth rejected — stop reconnecting so we don't hammer the server
+      if (err.message === "auth_failed") {
+        console.warn("Socket.IO auth rejected — session expired.");
+        socket.disconnect();
+      }
+    });
+
+    socket.on("new_message", (data) => {
+      console.log("💬 Socket.IO new_message:", data);
+      onMessageRef.current?.(data);
+    });
+
+    socket.on("typing", (data) => {
+      onTypingRef.current?.({ ...data, type: "typing" });
+    });
+
+    socket.on("typing_stop", (data) => {
+      onTypingRef.current?.({ ...data, type: "typing_stop" });
+    });
+
+    socket.on("delivery_receipt", (data) => {
+      onDeliveryRef.current?.(data);
+    });
+
+    socketRef.current = socket;
+    socket.connect();
+  }, [authToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     connect();
-
     return () => {
-      clearTimeout(reconnectTimeoutRef.current);
-      clearInterval(pingIntervalRef.current);
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.close();
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
       }
     };
   }, [connect]);
 
-  const send = useCallback((data) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(data));
+  const send = useCallback((eventName, data) => {
+    if (socketRef.current?.connected) {
+      socketRef.current.emit(eventName, data);
     } else {
-      console.warn('WebSocket not connected');
+      console.warn("Socket.IO not connected — event dropped:", eventName);
     }
   }, []);
 
-  const sendTypingStart = useCallback((conversationId) => {
-    send({ type: 'typing_start', conversation_id: conversationId });
-  }, [send]);
+  const sendTypingStart = useCallback(
+    (conversationId) => {
+      send("typing_start", { conversation_id: conversationId });
+    },
+    [send],
+  );
 
-  const sendTypingStop = useCallback((conversationId) => {
-    send({ type: 'typing_stop', conversation_id: conversationId });
-  }, [send]);
+  const sendTypingStop = useCallback(
+    (conversationId) => {
+      send("typing_stop", { conversation_id: conversationId });
+    },
+    [send],
+  );
 
-  const markMessageRead = useCallback((messageId) => {
-    send({ type: 'mark_read', message_id: messageId });
-  }, [send]);
+  const markMessageRead = useCallback(
+    (messageId) => {
+      send("mark_read", { message_id: messageId });
+    },
+    [send],
+  );
 
   return {
     isConnected,

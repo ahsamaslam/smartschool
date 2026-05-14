@@ -10,7 +10,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- ENUMS
 -- ============================================
 
-CREATE TYPE user_role AS ENUM ('student', 'teacher', 'manager', 'admin');
+CREATE TYPE user_role AS ENUM ('student', 'teacher', 'manager', 'admin', 'super_admin');
 CREATE TYPE quiz_type AS ENUM ('mcq', 'short_answer', 'long_answer', 'mixed');
 CREATE TYPE question_type AS ENUM ('mcq', 'short_answer', 'long_answer');
 CREATE TYPE complexity_level AS ENUM ('easy', 'medium', 'hard');
@@ -19,13 +19,25 @@ CREATE TYPE complexity_level AS ENUM ('easy', 'medium', 'hard');
 -- CORE TABLES
 -- ============================================
 
+-- Tenants (multi-tenant root)
+CREATE TABLE tenants (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL UNIQUE,
+    is_active BOOLEAN DEFAULT true,
+    created_by_super_admin_id UUID,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Users table (extends Supabase auth.users)
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     full_name VARCHAR(255) NOT NULL,
     role user_role NOT NULL DEFAULT 'student',
     password_hash TEXT,                          -- bcrypt hash; NULL falls back to Supabase Auth
+    must_change_password BOOLEAN DEFAULT false,
     profile_picture_url TEXT,
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -35,8 +47,10 @@ CREATE TABLE users (
 -- Schools
 CREATE TABLE schools (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL,
     name VARCHAR(255) NOT NULL,
     address TEXT,
+    admin_id UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -44,6 +58,7 @@ CREATE TABLE schools (
 -- School Branches
 CREATE TABLE branches (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL,
     school_id UUID REFERENCES schools(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     address TEXT,
@@ -54,6 +69,7 @@ CREATE TABLE branches (
 -- Classes
 CREATE TABLE classes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL,
     branch_id UUID REFERENCES branches(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     grade_level VARCHAR(50),

@@ -52,7 +52,11 @@ export function AuthProvider({ children }) {
       setToken(data.token);
       setUser(normalizedUser);
 
-      return { success: true, role: data.role };
+      return {
+        success: true,
+        role: data.role,
+        mustChangePassword: Boolean(data.must_change_password),
+      };
     } catch (err) {
       const message =
         err.response?.data?.detail || "Login failed. Check your credentials.";

@@ -16,6 +16,7 @@ const ROLE_LABELS = {
   teacher: "Teacher",
   manager: "Manager",
   admin: "Admin",
+  super_admin: "Super Admin",
 };
 
 /**
@@ -24,6 +25,7 @@ const ROLE_LABELS = {
 export default function Navbar() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const profileBaseRole = user?.role === "super_admin" ? "admin" : user?.role;
 
   const handleLogout = async () => {
     await logout();
@@ -74,7 +76,7 @@ export default function Navbar() {
           <Menu.Item>
             {({ active }) => (
               <button
-                onClick={() => navigate(`/${user.role}/profile`)}
+                onClick={() => navigate(`/${profileBaseRole}/profile`)}
                 className={clsx(
                   "flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700",
                   active && "bg-gray-50",

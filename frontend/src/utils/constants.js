@@ -40,6 +40,7 @@ export const ROLES = {
   TEACHER: "teacher",
   MANAGER: "manager",
   ADMIN: "admin",
+  SUPER_ADMIN: "super_admin",
 };
 
 // Quiz configuration

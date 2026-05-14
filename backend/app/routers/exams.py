@@ -525,7 +525,7 @@ async def enrollment_preview(class_id: str, user: dict = Depends(get_user_from_t
     )
     if not cl:
         raise HTTPException(status_code=404, detail="Class not found")
-    if role == "admin":
+    if role in ("admin", "super_admin"):
         pass
     elif role == "teacher" and str(cl["teacher_id"]) == uid:
         pass

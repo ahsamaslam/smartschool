@@ -580,7 +580,7 @@ async def ai_generate_homework_draft(
     await ensure_homework_schema()
     uid = user["user_id"]
     role = user.get("role")
-    if role not in ("teacher", "admin"):
+    if role not in ("teacher", "admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Teachers only")
 
     if body.class_id and not await teacher_can_manage_class(str(uid), body.class_id):
@@ -593,7 +593,7 @@ async def ai_generate_homework_draft(
             raise HTTPException(status_code=400, detail="Invalid library topic")
 
     if (
-        role != "admin"
+        role not in ("admin", "super_admin")
         and body.class_id
         and meta
         and not await teacher_topic_allowed_for_homework(str(uid), body.class_id, meta)
@@ -667,7 +667,7 @@ async def create_homework(
     await ensure_homework_schema()
     uid = user["user_id"]
     role = user.get("role")
-    if role not in ("teacher", "admin"):
+    if role not in ("teacher", "admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Teachers only")
 
     if not await teacher_can_manage_class(uid, body.class_id):
@@ -677,7 +677,7 @@ async def create_homework(
     if not meta:
         raise HTTPException(status_code=400, detail="Invalid library topic")
 
-    if role != "admin" and not await teacher_topic_allowed_for_homework(
+    if role not in ("admin", "super_admin") and not await teacher_topic_allowed_for_homework(
         str(uid), body.class_id, meta
     ):
         raise HTTPException(
@@ -980,13 +980,13 @@ async def list_teacher_homework(
     await ensure_homework_schema()
     uid = user["user_id"]
     role = user.get("role")
-    if role not in ("teacher", "admin"):
+    if role not in ("teacher", "admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     if class_id:
         if not await teacher_can_manage_class(uid, class_id):
             raise HTTPException(status_code=403, detail="Forbidden")
-        if role == "admin":
+        if role in ("admin", "super_admin"):
             rows = await execute_query(
                 """
                 SELECT h.*, lt.title AS topic_title

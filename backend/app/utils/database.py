@@ -129,7 +129,7 @@ async def execute_write(query: str, *args):
 async def get_user_by_id(user_id: str):
     """Get user by ID"""
     query = """
-        SELECT id, email, full_name, role, profile_picture_url, is_active, created_at
+        SELECT id, email, full_name, role, tenant_id, must_change_password, profile_picture_url, is_active, created_at
         FROM users
         WHERE id = $1 AND is_active = true
     """
@@ -139,7 +139,7 @@ async def get_user_by_id(user_id: str):
 async def get_user_by_email(email: str):
     """Get user by email (includes password_hash for authentication)."""
     query = """
-        SELECT id, email, full_name, role, password_hash, profile_picture_url, is_active, created_at, school_id
+        SELECT id, email, full_name, role, tenant_id, password_hash, must_change_password, profile_picture_url, is_active, created_at, school_id
         FROM users
         WHERE email = $1 AND is_active = true
     """

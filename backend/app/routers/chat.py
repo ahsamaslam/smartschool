@@ -10,8 +10,8 @@ import uuid
 import json
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, Set, Dict, List
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, UploadFile, File, Query, Body, status
+from typing import Optional, Dict, List
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Query, Body, status
 from fastapi.responses import JSONResponse
 import magic
 import bleach
@@ -22,6 +22,15 @@ from pydantic import BaseModel
 from app.routers.auth import get_user_from_token
 from app.utils.auth import verify_token
 from app.utils.database import execute_query, execute_one, execute_write
+from app.utils.socket_manager import (
+    sio,
+    register_sid,
+    unregister_sid,
+    sids_for_user,
+    cancel_offline_task,
+    set_offline_task,
+    get_user_for_sid,
+)
 from app.config import settings
 
 # ============================================
@@ -62,74 +71,6 @@ MAX_FILE_SIZE = {
     "document": 20_000_000,
     "voice": 10_000_000,
 }
-
-# ============================================
-# CONNECTION MANAGER (WebSocket state)
-# ============================================
-
-class ConnectionManager:
-    """Manage WebSocket connections per user (multi-device support)"""
-    def __init__(self):
-        self._connections: Dict[str, Set[WebSocket]] = {}
-        self._disconnect_tasks: Dict[str, asyncio.Task] = {}
-
-    async def connect(self, user_id: str, websocket: WebSocket):
-        await websocket.accept()
-        if user_id not in self._connections:
-            self._connections[user_id] = set()
-        self._connections[user_id].add(websocket)
-
-        # Cancel pending disconnect task if exists
-        if user_id in self._disconnect_tasks:
-            self._disconnect_tasks[user_id].cancel()
-            del self._disconnect_tasks[user_id]
-
-        # Mark online
-        try:
-            await execute_write(
-                "UPDATE users SET is_online = true WHERE id = $1",
-                user_id
-            )
-        except:
-            pass
-
-    async def disconnect(self, user_id: str, websocket: WebSocket):
-        if user_id in self._connections:
-            self._connections[user_id].discard(websocket)
-            if not self._connections[user_id]:
-                del self._connections[user_id]
-
-                # Schedule delayed offline update (7 second debounce)
-                async def delayed_offline():
-                    await asyncio.sleep(7)
-                    try:
-                        await execute_write(
-                            "UPDATE users SET is_online = false, last_seen_at = NOW() WHERE id = $1",
-                            user_id
-                        )
-                    except:
-                        pass
-
-                self._disconnect_tasks[user_id] = asyncio.create_task(delayed_offline())
-
-    async def send_to_user(self, user_id: str, data: dict):
-        """Fan-out to all open sockets for a user"""
-        if user_id in self._connections:
-            disconnected = []
-            for ws in self._connections[user_id]:
-                try:
-                    await ws.send_json(data)
-                except:
-                    disconnected.append(ws)
-
-            for ws in disconnected:
-                await self.disconnect(user_id, ws)
-
-    def is_online(self, user_id: str) -> bool:
-        return user_id in self._connections
-
-# Global connection manager
-manager = ConnectionManager()
 
 # ============================================
 # HELPERS
@@ -215,100 +156,139 @@ async def log_audit(actor_id: str, school_id: str, action_type: str, entity_type
         pass
 
 # ============================================
-# WEBSOCKET ENDPOINT
+# SOCKET.IO EVENT HANDLERS
 # ============================================
 
-async def verify_ws_token(token: str) -> Optional[dict]:
-    """Verify JWT token from WebSocket query param"""
-    payload = verify_token(token)
-    if not payload:
-        return None
+@sio.event
+async def connect(sid, environ, auth):
+    """Authenticate via JWT in auth payload, join user room, mark online."""
+    token = (auth or {}).get("token")
+    if not token:
+        raise ConnectionRefusedError("auth_failed")
 
-    return {
-        "user_id": payload.get("sub"),
+    payload = verify_token(token)
+    if not payload or not payload.get("sub"):
+        raise ConnectionRefusedError("auth_failed")
+
+    user_id = str(payload["sub"])
+    user_info = {
+        "user_id": user_id,
         "role": payload.get("role"),
-        "email": payload.get("email"),
         "school_id": payload.get("school_id"),
     }
 
-@router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
-    """
-    WebSocket endpoint for real-time chat
-    Token comes from JWT query param (not path param for security)
-    """
-    user = await verify_ws_token(token)
-    if not user or not user.get("user_id"):
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+    # Cancel any pending offline task (reconnect scenario)
+    cancel_offline_task(user_id)
 
-    user_id = user.get("user_id")
-    school_id = user.get("school_id")
-
-    await manager.connect(user_id, websocket)
+    register_sid(sid, user_info)
+    await sio.enter_room(sid, f"user_{user_id}")
 
     try:
-        while True:
-            data = await websocket.receive_json()
-            msg_type = data.get("type")
+        await execute_write(
+            "UPDATE users SET is_online = true WHERE id = $1",
+            user_id,
+        )
+    except Exception:
+        pass
 
-            # Token expiry check on every message
+    print(f"[SIO] connect sid={sid} user={user_id}")
+
+
+@sio.event
+async def disconnect(sid):
+    """Remove sid from registry; debounce offline update if no more connections."""
+    user_info = unregister_sid(sid)
+    if not user_info:
+        return
+
+    user_id = user_info["user_id"]
+    print(f"[SIO] disconnect sid={sid} user={user_id}")
+
+    # Only start offline timer if user has no other connected sessions
+    if not sids_for_user(user_id):
+        async def delayed_offline():
+            await asyncio.sleep(7)
             try:
-                user_check = await verify_ws_token(token)
-                if not user_check:
-                    await websocket.close(code=4001)  # 4001 = auth expired
-                    break
-            except:
-                await websocket.close(code=4001)  # 4001 = auth expired
-                break
+                await execute_write(
+                    "UPDATE users SET is_online = false, last_seen_at = NOW() WHERE id = $1",
+                    user_id,
+                )
+            except Exception:
+                pass
 
-            # Handle different message types
-            if msg_type == "ping":
-                await websocket.send_json({"type": "pong"})
+        set_offline_task(user_id, asyncio.create_task(delayed_offline()))
 
-            elif msg_type == "typing_start":
-                conversation_id = data.get("conversation_id")
-                if conversation_id:
-                    # Get other participant and send typing event
-                    conv = await execute_one(
-                        "SELECT participant_a_id, participant_b_id FROM chat_conversations WHERE id = $1",
-                        conversation_id
-                    )
-                    if conv:
-                        other_id = conv["participant_b_id"] if conv["participant_a_id"] == user_id else conv["participant_a_id"]
-                        await manager.send_to_user(other_id, {
-                            "type": "typing",
-                            "conversation_id": conversation_id,
-                            "user_id": user_id
-                        })
 
-            elif msg_type == "typing_stop":
-                conversation_id = data.get("conversation_id")
-                if conversation_id:
-                    conv = await execute_one(
-                        "SELECT participant_a_id, participant_b_id FROM chat_conversations WHERE id = $1",
-                        conversation_id
-                    )
-                    if conv:
-                        other_id = conv["participant_b_id"] if conv["participant_a_id"] == user_id else conv["participant_a_id"]
-                        await manager.send_to_user(other_id, {
-                            "type": "typing_stop",
-                            "conversation_id": conversation_id,
-                            "user_id": user_id
-                        })
+@sio.event
+async def typing_start(sid, data):
+    user_info = get_user_for_sid(sid)
+    if not user_info:
+        return
+    user_id = user_info["user_id"]
+    conversation_id = (data or {}).get("conversation_id")
+    if not conversation_id:
+        return
 
-            elif msg_type == "mark_read":
-                message_id = data.get("message_id")
-                if message_id:
-                    await execute_write(
-                        "UPDATE chat_messages SET is_read = true, delivery_status = 'read' WHERE id = $1 AND sender_id != $2",
-                        message_id, user_id
-                    )
+    conv = await execute_one(
+        "SELECT participant_a_id, participant_b_id FROM chat_conversations WHERE id = $1",
+        conversation_id,
+    )
+    if conv:
+        other_id = (
+            str(conv["participant_b_id"])
+            if str(conv["participant_a_id"]) == user_id
+            else str(conv["participant_a_id"])
+        )
+        await sio.emit(
+            "typing",
+            {"conversation_id": conversation_id, "user_id": user_id},
+            room=f"user_{other_id}",
+        )
 
-    except WebSocketDisconnect:
-        await manager.disconnect(user_id, websocket)
-    except Exception as e:
-        await manager.disconnect(user_id, websocket)
+
+@sio.event
+async def typing_stop(sid, data):
+    user_info = get_user_for_sid(sid)
+    if not user_info:
+        return
+    user_id = user_info["user_id"]
+    conversation_id = (data or {}).get("conversation_id")
+    if not conversation_id:
+        return
+
+    conv = await execute_one(
+        "SELECT participant_a_id, participant_b_id FROM chat_conversations WHERE id = $1",
+        conversation_id,
+    )
+    if conv:
+        other_id = (
+            str(conv["participant_b_id"])
+            if str(conv["participant_a_id"]) == user_id
+            else str(conv["participant_a_id"])
+        )
+        await sio.emit(
+            "typing_stop",
+            {"conversation_id": conversation_id, "user_id": user_id},
+            room=f"user_{other_id}",
+        )
+
+
+@sio.event
+async def mark_read(sid, data):
+    user_info = get_user_for_sid(sid)
+    if not user_info:
+        return
+    user_id = user_info["user_id"]
+    message_id = (data or {}).get("message_id")
+    if message_id:
+        try:
+            await execute_write(
+                "UPDATE chat_messages SET is_read = true, delivery_status = 'read' WHERE id = $1 AND sender_id != $2",
+                message_id,
+                user_id,
+            )
+        except Exception:
+            pass
 
 # ============================================
 # REST ENDPOINTS
@@ -348,9 +328,21 @@ async def list_conversations(
                 cc.id, cc.status, cc.last_message_at, cc.last_message_preview,
                 cc.participant_a_id, cc.participant_b_id,
                 (CASE
+                    WHEN cc.participant_a_id = $2 THEN cc.participant_b_id
+                    ELSE cc.participant_a_id
+                END) as other_user_id,
+                (CASE
                     WHEN cc.participant_a_id = $2 THEN (SELECT full_name FROM users WHERE id = cc.participant_b_id)
                     ELSE (SELECT full_name FROM users WHERE id = cc.participant_a_id)
-                END) as full_name
+                END) as full_name,
+                (CASE
+                    WHEN cc.participant_a_id = $2 THEN (SELECT role FROM users WHERE id = cc.participant_b_id)
+                    ELSE (SELECT role FROM users WHERE id = cc.participant_a_id)
+                END) as other_user_role,
+                (SELECT COUNT(*) FROM chat_messages cm
+                 WHERE cm.conversation_id = cc.id
+                 AND cm.is_read = false
+                 AND cm.sender_id != $2) as unread_count
                FROM chat_conversations cc
                WHERE cc.school_id = $1
                AND (cc.participant_a_id = $2 OR cc.participant_b_id = $2)
@@ -364,10 +356,12 @@ async def list_conversations(
             {
                 'id': conv.get('id'),
                 'status': conv.get('status'),
-                'last_message_at': conv.get('last_message_at'),
+                'last_message_at': conv.get('last_message_at').isoformat() if conv.get('last_message_at') else None,
                 'last_message_preview': conv.get('last_message_preview'),
                 'full_name': conv.get('full_name') or 'Unknown',
-                'unread_count': 0
+                'other_user_id': str(conv.get('other_user_id')) if conv.get('other_user_id') else None,
+                'other_user_role': conv.get('other_user_role'),
+                'unread_count': int(conv.get('unread_count') or 0)
             }
             for conv in conversations
         ]
@@ -426,20 +420,8 @@ async def create_conversation(
     if role == "student" and recipient["role"] == "student":
         raise HTTPException(403, "Students cannot message other students")
 
-    # Student eligibility check
-    if role == "student":
-        can_contact = await student_can_contact_teacher(user_id, recipient_id)
-        if not can_contact:
-            raise HTTPException(403, "You cannot contact this teacher")
-
-    # Check if recipient is accepting requests
-    if role == "student" and recipient["role"] == "teacher":
-        teacher_settings = await execute_one(
-            "SELECT accept_new_requests FROM users WHERE id = $1",
-            recipient_id
-        )
-        if teacher_settings and not teacher_settings["accept_new_requests"]:
-            raise HTTPException(403, "Teacher is not accepting new chat requests right now")
+    # No eligibility restriction — any school member can message any other school member
+    # (student→student is already blocked above)
 
     # Create conversation_key
     conv_key = f"{min(user_id, recipient_id)}:{max(user_id, recipient_id)}"
@@ -636,7 +618,11 @@ async def send_message(
         raise
 
     # Insert notification for recipient
-    recipient_id = conv["participant_b_id"] if conv["participant_a_id"] == user_id else conv["participant_a_id"]
+    recipient_id = (
+        str(conv["participant_b_id"])
+        if str(conv["participant_a_id"]) == user_id
+        else str(conv["participant_a_id"])
+    )
 
     # Fetch sender's full_name from database
     sender = await execute_one("SELECT full_name FROM users WHERE id = $1", user_id)
@@ -648,7 +634,7 @@ async def send_message(
         recipient_id, f"Message from {sender_name}", msg_id
     )
 
-    # Send via WebSocket to both recipient AND sender
+    # Send via Socket.IO to both recipient AND sender
     message_data = {
         "type": "new_message",
         "message_id": msg_id,
@@ -660,10 +646,10 @@ async def send_message(
     }
 
     # Send to recipient
-    await manager.send_to_user(recipient_id, message_data)
+    await sio.emit("new_message", message_data, room=f"user_{recipient_id}")
 
     # Send to sender (so they see it immediately)
-    await manager.send_to_user(user_id, message_data)
+    await sio.emit("new_message", message_data, room=f"user_{user_id}")
 
     return {
         "id": msg_id,
@@ -780,17 +766,25 @@ async def upload_file(
     )
 
     # Notify recipient
-    recipient_id = conv["participant_b_id"] if conv["participant_a_id"] == user_id else conv["participant_a_id"]
-    await manager.send_to_user(recipient_id, {
-        "type": "new_message",
-        "message_id": msg_id,
-        "conversation_id": conversation_id,
-        "sender_id": user_id,
-        "file_url": file_url,
-        "file_name": filename,
-        "attachment_category": category,
-        "created_at": datetime.utcnow().isoformat(),
-    })
+    recipient_id = (
+        str(conv["participant_b_id"])
+        if str(conv["participant_a_id"]) == user_id
+        else str(conv["participant_a_id"])
+    )
+    await sio.emit(
+        "new_message",
+        {
+            "type": "new_message",
+            "message_id": msg_id,
+            "conversation_id": conversation_id,
+            "sender_id": user_id,
+            "file_url": file_url,
+            "file_name": filename,
+            "attachment_category": category,
+            "created_at": datetime.utcnow().isoformat(),
+        },
+        room=f"user_{recipient_id}",
+    )
 
     return {"id": msg_id, "file_url": file_url, "category": category}
 
@@ -904,6 +898,61 @@ async def update_conversation_controls(
         )
 
     return {"success": True}
+
+@router.get("/school-members")
+async def get_school_members(
+    user: dict = Depends(get_user_from_token),
+    q: str = Query("", description="Search query (name/email)"),
+):
+    """Search for school members to start a conversation with"""
+    user_id = user["user_id"]
+    role = user["role"]
+
+    # Get school_id from DB
+    user_data = await execute_one(
+        "SELECT school_id FROM users WHERE id = $1",
+        user_id
+    )
+    school_id = user_data.get("school_id") if user_data else None
+
+    # For students without school_id, try enrollment
+    if not school_id and role == "student":
+        enrollment = await execute_one(
+            """SELECT c.school_id FROM enrollments e
+               JOIN classes c ON e.class_id = c.id
+               WHERE e.student_id = $1 LIMIT 1""",
+            user_id
+        )
+        if enrollment:
+            school_id = enrollment.get("school_id")
+
+    if not school_id:
+        return {"data": []}
+
+    # Students can only see teachers/managers/admins (not other students)
+    if role == "student":
+        role_filter = "AND u.role IN ('teacher', 'manager', 'admin')"
+    else:
+        role_filter = "AND u.role IN ('student', 'teacher', 'manager', 'admin')"
+
+    search_pattern = f"%{q}%" if q.strip() else "%"
+
+    members = await execute_query(
+        f"""SELECT u.id, u.full_name, u.email, u.role,
+                   COALESCE(u.is_online, false) as is_online, u.last_seen_at
+            FROM users u
+            WHERE u.school_id = $1
+            AND u.id != $2
+            AND u.is_active = true
+            {role_filter}
+            AND (u.full_name ILIKE $3 OR u.email ILIKE $3)
+            ORDER BY u.full_name
+            LIMIT 20""",
+        school_id, user_id, search_pattern
+    )
+
+    return {"data": [dict(m) for m in members]}
+
 
 @router.get("/eligible-teachers")
 async def get_eligible_teachers(

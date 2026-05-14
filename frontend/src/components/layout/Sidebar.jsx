@@ -11,7 +11,10 @@ import * as HeroIcons from "@heroicons/react/24/outline";
  * @param {() => void} onClose
  */
 export default function Sidebar({ role, isOpen, onClose }) {
-  const navItems = NAV_BY_ROLE[role] || [];
+  const navItems = (NAV_BY_ROLE[role] || []).filter((item) => {
+    if (role === "admin" && item?.to === "/admin/users") return false;
+    return true;
+  });
 
   return (
     <>
@@ -94,9 +97,21 @@ const NAV_BY_ROLE = {
   student: [
     { label: "Dashboard", to: "/student/dashboard", icon: "HomeIcon" },
     { label: "My Courses", to: "/student/courses", icon: "BookOpenIcon" },
-    { label: "My Homework", to: "/student/homework", icon: "ClipboardDocumentListIcon" },
-    { label: "My Exams", to: "/student/exams", icon: "ClipboardDocumentCheckIcon" },
-    { label: "My Enrollment", to: "/student/enrollment", icon: "AcademicCapIcon" },
+    {
+      label: "My Homework",
+      to: "/student/homework",
+      icon: "ClipboardDocumentListIcon",
+    },
+    {
+      label: "My Exams",
+      to: "/student/exams",
+      icon: "ClipboardDocumentCheckIcon",
+    },
+    {
+      label: "My Enrollment",
+      to: "/student/enrollment",
+      icon: "AcademicCapIcon",
+    },
     { label: "Messages", to: "/student/chat", icon: "ChatBubbleLeftIcon" },
     { label: "Profile", to: "/student/profile", icon: "UserCircleIcon" },
   ],
@@ -134,62 +149,16 @@ const NAV_BY_ROLE = {
   ],
   manager: [
     { label: "Dashboard", to: "/manager/dashboard", icon: "HomeIcon" },
-    { label: "My School", to: "/manager/schools", icon: "BuildingOfficeIcon" },
+    { label: "Library", to: "/manager/library", icon: "BookOpenIcon" },
     { label: "Teachers", to: "/manager/teachers", icon: "AcademicCapIcon" },
     { label: "Students", to: "/manager/students", icon: "UserGroupIcon" },
+    { label: "Settings", to: "/manager/settings", icon: "CogIcon" },
     { label: "Messages", to: "/manager/chat", icon: "ChatBubbleLeftIcon" },
     { divider: true, label: "Reports" },
-    { label: "Student Reports", to: "/manager/student-reports", icon: "ChartBarIcon" },
-    { label: "Class Reports", to: "/manager/class-reports", icon: "TableCellsIcon" },
-    { label: "Teacher Reports", to: "/manager/teacher-reports", icon: "PresentationChartLineIcon" },
-  ],
-  admin: [
-    { divider: true, label: "Admin" },
-    { label: "Dashboard", to: "/admin/dashboard", icon: "HomeIcon" },
-    { label: "Schools", to: "/admin/schools", icon: "BuildingOfficeIcon" },
-    { label: "Library", to: "/admin/library", icon: "BookOpenIcon" },
-    { label: "AI Book Parser", to: "/admin/ai-parser", icon: "SparklesIcon" },
-    { label: "Teachers", to: "/admin/teachers", icon: "AcademicCapIcon" },
-    { label: "Students", to: "/admin/students", icon: "UserGroupIcon" },
-    { label: "Videos", to: "/admin/videos", icon: "VideoCameraIcon" },
-    { label: "Slides", to: "/admin/slides", icon: "PresentationChartBarIcon" },
-    { label: "Recorded lectures", to: "/admin/recorded-lectures", icon: "FilmIcon" },
-    { label: "Settings", to: "/admin/settings", icon: "CogIcon" },
-    { label: "Messages", to: "/admin/chat", icon: "ChatBubbleLeftIcon" },
-    { divider: true, label: "Teacher" },
-    { label: "My Classes", to: "/teacher/classes", icon: "AcademicCapIcon" },
-    {
-      label: "Attendance",
-      to: "/teacher/attendance",
-      icon: "ClipboardDocumentListIcon",
-    },
-    {
-      label: "Publish Video",
-      to: "/teacher/publish-video",
-      icon: "VideoCameraIcon",
-    },
-    {
-      label: "My Avatar Videos",
-      to: "/teacher/avatar-videos",
-      icon: "UserCircleIcon",
-    },
-    {
-      label: "Lecture Viewer",
-      to: "/teacher/lecture-viewer",
-      icon: "PlayCircleIcon",
-    },
-    { label: "Exam", to: "/teacher/exams", icon: "DocumentTextIcon" },
-    { label: "Teacher Reports", to: "/teacher/reports", icon: "ChartBarIcon" },
-    { divider: true, label: "Manager" },
-    {
-      label: "Manager Schools",
-      to: "/manager/schools",
-      icon: "BuildingOffice2Icon",
-    },
     {
       label: "Student Reports",
       to: "/manager/student-reports",
-      icon: "UserGroupIcon",
+      icon: "ChartBarIcon",
     },
     {
       label: "Class Reports",
@@ -197,9 +166,45 @@ const NAV_BY_ROLE = {
       icon: "TableCellsIcon",
     },
     {
-      label: "Mgr Teacher Reports",
+      label: "Teacher Reports",
       to: "/manager/teacher-reports",
       icon: "PresentationChartLineIcon",
     },
+  ],
+  admin: [
+    { divider: true, label: "Admin" },
+    { label: "Dashboard", to: "/admin/dashboard", icon: "HomeIcon" },
+    { label: "Schools", to: "/admin/schools", icon: "BuildingOfficeIcon" },
+    { label: "Library", to: "/admin/library", icon: "BookOpenIcon" },
+    { label: "Teachers", to: "/admin/teachers", icon: "AcademicCapIcon" },
+    { label: "Students", to: "/admin/students", icon: "UserGroupIcon" },
+    { label: "Videos", to: "/admin/videos", icon: "VideoCameraIcon" },
+    { label: "Slides", to: "/admin/slides", icon: "PresentationChartBarIcon" },
+    {
+      label: "Recorded lectures",
+      to: "/admin/recorded-lectures",
+      icon: "FilmIcon",
+    },
+    { label: "Settings", to: "/admin/settings", icon: "CogIcon" },
+    { label: "Messages", to: "/admin/chat", icon: "ChatBubbleLeftIcon" },
+  ],
+  super_admin: [
+    { divider: true, label: "Super Admin" },
+    { label: "Dashboard", to: "/admin/dashboard", icon: "HomeIcon" },
+    { label: "Tenants", to: "/admin/tenants", icon: "BuildingLibraryIcon" },
+    { label: "Schools", to: "/admin/schools", icon: "BuildingOfficeIcon" },
+    { label: "Library", to: "/admin/library", icon: "BookOpenIcon" },
+    { label: "AI Book Parser", to: "/admin/ai-parser", icon: "SparklesIcon" },
+    { label: "Teachers", to: "/admin/teachers", icon: "AcademicCapIcon" },
+    { label: "Students", to: "/admin/students", icon: "UserGroupIcon" },
+    { label: "Videos", to: "/admin/videos", icon: "VideoCameraIcon" },
+    { label: "Slides", to: "/admin/slides", icon: "PresentationChartBarIcon" },
+    {
+      label: "Recorded lectures",
+      to: "/admin/recorded-lectures",
+      icon: "FilmIcon",
+    },
+    { label: "Settings", to: "/admin/settings", icon: "CogIcon" },
+    { label: "Messages", to: "/admin/chat", icon: "ChatBubbleLeftIcon" },
   ],
 };

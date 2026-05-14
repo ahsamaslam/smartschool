@@ -7,7 +7,6 @@ import {
   BookOpenIcon,
   ChartBarIcon,
   UserGroupIcon,
-  ClipboardDocumentListIcon,
 } from "@heroicons/react/24/outline";
 import { Link } from "react-router-dom";
 
@@ -98,17 +97,6 @@ export default function AdminDashboard() {
           small
         />
       </div>
-
-      {/* Quick actions */}
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">Quick Actions</h2>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <QuickAction to="/admin/teachers" label="Manage Teachers" icon={<AcademicCapIcon className="h-5 w-5" />} />
-        <QuickAction to="/admin/students" label="Manage Students" icon={<UserGroupIcon className="h-5 w-5" />} />
-        <QuickAction to="/admin/schools" label="Schools & Branches" icon={<BuildingOffice2Icon className="h-5 w-5" />} />
-        <QuickAction to="/admin/library" label="Library / Books" icon={<BookOpenIcon className="h-5 w-5" />} />
-        <QuickAction to="/admin/curriculum" label="Book Parser" icon={<ClipboardDocumentListIcon className="h-5 w-5" />} />
-        <QuickAction to="/admin/settings" label="AI Settings" icon={<AcademicCapIcon className="h-5 w-5" />} />
-      </div>
     </div>
   );
 }
@@ -124,20 +112,12 @@ function StatCard({ label, value, icon, to, small }) {
           {icon}
         </div>
       </div>
-      <p className={`font-bold text-gray-900 tabular-nums ${small ? "text-xl" : "text-2xl"}`}>{value}</p>
+      <p
+        className={`font-bold text-gray-900 tabular-nums ${small ? "text-xl" : "text-2xl"}`}
+      >
+        {value}
+      </p>
       <p className="text-xs text-gray-400 mt-0.5">{label}</p>
-    </Link>
-  );
-}
-
-function QuickAction({ to, label, icon }) {
-  return (
-    <Link
-      to={to}
-      className="flex items-center gap-3 px-4 py-3 bg-white rounded-xl border border-gray-200 text-sm font-medium text-gray-700 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 transition-all"
-    >
-      {icon}
-      {label}
     </Link>
   );
 }

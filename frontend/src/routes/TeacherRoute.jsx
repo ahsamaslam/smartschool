@@ -23,7 +23,7 @@ export default function TeacherRoute() {
     return <Navigate to="/manager/dashboard" replace />;
   }
 
-  if (role !== "teacher" && role !== "admin") {
+  if (role !== "teacher" && role !== "admin" && role !== "super_admin") {
     return <Navigate to="/" replace />;
   }
 

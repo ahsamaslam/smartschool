@@ -2,6 +2,7 @@
 Main FastAPI application entry point
 """
 import os
+import socketio
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -32,6 +33,7 @@ from app.routers import (
 )
 from app.schemas.slides_ai import GenerateSlidesRequest, GenerateSlidesResponse
 from app.utils.ai_slide_deck import generate_slide_deck as run_generate_slide_deck
+from app.utils.socket_manager import sio
 
 # Configure logging
 logging.basicConfig(
@@ -209,6 +211,15 @@ async def startup_event():
     try:
         from app.utils.database import execute_write
         migrations = [
+            "ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'super_admin';",
+            """CREATE TABLE IF NOT EXISTS tenants (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                name VARCHAR(255) NOT NULL UNIQUE,
+                is_active BOOLEAN DEFAULT true,
+                created_by_super_admin_id UUID,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            );""",
             "ALTER TABLE topics ADD COLUMN IF NOT EXISTS chapter_name VARCHAR(255);",
             "ALTER TABLE topics ADD COLUMN IF NOT EXISTS chapter_number INTEGER DEFAULT 0;",
             "ALTER TABLE video_templates ALTER COLUMN video_url DROP NOT NULL;",
@@ -230,8 +241,16 @@ async def startup_event():
             "ALTER TABLE classes ADD COLUMN IF NOT EXISTS section VARCHAR(50);",
             "ALTER TABLE classes ADD COLUMN IF NOT EXISTS manual_student_count INTEGER DEFAULT 0;",
             # User properties for teachers/employees
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL;",
+            "ALTER TABLE schools ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL;",
+            "ALTER TABLE branches ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL;",
+            "ALTER TABLE classes ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL;",
+            "ALTER TABLE teacher_profiles ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL;",
+            "ALTER TABLE student_profiles ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL;",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS school_id UUID REFERENCES schools(id);",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id UUID REFERENCES branches(id);",
+            "ALTER TABLE schools ADD COLUMN IF NOT EXISTS admin_id UUID REFERENCES users(id) ON DELETE SET NULL;",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT false;",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS employee_id VARCHAR(50);",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20);",
             # Teacher-specific fields
@@ -501,6 +520,10 @@ async def startup_event():
                 updated_at TIMESTAMP DEFAULT NOW(),
                 PRIMARY KEY (conversation_id, user_id)
             );""",
+            "CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);",
+            "CREATE INDEX IF NOT EXISTS idx_schools_tenant ON schools(tenant_id);",
+            "CREATE INDEX IF NOT EXISTS idx_branches_tenant ON branches(tenant_id);",
+            "CREATE INDEX IF NOT EXISTS idx_classes_tenant ON classes(tenant_id);",
         ]
         for sql in migrations:
             try:
@@ -510,6 +533,81 @@ async def startup_event():
         logger.info("✅ Schema migrations applied")
     except Exception as e:
         logger.warning(f"⚠️  Schema migration warning: {str(e)}")
+
+    # Optionally ensure a default tenant exists and backfill legacy rows.
+    if settings.AUTO_CREATE_DEFAULT_TENANT:
+        try:
+            from app.utils.database import execute_one, execute_write
+
+            default_tenant_name = "Default Tenant"
+            tenant = await execute_one(
+                "SELECT id FROM tenants WHERE name = $1",
+                default_tenant_name,
+            )
+            if not tenant:
+                tenant = await execute_one(
+                    """
+                    INSERT INTO tenants (name, is_active)
+                    VALUES ($1, true)
+                    RETURNING id
+                    """,
+                    default_tenant_name,
+                )
+
+            default_tenant_id = tenant["id"]
+
+            backfills = [
+                ("UPDATE users SET tenant_id = $1::uuid WHERE tenant_id IS NULL", default_tenant_id),
+                ("UPDATE schools SET tenant_id = $1::uuid WHERE tenant_id IS NULL", default_tenant_id),
+                (
+                    """
+                    UPDATE branches b
+                    SET tenant_id = COALESCE(b.tenant_id, s.tenant_id, $1::uuid)
+                    FROM schools s
+                    WHERE b.school_id = s.id AND b.tenant_id IS NULL
+                    """,
+                    default_tenant_id,
+                ),
+                (
+                    """
+                    UPDATE classes c
+                    SET tenant_id = COALESCE(c.tenant_id, b.tenant_id, $1::uuid)
+                    FROM branches b
+                    WHERE c.branch_id = b.id AND c.tenant_id IS NULL
+                    """,
+                    default_tenant_id,
+                ),
+                (
+                    """
+                    UPDATE teacher_profiles tp
+                    SET tenant_id = COALESCE(tp.tenant_id, u.tenant_id, $1::uuid)
+                    FROM users u
+                    WHERE tp.user_id = u.id AND tp.tenant_id IS NULL
+                    """,
+                    default_tenant_id,
+                ),
+                (
+                    """
+                    UPDATE student_profiles sp
+                    SET tenant_id = COALESCE(sp.tenant_id, u.tenant_id, $1::uuid)
+                    FROM users u
+                    WHERE sp.user_id = u.id AND sp.tenant_id IS NULL
+                    """,
+                    default_tenant_id,
+                ),
+            ]
+
+            for sql, param in backfills:
+                try:
+                    await execute_write(sql, param)
+                except Exception:
+                    pass
+
+            logger.info("✅ Default tenant ensured and legacy backfill attempted")
+        except Exception as e:
+            logger.warning(f"⚠️  Tenant backfill warning: {str(e)}")
+    else:
+        logger.info("ℹ️  Default tenant auto-creation disabled")
 
     # Seed default design templates
     try:
@@ -546,7 +644,7 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️  Design template seeding warning: {str(e)}")
 
-    # Bootstrap the sole admin user from env vars.
+    # Bootstrap the sole super-admin user from env vars.
     # If the user already exists it is updated to match the env values;
     # every other user in the table is deactivated so only this admin
     # can log in until additional users are explicitly created.
@@ -560,18 +658,26 @@ async def startup_event():
         admin_role = settings.ADMIN_ROLE
         admin_password_hash = hash_password(settings.ADMIN_PASSWORD)
 
+        default_tenant = await execute_one(
+            "SELECT id FROM tenants WHERE name = $1",
+            "Default Tenant",
+        )
+        default_tenant_id = default_tenant["id"] if default_tenant else None
+
         # Upsert the admin user
         await execute_write(
             """
-            INSERT INTO users (id, email, full_name, role, password_hash, is_active)
+            INSERT INTO users (id, email, full_name, role, tenant_id, password_hash, must_change_password, is_active)
             VALUES (
-                $1, $2, $3, $4, $5, true
+                $1, $2, $3, $4, $5::uuid, $6, false, true
             )
             ON CONFLICT (id) DO UPDATE
                 SET email         = EXCLUDED.email,
                     full_name     = EXCLUDED.full_name,
                     role          = EXCLUDED.role,
+                    tenant_id     = COALESCE(EXCLUDED.tenant_id, users.tenant_id),
                     password_hash = EXCLUDED.password_hash,
+                    must_change_password = false,
                     is_active     = true,
                     updated_at    = NOW();
             """,
@@ -579,21 +685,33 @@ async def startup_event():
             admin_email,
             admin_full_name,
             admin_role,
+            default_tenant_id,
             admin_password_hash,
         )
 
-        # Optionally deactivate every other user so they cannot log in
+        # Optional safety gate for initial bootstrap only.
+        # We intentionally avoid deactivating existing non-admin users on every restart.
         if settings.DEACTIVATE_NON_ADMIN_USERS:
-            await execute_write(
-                """
-                UPDATE users
-                SET is_active = false
-                WHERE id <> $1;
-                """,
+            non_admin_count_row = await execute_one(
+                "SELECT COUNT(*)::int AS total FROM users WHERE id <> $1::uuid",
                 admin_id,
             )
+            non_admin_count = int((non_admin_count_row or {}).get("total") or 0)
+            if non_admin_count == 0:
+                await execute_write(
+                    """
+                    UPDATE users
+                    SET is_active = false
+                    WHERE id <> $1::uuid;
+                    """,
+                    admin_id,
+                )
+            else:
+                logger.info(
+                    "ℹ️  Skipped DEACTIVATE_NON_ADMIN_USERS because non-admin users already exist"
+                )
 
-        logger.info(f"✅ Admin user bootstrapped: {admin_email}")
+        logger.info(f"✅ Super admin user bootstrapped: {admin_email}")
     except Exception as e:
         logger.error(f"❌ Admin bootstrap failed: {str(e)}")
 
@@ -683,10 +801,17 @@ async def cache_health():
             }
         )
 
+# ============================================
+# SOCKET.IO ASGI WRAPPER
+# ============================================
+# /socket.io/* → handled by python-socketio
+# everything else → FastAPI (with all its middleware)
+socket_app = socketio.ASGIApp(sio, app)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "app.main:app",
+        "app.main:socket_app",
         host="0.0.0.0",
         port=8000,
         reload=settings.DEBUG,

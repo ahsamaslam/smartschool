@@ -2,12 +2,16 @@ import { useEffect, useState, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import adminService from "../../services/adminService";
 import examService from "../../services/examService";
-import { summarizeScope, formatHistoryClass } from "../../utils/studentPreviewScope";
+import {
+  summarizeScope,
+  formatHistoryClass,
+} from "../../utils/studentPreviewScope";
 import { PageSpinner } from "../../components/common/Spinner";
 import Modal from "../../components/common/Modal";
 import Input from "../../components/common/Input";
 import Dropdown from "../../components/common/Dropdown";
 import Button from "../../components/common/Button";
+import BulkImportModal from "../../components/common/BulkImportModal";
 import toast from "react-hot-toast";
 import {
   UserGroupIcon,
@@ -63,6 +67,7 @@ export default function AdminStudents() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [detail, setDetail] = useState(null);
   const [schools, setSchools] = useState([]);
@@ -83,13 +88,17 @@ export default function AdminStudents() {
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState({});
   const [editSaving, setEditSaving] = useState(false);
+  const [editTargetId, setEditTargetId] = useState(null);
   const [pwdStudent, setPwdStudent] = useState(null);
   const [newStudentPassword, setNewStudentPassword] = useState("");
   const [savingStudentPwd, setSavingStudentPwd] = useState(false);
   const [sectionManagerOpen, setSectionManagerOpen] = useState(false);
   const [sectionSaving, setSectionSaving] = useState(false);
   const [editingSectionId, setEditingSectionId] = useState("");
-  const [sectionForm, setSectionForm] = useState({ grade_level: "", section: "" });
+  const [sectionForm, setSectionForm] = useState({
+    grade_level: "",
+    section: "",
+  });
   const [form, setForm] = useState(EMPTY_FORM);
   const [curriculumPreview, setCurriculumPreview] = useState(null);
   /** Loaded when viewing a student: curriculum inherited via active enrollment → section */
@@ -118,7 +127,9 @@ export default function AdminStudents() {
       setClasses([]);
       return;
     }
-    adminService.getSchoolBranches(form.school_id).then((res) => setBranches(res.data || []));
+    adminService
+      .getSchoolBranches(form.school_id)
+      .then((res) => setBranches(res.data || []));
   }, [form.school_id]);
 
   useEffect(() => {
@@ -126,7 +137,9 @@ export default function AdminStudents() {
       setClasses([]);
       return;
     }
-    adminService.getBranchClasses(form.branch_id).then((res) => setClasses(res.data || []));
+    adminService
+      .getBranchClasses(form.branch_id)
+      .then((res) => setClasses(res.data || []));
   }, [form.branch_id]);
 
   useEffect(() => {
@@ -232,12 +245,19 @@ export default function AdminStudents() {
       openDetail(st);
       navigate(location.pathname, { replace: true, state: {} });
     }
-  }, [location.state, students, loading, openDetail, navigate, location.pathname]);
+  }, [
+    location.state,
+    students,
+    loading,
+    openDetail,
+    navigate,
+    location.pathname,
+  ]);
 
   const filtered = students.filter(
     (s) =>
       s.full_name?.toLowerCase().includes(search.toLowerCase()) ||
-      s.email?.toLowerCase().includes(search.toLowerCase())
+      s.email?.toLowerCase().includes(search.toLowerCase()),
   );
 
   if (loading) return <PageSpinner />;
@@ -297,7 +317,9 @@ export default function AdminStudents() {
     setActionSession(getNextSession());
     if (type === "section" && selectedStudent) {
       try {
-        const res = await adminService.getStudentSectionOptions(selectedStudent.id);
+        const res = await adminService.getStudentSectionOptions(
+          selectedStudent.id,
+        );
         setSectionOptions(res.data?.options || []);
       } catch (err) {
         toast.error(err?.response?.data?.detail || "Failed to load sections");
@@ -491,15 +513,73 @@ export default function AdminStudents() {
     setEditOpen(true);
   };
 
+  const openEditFromRow = async (student) => {
+    setEditTargetId(student.id);
+    try {
+      const res = await adminService.getStudentDetail(student.id);
+      const p = res.data?.profile || {};
+      setEditForm({
+        full_name: p.full_name || student.full_name || "",
+        email: p.email || student.email || "",
+        student_roll_no: p.student_roll_no || "",
+        guardian_name: p.guardian_name || "",
+        primary_contact: p.primary_contact || "",
+        emergency_contact: p.emergency_contact || "",
+        date_of_birth: p.date_of_birth ? p.date_of_birth.slice(0, 10) : "",
+        gender: p.gender || "",
+        address: p.address || "",
+        blood_group: p.blood_group || "",
+        medical_notes: p.medical_notes || "",
+      });
+    } catch {
+      setEditForm({
+        full_name: student.full_name || "",
+        email: student.email || "",
+        student_roll_no: "",
+        guardian_name: "",
+        primary_contact: "",
+        emergency_contact: "",
+        date_of_birth: "",
+        gender: "",
+        address: "",
+        blood_group: "",
+        medical_notes: "",
+      });
+    }
+    setEditOpen(true);
+  };
+
+  const archiveStudentDirect = async (student) => {
+    const ok = window.confirm(`Archive ${student.full_name}?`);
+    if (!ok) return;
+    try {
+      await adminService.archiveStudent(student.id);
+      toast.success("Student archived");
+      if (selectedStudent?.id === student.id) {
+        setSelectedStudent(null);
+        setDetail(null);
+      }
+      loadStudents();
+    } catch {
+      toast.error("Failed to archive student");
+    }
+  };
+
   const handleEditStudent = async (e) => {
     e.preventDefault();
-    if (!selectedStudent) return;
+    const targetId = editTargetId || selectedStudent?.id;
+    if (!targetId) return;
     setEditSaving(true);
     try {
-      await adminService.updateStudent(selectedStudent.id, editForm);
+      await adminService.updateStudent(targetId, editForm);
       toast.success("Student updated");
       setEditOpen(false);
-      await openDetail(selectedStudent);
+      setEditTargetId(null);
+      if (selectedStudent && !editTargetId) {
+        await openDetail(selectedStudent);
+      } else {
+        loadStudents();
+      }
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Failed to update student");
     } finally {
@@ -507,7 +587,10 @@ export default function AdminStudents() {
     }
   };
 
-  const classOptions = classes.map((c) => ({ value: c.id, label: formatClass(c) }));
+  const classOptions = classes.map((c) => ({
+    value: c.id,
+    label: formatClass(c),
+  }));
   const branchOptions = branches.map((b) => ({ value: b.id, label: b.name }));
   const schoolOptions = schools.map((s) => ({ value: s.id, label: s.name }));
 
@@ -520,25 +603,67 @@ export default function AdminStudents() {
             Manage all student accounts across your schools.
           </p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 transition-colors shadow-sm"
-        >
-          <PlusIcon className="h-4 w-4" />
-          Add Student
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 border border-gray-200 bg-white text-sm font-semibold rounded-xl hover:bg-gray-50 transition-colors"
+          >
+            <KeyIcon className="h-4 w-4" />
+            Upload Students
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 transition-colors shadow-sm"
+          >
+            <PlusIcon className="h-4 w-4" />
+            Add Student
+          </button>
+        </div>
       </div>
+
+      <BulkImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Upload Students"
+        templateFileName="student_import_template.xlsx"
+        onDownloadTemplate={() => adminService.downloadStudentImportTemplate()}
+        onUpload={(file) => adminService.importStudents(file)}
+        onSuccess={loadStudents}
+        guidance={[
+          "Use the template's Data sheet and check Allowed Values sheet before upload.",
+          "school_name is required for admin uploads.",
+          "Tenant is automatically inferred from the uploader account.",
+          "All uploaded users receive default password from env and must reset at first login.",
+        ]}
+      />
 
       {/* Stats banner */}
       <div className="grid grid-cols-3 gap-4 mb-6">
         {[
-          { label: "Total Students", value: students.length, color: "text-indigo-700 bg-indigo-50" },
-          { label: "Active", value: students.filter((s) => s.is_active).length, color: "text-green-700 bg-green-50" },
-          { label: "Inactive", value: students.filter((s) => !s.is_active).length, color: "text-red-600 bg-red-50" },
+          {
+            label: "Total Students",
+            value: students.length,
+            color: "text-indigo-700 bg-indigo-50",
+          },
+          {
+            label: "Active",
+            value: students.filter((s) => s.is_active).length,
+            color: "text-green-700 bg-green-50",
+          },
+          {
+            label: "Inactive",
+            value: students.filter((s) => !s.is_active).length,
+            color: "text-red-600 bg-red-50",
+          },
         ].map((stat) => (
-          <div key={stat.label} className={`rounded-2xl p-4 ${stat.color} border border-transparent`}>
+          <div
+            key={stat.label}
+            className={`rounded-2xl p-4 ${stat.color} border border-transparent`}
+          >
             <p className="text-2xl font-bold tabular-nums">{stat.value}</p>
-            <p className="text-xs font-medium mt-0.5 opacity-80">{stat.label}</p>
+            <p className="text-xs font-medium mt-0.5 opacity-80">
+              {stat.label}
+            </p>
           </div>
         ))}
       </div>
@@ -585,7 +710,7 @@ export default function AdminStudents() {
                 </th>
                 <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   Actions
-                </th>
+                </th>{" "}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -636,17 +761,41 @@ export default function AdminStudents() {
                       : "—"}
                   </td>
                   <td className="px-5 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openDetail(student);
-                      }}
-                      className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 bg-white"
-                    >
-                      <EyeIcon className="h-3.5 w-3.5" />
-                      Manage
-                    </button>
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEditFromRow(student);
+                        }}
+                        className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-indigo-200 text-indigo-700 hover:bg-indigo-50 bg-white"
+                      >
+                        <PencilSquareIcon className="h-3.5 w-3.5" />
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          archiveStudentDirect(student);
+                        }}
+                        className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 bg-white"
+                      >
+                        <TrashIcon className="h-3.5 w-3.5" />
+                        Delete
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openDetail(student);
+                        }}
+                        className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 bg-white"
+                      >
+                        <EyeIcon className="h-3.5 w-3.5" />
+                        Manage
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -655,9 +804,24 @@ export default function AdminStudents() {
         )}
       </div>
 
-      <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title="Add Student" size="xl">
-        <form onSubmit={handleCreate} className="space-y-3 max-h-[70vh] overflow-y-auto">
-          <Input label="Full Name" value={form.full_name} onChange={(e) => setForm((f) => ({ ...f, full_name: e.target.value }))} required />
+      <Modal
+        isOpen={showCreate}
+        onClose={() => setShowCreate(false)}
+        title="Add Student"
+        size="xl"
+      >
+        <form
+          onSubmit={handleCreate}
+          className="space-y-3 max-h-[70vh] overflow-y-auto"
+        >
+          <Input
+            label="Full Name"
+            value={form.full_name}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, full_name: e.target.value }))
+            }
+            required
+          />
           <Input
             label="Email (optional)"
             value={form.email}
@@ -667,13 +831,42 @@ export default function AdminStudents() {
           <Input
             label="Student ID (Roll No)"
             value={form.student_roll_no}
-            onChange={(e) => setForm((f) => ({ ...f, student_roll_no: e.target.value }))}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, student_roll_no: e.target.value }))
+            }
             hint="Used as the initial login password"
             required
           />
-          <Dropdown label="School" options={schoolOptions} value={form.school_id} onChange={(v) => setForm((f) => ({ ...f, school_id: v, branch_id: "", class_id: "" }))} required />
-          <Dropdown label="Branch" options={branchOptions} value={form.branch_id} onChange={(v) => setForm((f) => ({ ...f, branch_id: v, class_id: "" }))} required />
-          <Dropdown label="Class & Section" options={classOptions} value={form.class_id} onChange={(v) => setForm((f) => ({ ...f, class_id: v }))} required />
+          <Dropdown
+            label="School"
+            options={schoolOptions}
+            value={form.school_id}
+            onChange={(v) =>
+              setForm((f) => ({
+                ...f,
+                school_id: v,
+                branch_id: "",
+                class_id: "",
+              }))
+            }
+            required
+          />
+          <Dropdown
+            label="Branch"
+            options={branchOptions}
+            value={form.branch_id}
+            onChange={(v) =>
+              setForm((f) => ({ ...f, branch_id: v, class_id: "" }))
+            }
+            required
+          />
+          <Dropdown
+            label="Class & Section"
+            options={classOptions}
+            value={form.class_id}
+            onChange={(v) => setForm((f) => ({ ...f, class_id: v }))}
+            required
+          />
           {curriculumPreview && (
             <div className="rounded-xl border border-emerald-100 bg-emerald-50/80 px-4 py-3 text-sm text-emerald-900">
               <p className="font-semibold mb-1">Section curriculum preview</p>
@@ -711,32 +904,87 @@ export default function AdminStudents() {
             onChange={(e) => {
               const year = onlyDigits(e.target.value).slice(0, 4);
               const end = year ? String(Number(year) + 1) : "";
-              setForm((f) => ({ ...f, academic_start_year: year, academic_session: year && end ? `${year}-${end}` : "" }));
+              setForm((f) => ({
+                ...f,
+                academic_start_year: year,
+                academic_session: year && end ? `${year}-${end}` : "",
+              }));
             }}
             required
           />
-          <Input label="Academic Session" value={form.academic_session} disabled hint="Auto generated from start year" required />
-          <Input label="Guardian Name" value={form.guardian_name} onChange={(e) => setForm((f) => ({ ...f, guardian_name: e.target.value }))} />
+          <Input
+            label="Academic Session"
+            value={form.academic_session}
+            disabled
+            hint="Auto generated from start year"
+            required
+          />
+          <Input
+            label="Guardian Name"
+            value={form.guardian_name}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, guardian_name: e.target.value }))
+            }
+          />
           <PhoneField
             label="Primary Contact"
             countryCode={form.primary_country_code}
             number={form.primary_contact}
-            onCodeChange={(v) => setForm((f) => ({ ...f, primary_country_code: v }))}
-            onNumberChange={(v) => setForm((f) => ({ ...f, primary_contact: v }))}
+            onCodeChange={(v) =>
+              setForm((f) => ({ ...f, primary_country_code: v }))
+            }
+            onNumberChange={(v) =>
+              setForm((f) => ({ ...f, primary_contact: v }))
+            }
           />
           <PhoneField
             label="Emergency Contact"
             countryCode={form.emergency_country_code}
             number={form.emergency_contact}
-            onCodeChange={(v) => setForm((f) => ({ ...f, emergency_country_code: v }))}
-            onNumberChange={(v) => setForm((f) => ({ ...f, emergency_contact: v }))}
+            onCodeChange={(v) =>
+              setForm((f) => ({ ...f, emergency_country_code: v }))
+            }
+            onNumberChange={(v) =>
+              setForm((f) => ({ ...f, emergency_contact: v }))
+            }
           />
-          <Input label="Date of Birth" type="date" value={form.date_of_birth} onChange={(e) => setForm((f) => ({ ...f, date_of_birth: e.target.value }))} />
-          <Input label="Gender" value={form.gender} onChange={(e) => setForm((f) => ({ ...f, gender: e.target.value }))} />
-          <Input label="Address" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} />
-          <Input label="Blood Group" value={form.blood_group} onChange={(e) => setForm((f) => ({ ...f, blood_group: e.target.value }))} />
-          <Input label="Medical Notes" value={form.medical_notes} onChange={(e) => setForm((f) => ({ ...f, medical_notes: e.target.value }))} />
-          <Button type="submit" fullWidth loading={saving}>Save Student</Button>
+          <Input
+            label="Date of Birth"
+            type="date"
+            value={form.date_of_birth}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, date_of_birth: e.target.value }))
+            }
+          />
+          <Input
+            label="Gender"
+            value={form.gender}
+            onChange={(e) => setForm((f) => ({ ...f, gender: e.target.value }))}
+          />
+          <Input
+            label="Address"
+            value={form.address}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, address: e.target.value }))
+            }
+          />
+          <Input
+            label="Blood Group"
+            value={form.blood_group}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, blood_group: e.target.value }))
+            }
+          />
+          <Input
+            label="Medical Notes"
+            value={form.medical_notes}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, medical_notes: e.target.value }))
+            }
+          />
+          <Button type="submit" fullWidth loading={saving}>
+            Save Student
+          </Button>
         </form>
       </Modal>
 
@@ -747,18 +995,25 @@ export default function AdminStudents() {
         size="xl"
       >
         <div className="space-y-4">
-          <form onSubmit={handleSaveSection} className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          <form
+            onSubmit={handleSaveSection}
+            className="grid grid-cols-1 md:grid-cols-3 gap-2"
+          >
             <Input
               label="Class"
               value={sectionForm.grade_level}
-              onChange={(e) => setSectionForm((f) => ({ ...f, grade_level: e.target.value }))}
+              onChange={(e) =>
+                setSectionForm((f) => ({ ...f, grade_level: e.target.value }))
+              }
               placeholder="e.g. 1"
               required
             />
             <Input
               label="Section"
               value={sectionForm.section}
-              onChange={(e) => setSectionForm((f) => ({ ...f, section: e.target.value }))}
+              onChange={(e) =>
+                setSectionForm((f) => ({ ...f, section: e.target.value }))
+              }
               placeholder="e.g. A"
               required
             />
@@ -782,8 +1037,13 @@ export default function AdminStudents() {
           </form>
           <div className="space-y-2 max-h-72 overflow-y-auto">
             {classes.map((cls) => (
-              <div key={cls.id} className="flex items-center justify-between rounded-lg border border-gray-200 p-3">
-                <p className="text-sm font-medium text-gray-800">{formatClass(cls)}</p>
+              <div
+                key={cls.id}
+                className="flex items-center justify-between rounded-lg border border-gray-200 p-3"
+              >
+                <p className="text-sm font-medium text-gray-800">
+                  {formatClass(cls)}
+                </p>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
@@ -805,7 +1065,9 @@ export default function AdminStudents() {
               </div>
             ))}
             {classes.length === 0 && (
-              <p className="text-sm text-gray-400 text-center py-5">No sections yet for this branch.</p>
+              <p className="text-sm text-gray-400 text-center py-5">
+                No sections yet for this branch.
+              </p>
             )}
           </div>
         </div>
@@ -826,8 +1088,10 @@ export default function AdminStudents() {
         ) : (
           <div className="space-y-4">
             <p className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">
-              For testing: below is what this student&apos;s <strong>active enrollment</strong> ties them to — same
-              section curriculum the student app uses (My Courses), independent of login status.
+              For testing: below is what this student&apos;s{" "}
+              <strong>active enrollment</strong> ties them to — same section
+              curriculum the student app uses (My Courses), independent of login
+              status.
             </p>
 
             <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 space-y-2">
@@ -835,7 +1099,9 @@ export default function AdminStudents() {
                 Section access & curriculum
               </p>
               {accessPreview?.loading && (
-                <p className="text-sm text-indigo-900">Loading curriculum for enrolled section…</p>
+                <p className="text-sm text-indigo-900">
+                  Loading curriculum for enrolled section…
+                </p>
               )}
               {accessPreview?.error && (
                 <p className="text-sm text-amber-800">{accessPreview.error}</p>
@@ -868,15 +1134,19 @@ export default function AdminStudents() {
                       {accessPreview.activeEnrollment.academic_session || "—"}
                     </p>
                     <p className="text-xs font-mono text-indigo-600 break-all">
-                      class_id: {String(accessPreview.activeEnrollment.class_id)}
+                      class_id:{" "}
+                      {String(accessPreview.activeEnrollment.class_id)}
                     </p>
                   </div>
                   {accessPreview.summary && (
                     <div className="rounded-xl bg-white/90 border border-indigo-100 px-3 py-2 text-sm text-gray-800">
-                      <p className="font-semibold text-gray-900 mb-1">Curriculum linked to this section</p>
+                      <p className="font-semibold text-gray-900 mb-1">
+                        Curriculum linked to this section
+                      </p>
                       <p>
                         Approximately{" "}
-                        <strong>{accessPreview.summary.subjects}</strong> subject
+                        <strong>{accessPreview.summary.subjects}</strong>{" "}
+                        subject
                         {accessPreview.summary.subjects !== 1 ? "s" : ""},{" "}
                         <strong>{accessPreview.summary.books}</strong> book
                         {accessPreview.summary.books !== 1 ? "s" : ""},{" "}
@@ -897,38 +1167,59 @@ export default function AdminStudents() {
                           </summary>
                           <div className="mt-2 max-h-52 overflow-y-auto text-xs space-y-2 border-t border-indigo-100 pt-2">
                             {accessPreview.summary.mode === "library_tree" &&
-                              accessPreview.summary.boardsDetail.map((board, bi) => (
-                                <div key={`board-${bi}`} className="pl-1">
-                                  <p className="font-semibold text-gray-800">Board: {board.name}</p>
-                                  <ul className="mt-1 ml-3 space-y-1.5 text-gray-700">
-                                    {(board.subjects || []).map((sub, si) => (
-                                      <li key={`sub-${bi}-${si}`}>
-                                        <span className="font-medium">{sub.name}</span>
-                                        <ul className="ml-3 mt-0.5 text-gray-600">
-                                          {(sub.books || []).map((bk, bki) => (
-                                            <li key={`bk-${bi}-${si}-${bki}`}>
-                                              {bk.title}{" "}
-                                              <span className="text-gray-400">
-                                                ({bk.topicCount} topics
-                                                {bk.chapters ? `, ${bk.chapters} ch.` : ""})
-                                              </span>
-                                            </li>
-                                          ))}
-                                        </ul>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              ))}
+                              accessPreview.summary.boardsDetail.map(
+                                (board, bi) => (
+                                  <div key={`board-${bi}`} className="pl-1">
+                                    <p className="font-semibold text-gray-800">
+                                      Board: {board.name}
+                                    </p>
+                                    <ul className="mt-1 ml-3 space-y-1.5 text-gray-700">
+                                      {(board.subjects || []).map((sub, si) => (
+                                        <li key={`sub-${bi}-${si}`}>
+                                          <span className="font-medium">
+                                            {sub.name}
+                                          </span>
+                                          <ul className="ml-3 mt-0.5 text-gray-600">
+                                            {(sub.books || []).map(
+                                              (bk, bki) => (
+                                                <li
+                                                  key={`bk-${bi}-${si}-${bki}`}
+                                                >
+                                                  {bk.title}{" "}
+                                                  <span className="text-gray-400">
+                                                    ({bk.topicCount} topics
+                                                    {bk.chapters
+                                                      ? `, ${bk.chapters} ch.`
+                                                      : ""}
+                                                    )
+                                                  </span>
+                                                </li>
+                                              ),
+                                            )}
+                                          </ul>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                ),
+                              )}
                             {accessPreview.summary.mode === "flat_legacy" &&
-                              accessPreview.summary.boardsDetail.map((row, ri) => (
-                                <div key={`leg-${ri}`} className="text-gray-800">
-                                  <span className="font-medium">{row.name}</span>{" "}
-                                  <span className="text-gray-500">
-                                    — {row.topicCount} topic{row.topicCount !== 1 ? "s" : ""}
-                                  </span>
-                                </div>
-                              ))}
+                              accessPreview.summary.boardsDetail.map(
+                                (row, ri) => (
+                                  <div
+                                    key={`leg-${ri}`}
+                                    className="text-gray-800"
+                                  >
+                                    <span className="font-medium">
+                                      {row.name}
+                                    </span>{" "}
+                                    <span className="text-gray-500">
+                                      — {row.topicCount} topic
+                                      {row.topicCount !== 1 ? "s" : ""}
+                                    </span>
+                                  </div>
+                                ),
+                              )}
                           </div>
                         </details>
                       )}
@@ -941,17 +1232,26 @@ export default function AdminStudents() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
               <Info label="Name" value={detail.profile.full_name} />
               <Info label="Email" value={detail.profile.email} />
-              <Info label="Student ID (Roll No)" value={detail.profile.student_roll_no} />
+              <Info
+                label="Student ID (Roll No)"
+                value={detail.profile.student_roll_no}
+              />
               <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
                 <p className="text-xs text-gray-500">Account status</p>
                 <div className="flex items-center justify-between mt-1">
-                  <p className={`font-medium ${detail.profile.is_active ? "text-green-700" : "text-red-600"}`}>
-                    {detail.profile.is_active ? "Active (can log in)" : "Inactive (cannot log in)"}
+                  <p
+                    className={`font-medium ${detail.profile.is_active ? "text-green-700" : "text-red-600"}`}
+                  >
+                    {detail.profile.is_active
+                      ? "Active (can log in)"
+                      : "Inactive (cannot log in)"}
                   </p>
                   {detail.profile.is_active ? (
                     <button
                       onClick={async () => {
-                        const ok = window.confirm(`Deactivate ${detail.profile.full_name}? They won't be able to log in.`);
+                        const ok = window.confirm(
+                          `Deactivate ${detail.profile.full_name}? They won't be able to log in.`,
+                        );
                         if (!ok) return;
                         try {
                           await adminService.deactivateUser(selectedStudent.id);
@@ -983,38 +1283,77 @@ export default function AdminStudents() {
                   )}
                 </div>
               </div>
-              <Info label="Profile school (record)" value={detail.profile.school_name} />
-              <Info label="Profile branch (record)" value={detail.profile.branch_name} />
+              <Info
+                label="Profile school (record)"
+                value={detail.profile.school_name}
+              />
+              <Info
+                label="Profile branch (record)"
+                value={detail.profile.branch_name}
+              />
               <Info label="Guardian" value={detail.profile.guardian_name} />
-              <Info label="Primary Contact" value={detail.profile.primary_contact} />
-              <Info label="Emergency Contact" value={detail.profile.emergency_contact} />
+              <Info
+                label="Primary Contact"
+                value={detail.profile.primary_contact}
+              />
+              <Info
+                label="Emergency Contact"
+                value={detail.profile.emergency_contact}
+              />
               <Info label="DOB" value={detail.profile.date_of_birth} />
             </div>
             <div className="flex flex-wrap gap-2">
-              <button onClick={openEditStudent} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700">
+              <button
+                onClick={openEditStudent}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700"
+              >
                 <PencilSquareIcon className="h-4 w-4" /> Edit Info
               </button>
-              <button onClick={() => { setPwdStudent(selectedStudent); setNewStudentPassword(""); }} className="inline-flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700">
+              <button
+                onClick={() => {
+                  setPwdStudent(selectedStudent);
+                  setNewStudentPassword("");
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700"
+              >
                 <KeyIcon className="h-4 w-4" /> Set Password
               </button>
-              <button onClick={() => openActionModal("promote")} className="inline-flex items-center gap-1.5 rounded-lg bg-green-50 px-3 py-1.5 text-xs font-semibold text-green-700">
+              <button
+                onClick={() => openActionModal("promote")}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-green-50 px-3 py-1.5 text-xs font-semibold text-green-700"
+              >
                 <ArrowUpCircleIcon className="h-4 w-4" /> Promote
               </button>
-              <button onClick={() => openActionModal("repeat")} className="inline-flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700">
+              <button
+                onClick={() => openActionModal("repeat")}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700"
+              >
                 <ArrowPathRoundedSquareIcon className="h-4 w-4" /> Fail/Repeat
               </button>
-              <button onClick={() => openActionModal("section")} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700">
+              <button
+                onClick={() => openActionModal("section")}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700"
+              >
                 <ArrowsRightLeftIcon className="h-4 w-4" /> Change Section
               </button>
-              <button onClick={archiveStudent} className="inline-flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700">
+              <button
+                onClick={archiveStudent}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700"
+              >
                 <ArchiveBoxIcon className="h-4 w-4" /> Archive
               </button>
-              <button onClick={openRepair} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
-                <WrenchScrewdriverIcon className="h-4 w-4" /> Set Current Enrollment
+              <button
+                onClick={openRepair}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700"
+              >
+                <WrenchScrewdriverIcon className="h-4 w-4" /> Set Current
+                Enrollment
               </button>
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-gray-800 mb-2">Enrollment History</h3>
+              <h3 className="text-sm font-semibold text-gray-800 mb-2">
+                Enrollment History
+              </h3>
               <div className="space-y-2">
                 {detail.history.map((h) => (
                   <div
@@ -1032,12 +1371,13 @@ export default function AdminStudents() {
                         </span>
                       )}
                       <span>
-                        {h.school_name} / {h.branch_name} / {formatHistoryClass(h)}
+                        {h.school_name} / {h.branch_name} /{" "}
+                        {formatHistoryClass(h)}
                       </span>
                     </p>
                     <p>
-                      Session: {h.academic_session || "—"} | Status: {h.status} | Result:{" "}
-                      {h.promotion_result || "—"}
+                      Session: {h.academic_session || "—"} | Status: {h.status}{" "}
+                      | Result: {h.promotion_result || "—"}
                     </p>
                   </div>
                 ))}
@@ -1050,7 +1390,13 @@ export default function AdminStudents() {
       <Modal
         isOpen={actionOpen}
         onClose={() => setActionOpen(false)}
-        title={actionType === "promote" ? "Promote Student" : actionType === "repeat" ? "Fail/Repeat Student" : "Change Section"}
+        title={
+          actionType === "promote"
+            ? "Promote Student"
+            : actionType === "repeat"
+              ? "Fail/Repeat Student"
+              : "Change Section"
+        }
       >
         <div className="space-y-3">
           <Input
@@ -1062,7 +1408,10 @@ export default function AdminStudents() {
           {actionType === "section" && (
             <Dropdown
               label="Target Section"
-              options={sectionOptions.map((c) => ({ value: c.id, label: formatClass(c) }))}
+              options={sectionOptions.map((c) => ({
+                value: c.id,
+                label: formatClass(c),
+              }))}
               value={targetSectionClassId}
               onChange={setTargetSectionClassId}
               placeholder="Select section"
@@ -1087,7 +1436,10 @@ export default function AdminStudents() {
         <div className="space-y-3">
           <Dropdown
             label="Class & Section"
-            options={sectionOptions.map((c) => ({ value: c.id, label: formatClass(c) }))}
+            options={sectionOptions.map((c) => ({
+              value: c.id,
+              label: formatClass(c),
+            }))}
             value={repairClassId}
             onChange={setRepairClassId}
             placeholder="Select class"
@@ -1106,71 +1458,101 @@ export default function AdminStudents() {
 
       <Modal
         isOpen={editOpen}
-        onClose={() => setEditOpen(false)}
+        onClose={() => {
+          setEditOpen(false);
+          setEditTargetId(null);
+        }}
         title="Edit Student"
         size="xl"
       >
-        <form onSubmit={handleEditStudent} className="space-y-3 max-h-[70vh] overflow-y-auto">
+        <form
+          onSubmit={handleEditStudent}
+          className="space-y-3 max-h-[70vh] overflow-y-auto"
+        >
           <Input
             label="Full Name"
             value={editForm.full_name || ""}
-            onChange={(e) => setEditForm((f) => ({ ...f, full_name: e.target.value }))}
+            onChange={(e) =>
+              setEditForm((f) => ({ ...f, full_name: e.target.value }))
+            }
             required
           />
           <Input
             label="Student ID (Roll No)"
             value={editForm.student_roll_no || ""}
-            onChange={(e) => setEditForm((f) => ({ ...f, student_roll_no: e.target.value }))}
+            onChange={(e) =>
+              setEditForm((f) => ({ ...f, student_roll_no: e.target.value }))
+            }
             hint="Also used as the login password — update password separately if needed"
           />
           <Input
             label="Email"
             value={editForm.email || ""}
-            onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
+            onChange={(e) =>
+              setEditForm((f) => ({ ...f, email: e.target.value }))
+            }
             hint="Leave blank to keep current email"
           />
           <Input
             label="Guardian Name"
             value={editForm.guardian_name || ""}
-            onChange={(e) => setEditForm((f) => ({ ...f, guardian_name: e.target.value }))}
+            onChange={(e) =>
+              setEditForm((f) => ({ ...f, guardian_name: e.target.value }))
+            }
           />
           <Input
             label="Primary Contact"
             value={editForm.primary_contact || ""}
-            onChange={(e) => setEditForm((f) => ({ ...f, primary_contact: e.target.value }))}
+            onChange={(e) =>
+              setEditForm((f) => ({ ...f, primary_contact: e.target.value }))
+            }
           />
           <Input
             label="Emergency Contact"
             value={editForm.emergency_contact || ""}
-            onChange={(e) => setEditForm((f) => ({ ...f, emergency_contact: e.target.value }))}
+            onChange={(e) =>
+              setEditForm((f) => ({ ...f, emergency_contact: e.target.value }))
+            }
           />
           <Input
             label="Date of Birth"
             type="date"
             value={editForm.date_of_birth || ""}
-            onChange={(e) => setEditForm((f) => ({ ...f, date_of_birth: e.target.value }))}
+            onChange={(e) =>
+              setEditForm((f) => ({ ...f, date_of_birth: e.target.value }))
+            }
           />
           <Input
             label="Gender"
             value={editForm.gender || ""}
-            onChange={(e) => setEditForm((f) => ({ ...f, gender: e.target.value }))}
+            onChange={(e) =>
+              setEditForm((f) => ({ ...f, gender: e.target.value }))
+            }
           />
           <Input
             label="Address"
             value={editForm.address || ""}
-            onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))}
+            onChange={(e) =>
+              setEditForm((f) => ({ ...f, address: e.target.value }))
+            }
           />
           <Input
             label="Blood Group"
             value={editForm.blood_group || ""}
-            onChange={(e) => setEditForm((f) => ({ ...f, blood_group: e.target.value }))}
+            onChange={(e) =>
+              setEditForm((f) => ({ ...f, blood_group: e.target.value }))
+            }
           />
           <Input
             label="Medical Notes"
             value={editForm.medical_notes || ""}
-            onChange={(e) => setEditForm((f) => ({ ...f, medical_notes: e.target.value }))}
+            onChange={(e) =>
+              setEditForm((f) => ({ ...f, medical_notes: e.target.value }))
+            }
           />
-          <Button type="submit" fullWidth loading={editSaving}>Save Changes</Button>
+          <Button type="submit" fullWidth loading={editSaving}>
+            Save Changes
+          </Button>
         </form>
       </Modal>
 
@@ -1201,12 +1583,17 @@ export default function AdminStudents() {
               }
               setSavingStudentPwd(true);
               try {
-                await adminService.setStudentPassword(pwdStudent.id, newStudentPassword);
+                await adminService.setStudentPassword(
+                  pwdStudent.id,
+                  newStudentPassword,
+                );
                 toast.success("Password updated. Student can now log in.");
                 setPwdStudent(null);
                 setNewStudentPassword("");
               } catch (err) {
-                toast.error(err?.response?.data?.detail || "Failed to set password.");
+                toast.error(
+                  err?.response?.data?.detail || "Failed to set password.",
+                );
               } finally {
                 setSavingStudentPwd(false);
               }
@@ -1241,7 +1628,13 @@ function normalizeSession(value) {
   return (value || "").trim().replace(/–/g, "-").replace(/—/g, "-");
 }
 
-function PhoneField({ label, countryCode, number, onCodeChange, onNumberChange }) {
+function PhoneField({
+  label,
+  countryCode,
+  number,
+  onCodeChange,
+  onNumberChange,
+}) {
   return (
     <div className="space-y-1">
       <label className="text-sm font-medium text-gray-700">{label}</label>
@@ -1262,7 +1655,9 @@ function PhoneField({ label, countryCode, number, onCodeChange, onNumberChange }
           inputMode="numeric"
           maxLength={10}
           value={number}
-          onChange={(e) => onNumberChange(onlyDigits(e.target.value).slice(0, 10))}
+          onChange={(e) =>
+            onNumberChange(onlyDigits(e.target.value).slice(0, 10))
+          }
           placeholder="10 digits"
           className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
         />

@@ -253,14 +253,14 @@ async def get_class_teaching_assignments(
     await ensure_homework_schema()
     role = user.get("role")
     uid = str(user["user_id"])
-    if role == "admin":
+    if role in ("admin", "super_admin"):
         tid = for_teacher_id or uid
     else:
         tid = uid
         if for_teacher_id and str(for_teacher_id) != uid:
             raise HTTPException(status_code=403, detail="Forbidden")
 
-    if role != "admin":
+    if role not in ("admin", "super_admin"):
         if not await teacher_can_manage_class(uid, class_id):
             raise HTTPException(status_code=403, detail="Forbidden")
 
@@ -1072,7 +1072,7 @@ async def get_teacher_book(book_id: str, current_user: dict = Depends(get_user_f
     teacher_id = current_user.get("user_id")
     role = current_user.get("role")
 
-    if role != "admin":
+    if role not in ("admin", "super_admin"):
         assignment = await execute_one(
             "SELECT id FROM teacher_class_subject_assignments WHERE teacher_id = $1::uuid AND library_book_id = $2::uuid LIMIT 1",
             teacher_id, book_id,

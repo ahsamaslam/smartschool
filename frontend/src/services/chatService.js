@@ -1,7 +1,7 @@
-import api from './api';
+import api from "./api";
 
 const API_ROUTES = {
-  CHAT: '/chat',
+  CHAT: "/chat",
 };
 
 const chatService = {
@@ -11,7 +11,7 @@ const chatService = {
       params: { page, page_size: pageSize },
     }),
 
-  createConversation: (recipientId, requestMessage = '') =>
+  createConversation: (recipientId, requestMessage = "") =>
     api.post(`${API_ROUTES.CHAT}/conversations`, {
       recipient_id: recipientId,
       request_message: requestMessage,
@@ -29,19 +29,19 @@ const chatService = {
 
   uploadFile: (conversationId, file) => {
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append("file", file);
     return api.post(
       `${API_ROUTES.CHAT}/conversations/${conversationId}/upload`,
       formData,
       {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        headers: { "Content-Type": "multipart/form-data" },
         onUploadProgress: (progressEvent) => {
           const percentCompleted = Math.round(
-            (progressEvent.loaded * 100) / progressEvent.total
+            (progressEvent.loaded * 100) / progressEvent.total,
           );
           return percentCompleted;
         },
-      }
+      },
     );
   },
 
@@ -53,15 +53,16 @@ const chatService = {
   updateControls: (conversationId, controls) =>
     api.patch(
       `${API_ROUTES.CHAT}/conversations/${conversationId}/controls`,
-      controls
+      controls,
     ),
 
-  // Teachers
-  getEligibleTeachers: () =>
-    api.get(`${API_ROUTES.CHAT}/eligible-teachers`),
+  // Teachers / Members
+  getEligibleTeachers: () => api.get(`${API_ROUTES.CHAT}/eligible-teachers`),
 
-  getPresence: (userId) =>
-    api.get(`${API_ROUTES.CHAT}/presence/${userId}`),
+  searchSchoolMembers: (query = "") =>
+    api.get(`${API_ROUTES.CHAT}/school-members`, { params: { q: query } }),
+
+  getPresence: (userId) => api.get(`${API_ROUTES.CHAT}/presence/${userId}`),
 
   setBusyMode: (acceptNewRequests) =>
     api.patch(`${API_ROUTES.CHAT}/busy-mode`, {
@@ -72,8 +73,7 @@ const chatService = {
   createAnnouncement: (data) =>
     api.post(`${API_ROUTES.CHAT}/announcements`, data),
 
-  listAnnouncements: () =>
-    api.get(`${API_ROUTES.CHAT}/announcements`),
+  listAnnouncements: () => api.get(`${API_ROUTES.CHAT}/announcements`),
 
   markAnnouncementRead: (announcementId, acknowledged = false) =>
     api.post(`${API_ROUTES.CHAT}/announcements/${announcementId}/read`, {
@@ -81,8 +81,7 @@ const chatService = {
     }),
 
   // Unread count
-  getUnreadCount: () =>
-    api.get(`${API_ROUTES.CHAT}/unread-count`),
+  getUnreadCount: () => api.get(`${API_ROUTES.CHAT}/unread-count`),
 };
 
 export default chatService;

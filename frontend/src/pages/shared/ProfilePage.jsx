@@ -109,12 +109,17 @@ export default function ProfilePage() {
     }
     setSavingPassword(true);
     try {
-      await api.post(`${API_ROUTES.AUTH}/password/change`, {
-        user_id: user.id,
-        old_password: passwordForm.old_password,
-        new_password: passwordForm.new_password,
-      });
+      await api.post(
+        `${API_ROUTES.AUTH}/password/change`,
+        {
+          user_id: user.id,
+          old_password: passwordForm.old_password,
+          new_password: passwordForm.new_password,
+        },
+        { skipAuthRedirect: true },
+      );
       toast.success("Password changed successfully!");
+      updateUser({ must_change_password: false });
       setPasswordForm({
         old_password: "",
         new_password: "",

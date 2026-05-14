@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../../services/api";
@@ -19,6 +18,7 @@ import {
   KeyIcon,
 } from "@heroicons/react/24/outline";
 import TeacherProfileModal from "../../components/admin/TeacherProfileModal";
+import BulkImportModal from "../../components/common/BulkImportModal";
 import { setAdminPreviewTeacher } from "../../utils/adminPreviewTeacher";
 
 export default function AdminTeachers() {
@@ -36,12 +36,13 @@ export default function AdminTeachers() {
   const [savingPwd, setSavingPwd] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletingTeacher, setDeletingTeacher] = useState(null);
+  const [showImportModal, setShowImportModal] = useState(false);
 
   const loadTeachers = () => {
     setLoading(true);
     Promise.all([
       api.get("/admins/users", { params: { role: "teacher" } }),
-      api.get("/admins/schools")
+      api.get("/admins/schools"),
     ])
       .then(([teachersRes, schoolsRes]) => {
         setTeachers(
@@ -64,14 +65,13 @@ export default function AdminTeachers() {
     loadTeachers();
   }, []);
 
-  const filtered = teachers.filter(
-    (t) => {
-      const matchesSearch = t.full_name?.toLowerCase().includes(search.toLowerCase()) ||
-        t.email?.toLowerCase().includes(search.toLowerCase());
-      const matchesSchool = !filterSchoolId || t.school_id === filterSchoolId;
-      return matchesSearch && matchesSchool;
-    }
-  );
+  const filtered = teachers.filter((t) => {
+    const matchesSearch =
+      t.full_name?.toLowerCase().includes(search.toLowerCase()) ||
+      t.email?.toLowerCase().includes(search.toLowerCase());
+    const matchesSchool = !filterSchoolId || t.school_id === filterSchoolId;
+    return matchesSearch && matchesSchool;
+  });
 
   const handleDeleteTeacher = async () => {
     if (!deletingTeacher?.id) return;
@@ -97,13 +97,22 @@ export default function AdminTeachers() {
             Manage all teacher accounts across your schools.
           </p>
         </div>
-        <button
-          className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 transition-colors shadow-sm"
-          onClick={() => setShowModal(true)}
-        >
-          <PlusIcon className="h-4 w-4" />
-          Add Teacher
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="inline-flex items-center gap-2 px-4 py-2 border border-gray-200 bg-white text-sm font-semibold rounded-xl hover:bg-gray-50 transition-colors"
+            onClick={() => setShowImportModal(true)}
+          >
+            <KeyIcon className="h-4 w-4" />
+            Upload Teachers
+          </button>
+          <button
+            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 transition-colors shadow-sm"
+            onClick={() => setShowModal(true)}
+          >
+            <PlusIcon className="h-4 w-4" />
+            Add Teacher
+          </button>
+        </div>
       </div>
 
       <TeacherProfileModal
@@ -114,6 +123,22 @@ export default function AdminTeachers() {
         }}
         onSaved={loadTeachers}
         initialData={editingTeacher}
+      />
+
+      <BulkImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="Upload Teachers"
+        templateFileName="teacher_import_template.xlsx"
+        onDownloadTemplate={() => adminService.downloadTeacherImportTemplate()}
+        onUpload={(file) => adminService.importTeachers(file)}
+        onSuccess={loadTeachers}
+        guidance={[
+          "Use the provided template with Data and Allowed Values sheets.",
+          "school_name is required for admin uploads.",
+          "Tenant is automatically inferred from the uploader account.",
+          "All uploaded users receive default password from env and must reset at first login.",
+        ]}
       />
 
       {/* Filters */}
@@ -183,7 +208,10 @@ export default function AdminTeachers() {
             </thead>
             <tbody className="divide-y divide-gray-50">
               {filtered.map((teacher) => (
-                <tr key={teacher.id} className="hover:bg-gray-50 transition-colors">
+                <tr
+                  key={teacher.id}
+                  className="hover:bg-gray-50 transition-colors"
+                >
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-sm">
@@ -264,16 +292,40 @@ export default function AdminTeachers() {
             <Info label="Employee ID" value={selectedTeacher.employee_id} />
             <Info label="School" value={selectedTeacher.school_name} />
             <Info label="Branch" value={selectedTeacher.branch_name} />
-            <Info label="Designation" value={formatDesignation(selectedTeacher.designation)} />
-            <Info label="Joining Date" value={selectedTeacher.date_of_joining ? new Date(selectedTeacher.date_of_joining).toLocaleDateString() : ""} />
-            <Info label="Employment Status" value={selectedTeacher.employment_status} />
+            <Info
+              label="Designation"
+              value={formatDesignation(selectedTeacher.designation)}
+            />
+            <Info
+              label="Joining Date"
+              value={
+                selectedTeacher.date_of_joining
+                  ? new Date(
+                      selectedTeacher.date_of_joining,
+                    ).toLocaleDateString()
+                  : ""
+              }
+            />
+            <Info
+              label="Employment Status"
+              value={selectedTeacher.employment_status}
+            />
             <Info label="Contact" value={selectedTeacher.contact} />
-            <Info label="Emergency Contact" value={selectedTeacher.emergency_contact} />
-            <Info label="Experience (Years)" value={selectedTeacher.experience_years} />
+            <Info
+              label="Emergency Contact"
+              value={selectedTeacher.emergency_contact}
+            />
+            <Info
+              label="Experience (Years)"
+              value={selectedTeacher.experience_years}
+            />
             <Info label="Languages" value={selectedTeacher.languages} />
             <Info label="Salary" value={selectedTeacher.salary} />
             <div className="md:col-span-2">
-              <Info label="Qualifications" value={selectedTeacher.qualifications} />
+              <Info
+                label="Qualifications"
+                value={selectedTeacher.qualifications}
+              />
             </div>
             <div className="md:col-span-2">
               <Info
@@ -330,7 +382,9 @@ export default function AdminTeachers() {
                 setPwdTeacher(null);
                 setNewPassword("");
               } catch (err) {
-                toast.error(err?.response?.data?.detail || "Failed to set password.");
+                toast.error(
+                  err?.response?.data?.detail || "Failed to set password.",
+                );
               } finally {
                 setSavingPwd(false);
               }
@@ -351,7 +405,9 @@ export default function AdminTeachers() {
       >
         <div className="space-y-4">
           <p className="text-sm text-gray-600">
-            Are you sure you want to delete <span className="font-semibold">{deletingTeacher?.full_name}</span>? This action cannot be undone.
+            Are you sure you want to delete{" "}
+            <span className="font-semibold">{deletingTeacher?.full_name}</span>?
+            This action cannot be undone.
           </p>
           <div className="flex gap-3">
             <Button
@@ -364,11 +420,7 @@ export default function AdminTeachers() {
             >
               Cancel
             </Button>
-            <Button
-              variant="danger"
-              fullWidth
-              onClick={handleDeleteTeacher}
-            >
+            <Button variant="danger" fullWidth onClick={handleDeleteTeacher}>
               Delete
             </Button>
           </div>
@@ -438,7 +490,9 @@ function formatTeachingAssignments(teacher) {
       .map((a) => {
         const cls = [
           a.class_name,
-          a.grade_level != null && a.grade_level !== "" ? `Grade ${a.grade_level}` : null,
+          a.grade_level != null && a.grade_level !== ""
+            ? `Grade ${a.grade_level}`
+            : null,
           a.section ? `Sec ${a.section}` : null,
         ]
           .filter(Boolean)

@@ -2,11 +2,12 @@
 Admin Portal Routes - Full System Access
 """
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 import json
 import os
-from datetime import date
+from datetime import date, datetime
 import re
 
 from app.utils.database import execute_query, execute_one, execute_write
@@ -15,12 +16,27 @@ from app.schemas.slides_ai import GenerateSlidesRequest, GenerateSlidesResponse
 from app.utils.ai_slide_deck import generate_slide_deck
 from app.routers.auth import get_user_from_token
 from app.utils.auth import hash_password
+from app.utils.security import generate_secure_token
+from app.utils.bulk_imports import (
+    TEACHER_IMPORT_HEADERS,
+    STUDENT_IMPORT_HEADERS,
+    build_template_bytes,
+    normalize_phone,
+    normalize_text,
+    parse_upload_rows,
+)
 import uuid as uuid_lib
 
 
 def require_admin(current_user: dict = Depends(get_user_from_token)):
-    if current_user.get("role") != "admin":
+    if current_user.get("role") not in ("admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
+
+
+def require_super_admin(current_user: dict = Depends(get_user_from_token)):
+    if current_user.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
     return current_user
 
 
@@ -101,9 +117,22 @@ class ManagerCreateRequest(BaseModel):
 
 
 class CreateSchoolRequest(BaseModel):
+    tenant_id: Optional[str] = None
     name: str
     address: str
+    admin_id: Optional[str] = None
     manager: Optional[ManagerCreateRequest] = None
+
+
+class CreateTenantRequest(BaseModel):
+    name: str
+    admin_full_name: str
+    admin_email: EmailStr
+
+
+class UpdateTenantRequest(BaseModel):
+    name: Optional[str] = None
+    is_active: Optional[bool] = None
 
 
 class CreateBranchRequest(BaseModel):
@@ -123,6 +152,11 @@ class CreateClassRequest(BaseModel):
 class UpdateSchoolRequest(BaseModel):
     name: Optional[str] = None
     address: Optional[str] = None
+    admin_id: Optional[str] = None
+
+
+class AssignSchoolAdminRequest(BaseModel):
+    admin_user_id: str
 
 
 class UpdateBranchRequest(BaseModel):
@@ -429,8 +463,206 @@ def _extract_grade_number(value: Optional[str]) -> Optional[int]:
     match = re.search(r"\d+", str(value))
     return int(match.group(0)) if match else None
 
+
+def _is_super_admin(current_user: dict) -> bool:
+    return current_user.get("role") == "super_admin"
+
+
+async def _get_owned_school_ids(current_user: dict) -> set[str]:
+    if _is_super_admin(current_user):
+        return set()
+    rows = await execute_query(
+        "SELECT id FROM schools WHERE admin_id = $1::uuid",
+        current_user.get("user_id"),
+    )
+    return {str(r["id"]) for r in rows}
+
+
+async def _assert_school_scope(current_user: dict, school_id: Optional[str]):
+    if _is_super_admin(current_user) or not school_id:
+        return
+    school = await execute_one(
+        "SELECT tenant_id FROM schools WHERE id = $1::uuid",
+        str(school_id),
+    )
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    school_tenant = _normalize_uuid_text(school.get("tenant_id"))
+    await _assert_tenant_scope(current_user, school_tenant)
+
+
+def _normalize_uuid_text(value: Optional[str]) -> Optional[str]:
+    return str(value) if value is not None else None
+
+
+def _quote_ident(identifier: str) -> str:
+    return '"' + str(identifier).replace('"', '""') + '"'
+
+
+async def _assert_tenant_scope(current_user: dict, tenant_id: Optional[str]):
+    if _is_super_admin(current_user) or not tenant_id:
+        return
+    current_tenant = _normalize_uuid_text(current_user.get("tenant_id"))
+    if not current_tenant or current_tenant != _normalize_uuid_text(tenant_id):
+        raise HTTPException(status_code=403, detail="Not allowed for this tenant")
+
+
+async def _get_effective_user_school_id(user_id: str) -> Optional[str]:
+    row = await execute_one(
+        """
+        SELECT
+            COALESCE(tp.school_id, u.school_id, sp.school_id) AS school_id
+        FROM users u
+        LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
+        LEFT JOIN student_profiles sp ON sp.user_id = u.id
+        WHERE u.id = $1::uuid
+        """,
+        user_id,
+    )
+    if not row or not row.get("school_id"):
+        return None
+    return str(row["school_id"])
+
+
+async def _get_effective_user_tenant_id(user_id: str) -> Optional[str]:
+    row = await execute_one(
+        """
+        SELECT
+            COALESCE(tp.tenant_id, sp.tenant_id, u.tenant_id) AS tenant_id
+        FROM users u
+        LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
+        LEFT JOIN student_profiles sp ON sp.user_id = u.id
+        WHERE u.id = $1::uuid
+        """,
+        user_id,
+    )
+    if not row or not row.get("tenant_id"):
+        return None
+    return str(row["tenant_id"])
+
+
+async def _assert_user_scope(current_user: dict, user_id: str):
+    if _is_super_admin(current_user):
+        return
+    if str(current_user.get("user_id")) == str(user_id):
+        return
+
+    target_tenant_id = await _get_effective_user_tenant_id(user_id)
+    await _assert_tenant_scope(current_user, target_tenant_id)
+
+    school_id = await _get_effective_user_school_id(user_id)
+    await _assert_school_scope(current_user, school_id)
+
+
+def _generate_temporary_password() -> str:
+    return f"Tmp-{generate_secure_token(8)}-A1!"
+
+
+def _default_import_password() -> str:
+    password = (settings.IMPORT_DEFAULT_PASSWORD or "").strip()
+    if not password:
+        raise HTTPException(
+            status_code=500,
+            detail="IMPORT_DEFAULT_PASSWORD is not configured.",
+        )
+    return password
+
+
+def _require_columns(headers: List[str], required_cols: List[str]):
+    missing = [col for col in required_cols if col not in headers]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing required columns: {', '.join(missing)}",
+        )
+
+
+def _parse_import_date(value: object) -> Optional[date]:
+    text = normalize_text(value)
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except Exception:
+            continue
+    try:
+        return date.fromisoformat(text)
+    except Exception:
+        return None
+
+
+async def _resolve_import_tenant_id(current_user: dict) -> str:
+    tenant_id = _normalize_uuid_text(current_user.get("tenant_id"))
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="Uploader tenant context is missing")
+    tenant = await execute_one(
+        "SELECT id FROM tenants WHERE id = $1::uuid AND is_active = true",
+        tenant_id,
+    )
+    if not tenant:
+        raise HTTPException(status_code=400, detail="Uploader tenant is not found or inactive")
+    await _assert_tenant_scope(current_user, tenant_id)
+    return tenant_id
+
+
+async def _resolve_school_for_import(current_user: dict, tenant_id: str, school_name: str) -> dict:
+    school_name = normalize_text(school_name)
+    if not school_name:
+        raise HTTPException(status_code=400, detail="school_name is required")
+    school = await execute_one(
+        """
+        SELECT id, name, tenant_id
+        FROM schools
+        WHERE LOWER(TRIM(REGEXP_REPLACE(REPLACE(name, CHR(160), ' '), '\s+', ' ', 'g')))
+              = LOWER(TRIM(REGEXP_REPLACE(REPLACE($1, CHR(160), ' '), '\s+', ' ', 'g')))
+          AND tenant_id = $2::uuid
+        """,
+        school_name,
+        tenant_id,
+    )
+    if not school:
+        raise HTTPException(status_code=400, detail=f"School not found in tenant: {school_name}")
+    await _assert_school_scope(current_user, str(school["id"]))
+    return dict(school)
+
+
+async def _assert_tenant_exists(tenant_id: str):
+    tenant = await execute_one(
+        "SELECT id FROM tenants WHERE id = $1::uuid AND is_active = true",
+        tenant_id,
+    )
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found or inactive")
+
+
+async def _get_user_tenant_id(user_id: str) -> Optional[str]:
+    row = await execute_one("SELECT tenant_id FROM users WHERE id = $1::uuid", user_id)
+    if not row or not row.get("tenant_id"):
+        return None
+    return str(row["tenant_id"])
+
+
+async def _validate_admin_owner_id(admin_user_id: Optional[str], expected_tenant_id: Optional[str] = None) -> Optional[str]:
+    if not admin_user_id:
+        return None
+    admin_user = await execute_one(
+        "SELECT id, role, is_active, tenant_id FROM users WHERE id = $1::uuid",
+        admin_user_id,
+    )
+    if not admin_user:
+        raise HTTPException(status_code=404, detail="Admin user not found")
+    if admin_user.get("role") != "admin":
+        raise HTTPException(status_code=400, detail="Assigned school owner must have admin role")
+    if not admin_user.get("is_active", False):
+        raise HTTPException(status_code=400, detail="Assigned admin is inactive")
+    admin_tenant = str(admin_user["tenant_id"]) if admin_user.get("tenant_id") else None
+    if expected_tenant_id and admin_tenant and admin_tenant != str(expected_tenant_id):
+        raise HTTPException(status_code=400, detail="Assigned admin must belong to the same tenant")
+    return str(admin_user["id"])
+
 @router.get("/users")
-async def get_all_users(role: Optional[str] = None):
+async def get_all_users(role: Optional[str] = None, current_user: dict = Depends(require_admin)):
     """Get all system users with optional role filter"""
     await ensure_teacher_profiles_table()
     try:
@@ -446,6 +678,8 @@ async def get_all_users(role: Optional[str] = None):
             u.email,
             u.full_name,
             u.role,
+            u.tenant_id,
+            t.name AS tenant_name,
             u.is_active,
             u.created_at,
             u.profile_picture_url,
@@ -511,21 +745,50 @@ async def get_all_users(role: Optional[str] = None):
                 WHERE tcs.teacher_id = u.id
             ) AS teacher_curriculum_assignments
         FROM users u
+        LEFT JOIN tenants t ON t.id = u.tenant_id
         LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
         LEFT JOIN schools sc ON sc.id = tp.school_id
         LEFT JOIN branches br ON br.id = tp.branch_id
         WHERE ($1::text IS NULL OR role = $1::user_role)
+          AND u.id <> $2::uuid
         ORDER BY u.role, u.full_name
     """
 
-    users = await execute_query(query, role)
-    return [dict(user) for user in users]
+    users = [dict(user) for user in await execute_query(query, role, settings.ADMIN_ID)]
+    if _is_super_admin(current_user):
+        return users
+
+    current_tenant = _normalize_uuid_text(current_user.get("tenant_id"))
+    if not current_tenant:
+        return []
+    return [
+        u for u in users
+        if _normalize_uuid_text(u.get("tenant_id")) == current_tenant
+    ]
 
 
 @router.post("/users")
-async def create_user(user_data: CreateUserRequest):
+async def create_user(user_data: CreateUserRequest, current_user: dict = Depends(require_admin)):
     """Create new user account"""
     await ensure_teacher_profiles_table()
+
+    target_role = (user_data.role or "").strip().lower()
+    if not _is_super_admin(current_user) and target_role in {"admin", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only super admin can create admin/super admin accounts")
+
+    if target_role in {"manager", "teacher", "student"}:
+        if not user_data.school_id:
+            raise HTTPException(status_code=400, detail="school_id is required for manager/teacher/student accounts")
+        await _assert_school_scope(current_user, user_data.school_id)
+
+    user_school_id = _none_if_blank(user_data.school_id) if target_role in {"manager", "teacher", "student"} else None
+
+    tenant_id = current_user.get("tenant_id")
+    if user_school_id:
+        school = await execute_one("SELECT tenant_id FROM schools WHERE id = $1::uuid", user_school_id)
+        if not school:
+            raise HTTPException(status_code=404, detail="School not found")
+        tenant_id = str(school["tenant_id"]) if school.get("tenant_id") else tenant_id
 
     # Auto-generate email from employee_id if not provided
     email = user_data.email
@@ -535,23 +798,26 @@ async def create_user(user_data: CreateUserRequest):
             id_slug = user_data.full_name.strip().lower().replace(" ", "_")
         email = f"{id_slug}@staff.school"
 
-    pwd_hash = hash_password(user_data.password) if user_data.password else None
+    temporary_password = (user_data.password or "").strip() or _generate_temporary_password()
+    pwd_hash = hash_password(temporary_password)
     try:
         user = await execute_one(
-            """INSERT INTO users (email, full_name, role, password_hash, is_active)
-               VALUES ($1, $2, $3, $4, true)
-               RETURNING id, email, full_name, role""",
+                """INSERT INTO users (email, full_name, role, tenant_id, password_hash, must_change_password, school_id, is_active)
+                    VALUES ($1, $2, $3, $4::uuid, $5, true, $6::uuid, true)
+               RETURNING id, email, full_name, role, tenant_id, must_change_password""",
             email,
             user_data.full_name,
-            user_data.role,
+                target_role,
+            tenant_id,
             pwd_hash,
+                user_school_id,
         )
     except Exception as e:
         if "users_email_key" in str(e):
             raise HTTPException(status_code=400, detail="A user with this email or ID already exists.")
         raise
 
-    if user_data.role == "teacher":
+    if target_role == "teacher":
         school_id = _none_if_blank(user_data.school_id)
         branch_id = _none_if_blank(user_data.branch_id)
         date_of_joining = _parse_date_or_none(user_data.date_of_joining)
@@ -631,18 +897,211 @@ async def create_user(user_data: CreateUserRequest):
 
     return {
         "message": "User created successfully",
-        "user": dict(user)
+        "user": dict(user),
+        "temporary_password": temporary_password,
+        "must_change_password": True,
+    }
+
+
+@router.get("/teachers/import-template")
+async def download_teacher_import_template(current_user: dict = Depends(require_admin)):
+    current_tenant = await _resolve_import_tenant_id(current_user)
+    school_rows = await execute_query(
+        "SELECT name FROM schools WHERE tenant_id = $1::uuid ORDER BY name",
+        current_tenant,
+    )
+    branch_rows = await execute_query(
+        """
+        SELECT b.name
+        FROM branches b
+        JOIN schools s ON s.id = b.school_id
+        WHERE s.tenant_id = $1::uuid
+        ORDER BY b.name
+        """,
+        current_tenant,
+    )
+
+    allowed_values = {
+        "school_name": [str(r["name"]) for r in school_rows],
+        "branch_name": [str(r["name"]) for r in branch_rows],
+        "designation": [
+            "pre_school_teacher",
+            "junior_school_teacher",
+            "middle_school_teacher",
+            "senior_school_teacher",
+            "o_level_faculty",
+            "a_level_faculty",
+            "coordinator",
+            "academic_head",
+        ],
+        "employment_status": ["active", "on_leave", "resigned"],
+    }
+    sample_rows = [["", "John Doe", "john.teacher@school.com", "TCH-1001", "Main Branch", "senior_school_teacher", "2025-01-15", "active", "B.Ed", "4", "+921234567890", "+921234567891", "English, Urdu", ""]]
+    payload = build_template_bytes(TEACHER_IMPORT_HEADERS, allowed_values, sample_rows)
+    return StreamingResponse(
+        iter([payload]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=teacher_import_template.xlsx"},
+    )
+
+
+@router.post("/teachers/import")
+async def bulk_import_teachers(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_admin),
+):
+    await ensure_teacher_profiles_table()
+    rows, headers = await parse_upload_rows(file)
+    _require_columns(headers, ["school_name", "full_name"])
+    default_password_hash = hash_password(_default_import_password())
+    tenant_id = await _resolve_import_tenant_id(current_user)
+
+    success_count = 0
+    errors: List[str] = []
+
+    for idx, row in enumerate(rows, start=2):
+        try:
+            school = await _resolve_school_for_import(current_user, tenant_id, normalize_text(row.get("school_name")))
+
+            full_name = normalize_text(row.get("full_name"))
+            if not full_name:
+                raise HTTPException(status_code=400, detail="full_name is required")
+
+            employee_id = normalize_text(row.get("employee_id"))
+            email = normalize_text(row.get("email"))
+            if not email:
+                seed = employee_id or full_name.lower().replace(" ", "_")
+                email = f"{seed.lower()}@staff.school"
+
+            existing = await execute_one("SELECT id FROM users WHERE email = $1", email)
+            if existing:
+                raise HTTPException(status_code=400, detail=f"Email already exists: {email}")
+
+            branch_id = None
+            branch_name = normalize_text(row.get("branch_name"))
+            if branch_name:
+                branch = await execute_one(
+                    """
+                    SELECT id
+                    FROM branches
+                    WHERE LOWER(TRIM(REGEXP_REPLACE(REPLACE(name, CHR(160), ' '), '\s+', ' ', 'g')))
+                          = LOWER(TRIM(REGEXP_REPLACE(REPLACE($1, CHR(160), ' '), '\s+', ' ', 'g')))
+                      AND school_id = $2::uuid
+                    """,
+                    branch_name,
+                    school["id"],
+                )
+                if not branch:
+                    raise HTTPException(status_code=400, detail=f"Branch not found in school: {branch_name}")
+                branch_id = str(branch["id"])
+
+            user = await execute_one(
+                """
+                INSERT INTO users (email, full_name, role, tenant_id, school_id, branch_id, password_hash, must_change_password, is_active)
+                VALUES ($1, $2, 'teacher', $3::uuid, $4::uuid, $5::uuid, $6, true, true)
+                RETURNING id
+                """,
+                email,
+                full_name,
+                tenant_id,
+                school["id"],
+                branch_id,
+                default_password_hash,
+            )
+
+            doj = _parse_import_date(row.get("date_of_joining"))
+            experience_years = None
+            exp_text = normalize_text(row.get("experience_years"))
+            if exp_text:
+                experience_years = float(exp_text)
+
+            await execute_write(
+                """
+                INSERT INTO teacher_profiles (
+                    user_id, employee_id, school_id, branch_id, designation, date_of_joining,
+                    employment_status, qualifications, experience_years, contact,
+                    emergency_contact, languages, salary, updated_at
+                )
+                VALUES (
+                    $1::uuid, $2, $3::uuid, $4::uuid, $5, $6::date,
+                    COALESCE($7, 'active'), $8, $9, $10,
+                    $11, $12, $13, NOW()
+                )
+                ON CONFLICT (user_id) DO UPDATE SET
+                    employee_id = EXCLUDED.employee_id,
+                    school_id = EXCLUDED.school_id,
+                    branch_id = EXCLUDED.branch_id,
+                    designation = EXCLUDED.designation,
+                    date_of_joining = EXCLUDED.date_of_joining,
+                    employment_status = EXCLUDED.employment_status,
+                    qualifications = EXCLUDED.qualifications,
+                    experience_years = EXCLUDED.experience_years,
+                    contact = EXCLUDED.contact,
+                    emergency_contact = EXCLUDED.emergency_contact,
+                    languages = EXCLUDED.languages,
+                    salary = EXCLUDED.salary,
+                    updated_at = NOW()
+                """,
+                user["id"],
+                _none_if_blank(employee_id),
+                school["id"],
+                branch_id,
+                _none_if_blank(normalize_text(row.get("designation"))),
+                doj,
+                _none_if_blank(normalize_text(row.get("employment_status"))),
+                _none_if_blank(normalize_text(row.get("qualifications"))),
+                experience_years,
+                _none_if_blank(normalize_phone(row.get("contact"))),
+                _none_if_blank(normalize_phone(row.get("emergency_contact"))),
+                _none_if_blank(normalize_text(row.get("languages"))),
+                _none_if_blank(normalize_text(row.get("salary"))),
+            )
+            success_count += 1
+        except Exception as exc:
+            message = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            errors.append(f"Row {idx}: {message}")
+
+    return {
+        "success_count": success_count,
+        "error_count": len(errors),
+        "errors": errors[:50],
+        "default_password": "Configured via IMPORT_DEFAULT_PASSWORD",
     }
 
 
 @router.put("/users/{user_id}")
-async def update_user(user_id: str, user_data: UpdateUserRequest):
+async def update_user(user_id: str, user_data: UpdateUserRequest, current_user: dict = Depends(require_admin)):
     """Update user account and teacher profile details."""
     await ensure_teacher_profiles_table()
 
-    current_user = await execute_one("SELECT id, role FROM users WHERE id = $1", user_id)
-    if not current_user:
+    target_user = await execute_one("SELECT id, role FROM users WHERE id = $1", user_id)
+    if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    await _assert_user_scope(current_user=current_user, user_id=user_id)
+
+    if user_data.school_id:
+        await _assert_school_scope(current_user, user_data.school_id)
+    school_tenant_id = None
+    if user_data.school_id:
+        school_row = await execute_one(
+            "SELECT tenant_id FROM schools WHERE id = $1::uuid",
+            user_data.school_id,
+        )
+        if not school_row:
+            raise HTTPException(status_code=404, detail="School not found")
+        school_tenant_id = _normalize_uuid_text(school_row.get("tenant_id"))
+
+    if user_data.branch_id:
+        branch_row = await execute_one(
+            "SELECT school_id, tenant_id FROM branches WHERE id = $1::uuid",
+            user_data.branch_id,
+        )
+        if not branch_row:
+            raise HTTPException(status_code=404, detail="Branch not found")
+        await _assert_tenant_scope(current_user, _normalize_uuid_text(branch_row.get("tenant_id")))
+        if user_data.school_id and str(branch_row.get("school_id")) != str(user_data.school_id):
+            raise HTTPException(status_code=400, detail="Branch does not belong to selected school")
 
     user_updates = []
     user_params = []
@@ -654,6 +1113,18 @@ async def update_user(user_id: str, user_data: UpdateUserRequest):
     if user_data.email is not None:
         user_updates.append(f"email = ${p}")
         user_params.append(user_data.email)
+        p += 1
+    if user_data.school_id is not None:
+        user_updates.append(f"school_id = ${p}::uuid")
+        user_params.append(_none_if_blank(user_data.school_id))
+        p += 1
+        if school_tenant_id:
+            user_updates.append(f"tenant_id = ${p}::uuid")
+            user_params.append(school_tenant_id)
+            p += 1
+    if user_data.branch_id is not None:
+        user_updates.append(f"branch_id = ${p}::uuid")
+        user_params.append(_none_if_blank(user_data.branch_id))
         p += 1
 
     if user_updates:
@@ -667,7 +1138,7 @@ async def update_user(user_id: str, user_data: UpdateUserRequest):
             *user_params,
         )
 
-    if current_user["role"] == "teacher":
+    if target_user["role"] == "teacher":
         school_id = _none_if_blank(user_data.school_id)
         branch_id = _none_if_blank(user_data.branch_id)
         date_of_joining = _parse_date_or_none(user_data.date_of_joining)
@@ -759,8 +1230,12 @@ async def update_user(user_id: str, user_data: UpdateUserRequest):
 
 
 @router.put("/users/{user_id}/role")
-async def assign_role(user_id: str, role_data: AssignRoleRequest):
+async def assign_role(user_id: str, role_data: AssignRoleRequest, current_user: dict = Depends(require_admin)):
     """Assign or change user role"""
+    new_role = (role_data.new_role or "").strip().lower()
+    if not _is_super_admin(current_user) and new_role in {"admin", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only super admin can assign admin/super admin roles")
+    await _assert_user_scope(current_user, user_id)
     
     query = """
         UPDATE users
@@ -769,7 +1244,7 @@ async def assign_role(user_id: str, role_data: AssignRoleRequest):
         RETURNING id, email, full_name, role
     """
     
-    user = await execute_one(query, role_data.new_role, user_id)
+    user = await execute_one(query, new_role, user_id)
     
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -781,15 +1256,87 @@ async def assign_role(user_id: str, role_data: AssignRoleRequest):
 
 
 @router.delete("/users/{user_id}")
-async def deactivate_user(user_id: str):
+async def deactivate_user(user_id: str, current_user: dict = Depends(require_admin)):
     """Deactivate user account"""
+    if str(current_user.get("user_id")) == str(user_id):
+        raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
+    await _assert_user_scope(current_user, user_id)
     await execute_write("UPDATE users SET is_active = false, updated_at = NOW() WHERE id = $1", user_id)
     return {"message": "User deactivated successfully"}
 
 
+@router.delete("/users/{user_id}/hard")
+async def hard_delete_user(user_id: str, current_user: dict = Depends(require_admin)):
+    """Permanently delete a user and clear dependent references."""
+    if str(current_user.get("user_id")) == str(user_id):
+        raise HTTPException(status_code=400, detail="You cannot permanently delete your own account")
+    await _assert_user_scope(current_user, user_id)
+
+    user = await execute_one("SELECT id, email, role FROM users WHERE id = $1::uuid", user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    refs = await execute_query(
+        """
+        SELECT
+            tc.table_schema,
+            tc.table_name,
+            kcu.column_name,
+            c.is_nullable
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+            ON tc.constraint_name = kcu.constraint_name
+           AND tc.table_schema = kcu.table_schema
+        JOIN information_schema.constraint_column_usage ccu
+            ON ccu.constraint_name = tc.constraint_name
+           AND ccu.table_schema = tc.table_schema
+        JOIN information_schema.columns c
+            ON c.table_schema = kcu.table_schema
+           AND c.table_name = kcu.table_name
+           AND c.column_name = kcu.column_name
+        WHERE tc.constraint_type = 'FOREIGN KEY'
+          AND tc.table_schema = 'public'
+          AND ccu.table_schema = 'public'
+          AND ccu.table_name = 'users'
+          AND ccu.column_name = 'id'
+          AND tc.table_name <> 'users'
+        ORDER BY tc.table_name, kcu.column_name
+        """
+    )
+
+    try:
+        for ref in refs:
+            table_schema = _quote_ident(ref["table_schema"])
+            table_name = _quote_ident(ref["table_name"])
+            column_name = _quote_ident(ref["column_name"])
+
+            if ref.get("is_nullable") == "YES":
+                await execute_write(
+                    f"UPDATE {table_schema}.{table_name} SET {column_name} = NULL WHERE {column_name} = $1::uuid",
+                    user_id,
+                )
+            else:
+                await execute_write(
+                    f"DELETE FROM {table_schema}.{table_name} WHERE {column_name} = $1::uuid",
+                    user_id,
+                )
+    except Exception as e:
+        raise HTTPException(status_code=409, detail=f"Failed to clear user references: {str(e)}")
+
+    deleted = await execute_one(
+        "DELETE FROM users WHERE id = $1::uuid RETURNING id, email, role",
+        user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {"message": "User permanently deleted", "user": dict(deleted)}
+
+
 @router.post("/users/{user_id}/activate")
-async def activate_user(user_id: str):
+async def activate_user(user_id: str, current_user: dict = Depends(require_admin)):
     """Activate (re-enable) a user account."""
+    await _assert_user_scope(current_user, user_id)
     user = await execute_one("SELECT id FROM users WHERE id = $1", user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -798,8 +1345,9 @@ async def activate_user(user_id: str):
 
 
 @router.post("/users/{user_id}/set-password")
-async def admin_set_password(user_id: str, body: SetPasswordRequest):
+async def admin_set_password(user_id: str, body: SetPasswordRequest, current_user: dict = Depends(require_admin)):
     """Admin sets or resets the password for any user."""
+    await _assert_user_scope(current_user, user_id)
     if not body.password or len(body.password) < 4:
         raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
     user = await execute_one("SELECT id FROM users WHERE id = $1", user_id)
@@ -812,12 +1360,46 @@ async def admin_set_password(user_id: str, body: SetPasswordRequest):
     return {"message": "Password updated and account activated successfully"}
 
 
+@router.post("/users/{user_id}/temporary-password")
+async def admin_set_temporary_password(user_id: str, current_user: dict = Depends(require_admin)):
+    """Admin assigns a temporary password and forces reset at next login."""
+    await _assert_user_scope(current_user, user_id)
+    user = await execute_one("SELECT id, email, full_name FROM users WHERE id = $1", user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    temporary_password = _generate_temporary_password()
+    await execute_write(
+        """
+        UPDATE users
+        SET password_hash = $1,
+            must_change_password = true,
+            is_active = true,
+            updated_at = NOW()
+        WHERE id = $2
+        """,
+        hash_password(temporary_password),
+        user_id,
+    )
+
+    return {
+        "message": "Temporary password assigned successfully",
+        "user": {
+            "id": str(user["id"]),
+            "email": user.get("email"),
+            "full_name": user.get("full_name"),
+        },
+        "temporary_password": temporary_password,
+        "must_change_password": True,
+    }
+
+
 # ============================================
 # STUDENT MANAGEMENT (LEDGER STYLE)
 # ============================================
 
 @router.get("/students")
-async def get_students():
+async def get_students(current_user: dict = Depends(require_admin)):
     await ensure_student_data_structures()
     rows = await execute_query(
         """
@@ -843,11 +1425,15 @@ async def get_students():
         ORDER BY u.full_name
         """
     )
-    return [dict(r) for r in rows]
+    students = [dict(r) for r in rows]
+    if _is_super_admin(current_user):
+        return students
+    owned = await _get_owned_school_ids(current_user)
+    return [s for s in students if s.get("school_id") and str(s.get("school_id")) in owned]
 
 
 @router.post("/students")
-async def create_student(student_data: CreateStudentRequest):
+async def create_student(student_data: CreateStudentRequest, current_user: dict = Depends(require_admin)):
     await ensure_student_data_structures()
     if not re.fullmatch(r"\d{4}-\d{4}", student_data.academic_session or ""):
         raise HTTPException(status_code=400, detail="Academic session must be in YYYY-YYYY format.")
@@ -857,6 +1443,8 @@ async def create_student(student_data: CreateStudentRequest):
     if second_year != first_year + 1:
         raise HTTPException(status_code=400, detail="Academic session must be consecutive years, e.g. 2025-2026.")
 
+    await _assert_school_scope(current_user, student_data.school_id)
+
     branch = await execute_one(
         "SELECT id, school_id FROM branches WHERE id = $1",
         student_data.branch_id,
@@ -865,6 +1453,10 @@ async def create_student(student_data: CreateStudentRequest):
         raise HTTPException(status_code=400, detail="Selected branch not found.")
     if str(branch["school_id"]) != str(student_data.school_id):
         raise HTTPException(status_code=400, detail="Selected branch does not belong to selected school.")
+
+    school = await execute_one("SELECT tenant_id FROM schools WHERE id = $1::uuid", student_data.school_id)
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
 
     cls = await execute_one(
         "SELECT id, branch_id FROM classes WHERE id = $1",
@@ -889,12 +1481,14 @@ async def create_student(student_data: CreateStudentRequest):
     try:
         user = await execute_one(
             """
-            INSERT INTO users (email, full_name, role, password_hash, is_active)
-            VALUES ($1, $2, 'student', $3, true)
+            INSERT INTO users (email, full_name, role, tenant_id, school_id, password_hash, is_active)
+            VALUES ($1, $2, 'student', $3::uuid, $4::uuid, $5, true)
             RETURNING id, email, full_name, role
             """,
             email,
             student_data.full_name,
+            school.get("tenant_id"),
+            student_data.school_id,
             pwd_hash,
         )
     except Exception as e:
@@ -950,9 +1544,195 @@ async def create_student(student_data: CreateStudentRequest):
     }
 
 
-@router.get("/students/{student_id}")
-async def get_student_detail(student_id: str):
+@router.get("/students/import-template")
+async def download_student_import_template(current_user: dict = Depends(require_admin)):
+    current_tenant = await _resolve_import_tenant_id(current_user)
+    school_rows = await execute_query(
+        "SELECT name FROM schools WHERE tenant_id = $1::uuid ORDER BY name",
+        current_tenant,
+    )
+    branch_rows = await execute_query(
+        """
+        SELECT b.name
+        FROM branches b
+        JOIN schools s ON s.id = b.school_id
+        WHERE s.tenant_id = $1::uuid
+        ORDER BY b.name
+        """,
+        current_tenant,
+    )
+    class_rows = await execute_query(
+        """
+        SELECT c.name
+        FROM classes c
+        JOIN branches b ON b.id = c.branch_id
+        JOIN schools s ON s.id = b.school_id
+        WHERE s.tenant_id = $1::uuid
+        ORDER BY c.name
+        """,
+        current_tenant,
+    )
+
+    allowed_values = {
+        "school_name": [str(r["name"]) for r in school_rows],
+        "branch_name": [str(r["name"]) for r in branch_rows],
+        "class_name": [str(r["name"]) for r in class_rows],
+        "gender": ["male", "female", "other"],
+    }
+    sample_rows = [["", "Sara Khan", "", "STD-2201", "Main Branch", "Class 5 - A", "2025-2026", "A", "2014-02-20", "female", "", "Ali Khan", "+923001112233", "+923001112244", "", ""]]
+    payload = build_template_bytes(STUDENT_IMPORT_HEADERS, allowed_values, sample_rows)
+    return StreamingResponse(
+        iter([payload]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=student_import_template.xlsx"},
+    )
+
+
+@router.post("/students/import")
+async def bulk_import_students(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_admin),
+):
     await ensure_student_data_structures()
+    rows, headers = await parse_upload_rows(file)
+    _require_columns(
+        headers,
+        [
+            "school_name",
+            "full_name",
+            "branch_name",
+            "class_name",
+            "academic_session",
+        ],
+    )
+    default_password_hash = hash_password(_default_import_password())
+    tenant_id = await _resolve_import_tenant_id(current_user)
+
+    success_count = 0
+    errors: List[str] = []
+
+    for idx, row in enumerate(rows, start=2):
+        try:
+            school = await _resolve_school_for_import(current_user, tenant_id, normalize_text(row.get("school_name")))
+
+            full_name = normalize_text(row.get("full_name"))
+            if not full_name:
+                raise HTTPException(status_code=400, detail="full_name is required")
+
+            branch_name = normalize_text(row.get("branch_name"))
+            class_name = normalize_text(row.get("class_name"))
+            academic_session = normalize_text(row.get("academic_session"))
+            _parse_academic_session(academic_session)
+
+            branch = await execute_one(
+                """
+                SELECT id
+                FROM branches
+                WHERE LOWER(TRIM(REGEXP_REPLACE(REPLACE(name, CHR(160), ' '), '\s+', ' ', 'g')))
+                      = LOWER(TRIM(REGEXP_REPLACE(REPLACE($1, CHR(160), ' '), '\s+', ' ', 'g')))
+                  AND school_id = $2::uuid
+                """,
+                branch_name,
+                school["id"],
+            )
+            if not branch:
+                raise HTTPException(status_code=400, detail=f"Branch not found in school: {branch_name}")
+
+            cls = await execute_one(
+                """
+                SELECT id, branch_id
+                FROM classes
+                WHERE LOWER(TRIM(REGEXP_REPLACE(REPLACE(name, CHR(160), ' '), '\s+', ' ', 'g')))
+                      = LOWER(TRIM(REGEXP_REPLACE(REPLACE($1, CHR(160), ' '), '\s+', ' ', 'g')))
+                  AND branch_id = $2::uuid
+                LIMIT 1
+                """,
+                class_name,
+                branch["id"],
+            )
+            if not cls:
+                raise HTTPException(status_code=400, detail=f"Class not found in branch: {class_name}")
+
+            student_roll_no = normalize_text(row.get("student_roll_no"))
+            email = normalize_text(row.get("email"))
+            if not email:
+                seed = student_roll_no or full_name.lower().replace(" ", "_")
+                email = f"{seed.lower()}@student.school"
+
+            existing = await execute_one("SELECT id FROM users WHERE email = $1", email)
+            if existing:
+                raise HTTPException(status_code=400, detail=f"Email already exists: {email}")
+
+            user = await execute_one(
+                """
+                INSERT INTO users (email, full_name, role, tenant_id, school_id, password_hash, must_change_password, is_active)
+                VALUES ($1, $2, 'student', $3::uuid, $4::uuid, $5, true, true)
+                RETURNING id
+                """,
+                email,
+                full_name,
+                tenant_id,
+                school["id"],
+                default_password_hash,
+            )
+
+            await execute_write(
+                """
+                INSERT INTO student_profiles (
+                    user_id, school_id, branch_id, student_roll_no, date_of_birth, gender, address,
+                    guardian_name, primary_contact, emergency_contact, blood_group, medical_notes
+                )
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::date, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    school_id = EXCLUDED.school_id,
+                    branch_id = EXCLUDED.branch_id,
+                    student_roll_no = EXCLUDED.student_roll_no,
+                    date_of_birth = EXCLUDED.date_of_birth,
+                    gender = EXCLUDED.gender,
+                    address = EXCLUDED.address,
+                    guardian_name = EXCLUDED.guardian_name,
+                    primary_contact = EXCLUDED.primary_contact,
+                    emergency_contact = EXCLUDED.emergency_contact,
+                    blood_group = EXCLUDED.blood_group,
+                    medical_notes = EXCLUDED.medical_notes,
+                    updated_at = NOW()
+                """,
+                user["id"],
+                school["id"],
+                branch["id"],
+                _none_if_blank(student_roll_no),
+                _parse_import_date(row.get("date_of_birth")),
+                _none_if_blank(normalize_text(row.get("gender"))),
+                _none_if_blank(normalize_text(row.get("address"))),
+                _none_if_blank(normalize_text(row.get("guardian_name"))),
+                _none_if_blank(normalize_phone(row.get("primary_contact"))),
+                _none_if_blank(normalize_phone(row.get("emergency_contact"))),
+                _none_if_blank(normalize_text(row.get("blood_group"))),
+                _none_if_blank(normalize_text(row.get("medical_notes"))),
+            )
+
+            await execute_write(
+                "UPDATE enrollments SET is_active = false WHERE student_id = $1::uuid AND is_active = true",
+                user["id"],
+            )
+            await _activate_enrollment(str(user["id"]), str(cls["id"]), academic_session)
+            success_count += 1
+        except Exception as exc:
+            message = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            errors.append(f"Row {idx}: {message}")
+
+    return {
+        "success_count": success_count,
+        "error_count": len(errors),
+        "errors": errors[:50],
+        "default_password": "Configured via IMPORT_DEFAULT_PASSWORD",
+    }
+
+
+@router.get("/students/{student_id}")
+async def get_student_detail(student_id: str, current_user: dict = Depends(require_admin)):
+    await ensure_student_data_structures()
+    await _assert_user_scope(current_user, student_id)
     profile = await execute_one(
         """
         SELECT
@@ -1004,8 +1784,9 @@ class UpdateStudentRequest(BaseModel):
 
 
 @router.patch("/students/{student_id}")
-async def update_student(student_id: str, body: UpdateStudentRequest):
+async def update_student(student_id: str, body: UpdateStudentRequest, current_user: dict = Depends(require_admin)):
     await ensure_student_data_structures()
+    await _assert_user_scope(current_user, student_id)
     user = await execute_one(
         "SELECT id, email FROM users WHERE id = $1 AND role = 'student'", student_id
     )
@@ -1061,8 +1842,9 @@ async def update_student(student_id: str, body: UpdateStudentRequest):
 
 
 @router.post("/students/{student_id}/promote")
-async def promote_student(student_id: str, req: StudentLifecycleRequest):
+async def promote_student(student_id: str, req: StudentLifecycleRequest, current_user: dict = Depends(require_admin)):
     await ensure_student_data_structures()
+    await _assert_user_scope(current_user, student_id)
     _, _, normalized_session = _parse_academic_session(req.academic_session)
     active = await _get_active_enrollment(student_id)
     if not active:
@@ -1098,8 +1880,9 @@ async def promote_student(student_id: str, req: StudentLifecycleRequest):
 
 
 @router.post("/students/{student_id}/repeat")
-async def repeat_student(student_id: str, req: StudentLifecycleRequest):
+async def repeat_student(student_id: str, req: StudentLifecycleRequest, current_user: dict = Depends(require_admin)):
     await ensure_student_data_structures()
+    await _assert_user_scope(current_user, student_id)
     _, _, normalized_session = _parse_academic_session(req.academic_session)
     active = await _get_active_enrollment(student_id)
     if not active:
@@ -1114,8 +1897,9 @@ async def repeat_student(student_id: str, req: StudentLifecycleRequest):
 
 
 @router.post("/students/{student_id}/change-section")
-async def change_student_section(student_id: str, req: ChangeSectionRequest):
+async def change_student_section(student_id: str, req: ChangeSectionRequest, current_user: dict = Depends(require_admin)):
     await ensure_student_data_structures()
+    await _assert_user_scope(current_user, student_id)
     _, _, normalized_session = _parse_academic_session(req.academic_session)
     active = await _get_active_enrollment(student_id)
     if not active:
@@ -1144,8 +1928,9 @@ async def change_student_section(student_id: str, req: ChangeSectionRequest):
 
 
 @router.get("/students/{student_id}/section-options")
-async def get_section_change_options(student_id: str):
+async def get_section_change_options(student_id: str, current_user: dict = Depends(require_admin)):
     await ensure_student_data_structures()
+    await _assert_user_scope(current_user, student_id)
     active = await _get_active_enrollment(student_id)
     if not active:
         raise HTTPException(status_code=400, detail="No active enrollment found")
@@ -1166,8 +1951,9 @@ async def get_section_change_options(student_id: str):
 
 
 @router.delete("/students/{student_id}")
-async def archive_student(student_id: str):
+async def archive_student(student_id: str, current_user: dict = Depends(require_admin)):
     await ensure_student_data_structures()
+    await _assert_user_scope(current_user, student_id)
     await execute_write("UPDATE users SET is_active = false WHERE id = $1 AND role = 'student'", student_id)
     await execute_write(
         "UPDATE enrollments SET is_active = false, status = 'left', completed_at = NOW() WHERE student_id = $1 AND is_active = true",
@@ -1177,20 +1963,38 @@ async def archive_student(student_id: str):
 
 
 @router.post("/students/{student_id}/set-current-enrollment")
-async def set_current_enrollment(student_id: str, req: SetCurrentEnrollmentRequest):
+async def set_current_enrollment(student_id: str, req: SetCurrentEnrollmentRequest, current_user: dict = Depends(require_admin)):
     await ensure_student_data_structures()
+    await _assert_user_scope(current_user, student_id)
     _, _, normalized_session = _parse_academic_session(req.academic_session)
 
     student = await execute_one("SELECT id FROM users WHERE id = $1 AND role = 'student'", student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
+    student_profile = await execute_one(
+        "SELECT school_id FROM student_profiles WHERE user_id = $1::uuid",
+        student_id,
+    )
+    if not student_profile or not student_profile.get("school_id"):
+        raise HTTPException(status_code=400, detail="Student school profile not found")
+
     target_class = await execute_one(
-        "SELECT id FROM classes WHERE id = $1",
+        """
+        SELECT c.id, b.school_id
+        FROM classes c
+        JOIN branches b ON b.id = c.branch_id
+        WHERE c.id = $1::uuid
+        """,
         req.class_id,
     )
     if not target_class:
         raise HTTPException(status_code=404, detail="Class not found")
+
+    if str(target_class["school_id"]) != str(student_profile["school_id"]):
+        raise HTTPException(status_code=400, detail="Student and class must belong to the same school")
+
+    await _assert_school_scope(current_user, str(target_class["school_id"]))
 
     await execute_write(
         """
@@ -1210,46 +2014,224 @@ async def set_current_enrollment(student_id: str, req: SetCurrentEnrollmentReque
 # SCHOOL & BRANCH MANAGEMENT
 # ============================================
 
+@router.get("/tenants", dependencies=[Depends(require_super_admin)])
+async def list_tenants():
+    rows = await execute_query(
+        """
+        SELECT
+            t.id,
+            t.name,
+            t.is_active,
+            t.created_at,
+            COUNT(DISTINCT s.id) AS school_count,
+            COUNT(DISTINCT u.id) FILTER (WHERE u.role = 'admin') AS admin_count
+        FROM tenants t
+        LEFT JOIN schools s ON s.tenant_id = t.id
+        LEFT JOIN users u ON u.tenant_id = t.id
+        WHERE lower(t.name) <> lower('Default Tenant')
+        GROUP BY t.id
+        ORDER BY t.created_at DESC
+        """
+    )
+    return [dict(r) for r in rows]
+
+
+@router.post("/tenants", dependencies=[Depends(require_super_admin)])
+async def create_tenant(payload: CreateTenantRequest, current_user: dict = Depends(require_super_admin)):
+    existing = await execute_one("SELECT id FROM tenants WHERE lower(name) = lower($1)", payload.name)
+    if existing:
+        raise HTTPException(status_code=400, detail="Tenant name already exists")
+
+    tenant = await execute_one(
+        """
+        INSERT INTO tenants (name, is_active, created_by_super_admin_id)
+        VALUES ($1, true, $2::uuid)
+        RETURNING id, name, is_active, created_at
+        """,
+        payload.name,
+        current_user.get("user_id"),
+    )
+
+    temp_password = _generate_temporary_password()
+    try:
+        admin_user = await execute_one(
+            """
+            INSERT INTO users (email, full_name, role, tenant_id, password_hash, must_change_password, is_active)
+            VALUES ($1, $2, 'admin', $3::uuid, $4, true, true)
+            RETURNING id, email, full_name, role, tenant_id, must_change_password
+            """,
+            payload.admin_email,
+            payload.admin_full_name,
+            str(tenant["id"]),
+            hash_password(temp_password),
+        )
+    except Exception as e:
+        await execute_write("DELETE FROM tenants WHERE id = $1::uuid", str(tenant["id"]))
+        if "users_email_key" in str(e):
+            raise HTTPException(status_code=400, detail="Admin email already exists")
+        raise
+
+    return {
+        "message": "Tenant and default admin created successfully",
+        "tenant": dict(tenant),
+        "default_admin": {
+            **dict(admin_user),
+            "temporary_password": temp_password,
+        },
+    }
+
+
+@router.patch("/tenants/{tenant_id}", dependencies=[Depends(require_super_admin)])
+async def update_tenant(tenant_id: str, payload: UpdateTenantRequest):
+    existing = await execute_one(
+        "SELECT id, is_active FROM tenants WHERE id = $1::uuid",
+        tenant_id,
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    tenant = await execute_one(
+        """
+        UPDATE tenants
+        SET
+            name = COALESCE($1, name),
+            is_active = COALESCE($2, is_active),
+            updated_at = NOW()
+        WHERE id = $3::uuid
+        RETURNING id, name, is_active, created_at, updated_at
+        """,
+        payload.name,
+        payload.is_active,
+        tenant_id,
+    )
+
+    affected_users = 0
+    if payload.is_active is False and bool(existing.get("is_active", True)):
+        users_count = await execute_one(
+            "SELECT COUNT(*)::int AS total FROM users WHERE tenant_id = $1::uuid AND is_active = true",
+            tenant_id,
+        )
+        affected_users = int((users_count or {}).get("total") or 0)
+        await execute_write(
+            "UPDATE users SET is_active = false, updated_at = NOW() WHERE tenant_id = $1::uuid",
+            tenant_id,
+        )
+
+    return {
+        "message": "Tenant updated successfully",
+        "tenant": dict(tenant),
+        "affected_users": affected_users,
+    }
+
+
+@router.delete("/tenants/{tenant_id}", dependencies=[Depends(require_super_admin)])
+async def delete_tenant(tenant_id: str):
+    tenant = await execute_one(
+        "SELECT id, name FROM tenants WHERE id = $1::uuid",
+        tenant_id,
+    )
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    users_count = await execute_one(
+        "SELECT COUNT(*)::int AS total FROM users WHERE tenant_id = $1::uuid",
+        tenant_id,
+    )
+    affected_users = int((users_count or {}).get("total") or 0)
+
+    await execute_write(
+        "UPDATE users SET is_active = false, updated_at = NOW() WHERE tenant_id = $1::uuid",
+        tenant_id,
+    )
+    await execute_write("DELETE FROM tenants WHERE id = $1::uuid", tenant_id)
+
+    return {
+        "message": "Tenant deleted successfully",
+        "deleted_tenant_id": tenant_id,
+        "affected_users": affected_users,
+    }
+
 @router.get("/schools")
-async def get_all_schools():
+async def get_all_schools(current_user: dict = Depends(require_admin)):
     """Get all schools with branch and class counts"""
+    where_clause = ""
+    params: list = []
+    if not _is_super_admin(current_user):
+        tenant_id = _normalize_uuid_text(current_user.get("tenant_id"))
+        if not tenant_id:
+            return []
+        where_clause = "WHERE s.tenant_id = $1::uuid"
+        params.append(tenant_id)
+
     query = """
         SELECT
-            s.id, s.name, s.address, s.created_at,
+            s.id, s.tenant_id, s.name, s.address, s.created_at,
             COUNT(DISTINCT b.id) AS branch_count,
             COUNT(DISTINCT c.id) AS class_count
         FROM schools s
         LEFT JOIN branches b ON b.school_id = s.id
         LEFT JOIN classes c ON c.branch_id = b.id
+        {where_clause}
         GROUP BY s.id
         ORDER BY s.name
-    """
-    schools = await execute_query(query)
+    """.format(where_clause=where_clause)
+    schools = await execute_query(query, *params)
     return [dict(s) for s in schools]
 
 
 @router.get("/schools/all-data")
-async def get_all_school_data():
+async def get_all_school_data(current_user: dict = Depends(require_admin)):
     """Get all schools, branches, and classes at once for global search"""
+    tenant_id = None if _is_super_admin(current_user) else _normalize_uuid_text(current_user.get("tenant_id"))
+    if not _is_super_admin(current_user) and not tenant_id:
+        return {"schools": [], "branches": [], "classes": []}
+
+    school_where = ""
+    branch_where = ""
+    class_where = ""
+    school_params: list = []
+    branch_params: list = []
+    class_params: list = []
+    if tenant_id:
+        school_where = "WHERE s.tenant_id = $1::uuid"
+        branch_where = "WHERE s.tenant_id = $1::uuid"
+        class_where = "WHERE s.tenant_id = $1::uuid"
+        school_params = [tenant_id]
+        branch_params = [tenant_id]
+        class_params = [tenant_id]
+
     schools = await execute_query("""
-        SELECT s.id, s.name, s.address, s.created_at,
+        SELECT s.id, s.tenant_id, s.name, s.address, s.created_at,
                mgr.full_name AS manager_name, mgr.email AS manager_email
         FROM schools s
         LEFT JOIN users mgr ON mgr.school_id = s.id AND mgr.role = 'manager'
+        {where_clause}
         ORDER BY s.name
-    """)
-    branches = await execute_query("SELECT id, school_id, name, city, address, created_at FROM branches ORDER BY name")
+    """.format(where_clause=school_where), *school_params)
+    branches = await execute_query(
+        """
+        SELECT b.id, b.school_id, b.name, b.city, b.address, b.created_at
+        FROM branches b
+        JOIN schools s ON s.id = b.school_id
+        {where_clause}
+        ORDER BY b.name
+        """.format(where_clause=branch_where),
+        *branch_params,
+    )
     classes = await execute_query("""
         SELECT 
             c.id, c.branch_id, c.name, c.grade_level, c.section, c.teacher_id, 
             COUNT(DISTINCT e.student_id) AS student_count, c.created_at,
             u.full_name AS teacher_name
         FROM classes c
+        JOIN branches b ON b.id = c.branch_id
+        JOIN schools s ON s.id = b.school_id
         LEFT JOIN enrollments e ON e.class_id = c.id AND e.is_active = true
         LEFT JOIN users u ON u.id = c.teacher_id
+        {where_clause}
         GROUP BY c.id, u.full_name
         ORDER BY c.grade_level, c.section, c.name
-    """)
+    """.format(where_clause=class_where), *class_params)
     
     return {
         "schools": [dict(s) for s in schools],
@@ -1259,11 +2241,29 @@ async def get_all_school_data():
 
 
 @router.post("/schools")
-async def create_school(school_data: CreateSchoolRequest):
+async def create_school(school_data: CreateSchoolRequest, current_user: dict = Depends(require_admin)):
     """Create new school, optionally with a linked manager account"""
+    if _is_super_admin(current_user):
+        owner_admin_id = await _validate_admin_owner_id(school_data.admin_id, school_data.tenant_id)
+        effective_tenant_id = _none_if_blank(school_data.tenant_id)
+        if not effective_tenant_id and owner_admin_id:
+            effective_tenant_id = await _get_user_tenant_id(owner_admin_id)
+        if not effective_tenant_id:
+            raise HTTPException(status_code=400, detail="tenant_id is required to create a school")
+    else:
+        if school_data.admin_id:
+            raise HTTPException(status_code=403, detail="Only super admin can assign school owner")
+        effective_tenant_id = _normalize_uuid_text(current_user.get("tenant_id"))
+        if not effective_tenant_id:
+            raise HTTPException(status_code=403, detail="Admin tenant context missing")
+        if school_data.tenant_id and _normalize_uuid_text(school_data.tenant_id) != effective_tenant_id:
+            raise HTTPException(status_code=403, detail="Not allowed for this tenant")
+        owner_admin_id = _normalize_uuid_text(current_user.get("user_id"))
+
+    await _assert_tenant_exists(effective_tenant_id)
     school = await execute_one(
-        "INSERT INTO schools (name, address) VALUES ($1, $2) RETURNING id, name, address",
-        school_data.name, school_data.address,
+        "INSERT INTO schools (tenant_id, name, address, admin_id) VALUES ($1::uuid, $2, $3, $4::uuid) RETURNING id, tenant_id, name, address, admin_id",
+        effective_tenant_id, school_data.name, school_data.address, owner_admin_id,
     )
     result = {"message": "School created successfully", "school": dict(school)}
 
@@ -1273,17 +2273,17 @@ async def create_school(school_data: CreateSchoolRequest):
         if existing:
             raise HTTPException(status_code=400, detail=f"Email {m.email} is already registered")
         manager_user = await execute_one(
-            """INSERT INTO users (id, email, full_name, password_hash, role, school_id, is_active)
-               VALUES ($1, $2, $3, $4, 'manager', $5, true)
-               RETURNING id, email, full_name, role, school_id""",
-            str(uuid_lib.uuid4()), m.email, m.full_name, hash_password(m.password), str(school["id"]),
+                """INSERT INTO users (id, email, full_name, password_hash, role, tenant_id, school_id, is_active)
+                    VALUES ($1, $2, $3, $4, 'manager', $5::uuid, $6::uuid, true)
+                    RETURNING id, email, full_name, role, tenant_id, school_id""",
+                str(uuid_lib.uuid4()), m.email, m.full_name, hash_password(m.password), effective_tenant_id, str(school["id"]),
         )
         result["manager"] = {**dict(manager_user), "plain_password": m.password}
 
     return result
 
 
-@router.get("/schools/{school_id}/managers")
+@router.get("/schools/{school_id}/managers", dependencies=[Depends(require_super_admin)])
 async def get_school_managers(school_id: str):
     """List all manager accounts for a school"""
     managers = await execute_query(
@@ -1294,10 +2294,10 @@ async def get_school_managers(school_id: str):
     return [dict(m) for m in managers]
 
 
-@router.post("/schools/{school_id}/manager")
+@router.post("/schools/{school_id}/manager", dependencies=[Depends(require_super_admin)])
 async def create_school_manager(school_id: str, manager_data: ManagerCreateRequest):
     """Create a new manager account for a school"""
-    school = await execute_one("SELECT id FROM schools WHERE id = $1", school_id)
+    school = await execute_one("SELECT id, tenant_id FROM schools WHERE id = $1", school_id)
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
 
@@ -1306,43 +2306,119 @@ async def create_school_manager(school_id: str, manager_data: ManagerCreateReque
         raise HTTPException(status_code=400, detail=f"Email {manager_data.email} is already registered")
 
     manager_user = await execute_one(
-        """INSERT INTO users (id, email, full_name, password_hash, role, school_id, is_active)
-           VALUES ($1, $2, $3, $4, 'manager', $5, true)
-           RETURNING id, email, full_name, role, school_id""",
-        str(uuid_lib.uuid4()), manager_data.email, manager_data.full_name, hash_password(manager_data.password), school_id,
+          """INSERT INTO users (id, email, full_name, password_hash, role, tenant_id, school_id, is_active)
+              VALUES ($1, $2, $3, $4, 'manager', $5::uuid, $6::uuid, true)
+              RETURNING id, email, full_name, role, tenant_id, school_id""",
+          str(uuid_lib.uuid4()), manager_data.email, manager_data.full_name, hash_password(manager_data.password), school["tenant_id"], school_id,
     )
     return {**dict(manager_user), "plain_password": manager_data.password}
 
 
-@router.put("/schools/{school_id}")
+@router.put("/schools/{school_id}", dependencies=[Depends(require_super_admin)])
 async def update_school(school_id: str, school_data: UpdateSchoolRequest):
     """Update a school"""
+    existing = await execute_one("SELECT id, tenant_id FROM schools WHERE id = $1::uuid", school_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    owner_admin_id = await _validate_admin_owner_id(
+        school_data.admin_id,
+        str(existing["tenant_id"]) if existing.get("tenant_id") else None,
+    )
     query = """
         UPDATE schools 
         SET name = COALESCE($1, name), 
-            address = COALESCE($2, address)
-        WHERE id = $3
-        RETURNING id, name, address
+            address = COALESCE($2, address),
+            admin_id = COALESCE($3::uuid, admin_id)
+        WHERE id = $4
+        RETURNING id, tenant_id, name, address, admin_id
     """
-    school = await execute_one(query, school_data.name, school_data.address, school_id)
-    if not school:
-        raise HTTPException(status_code=404, detail="School not found")
+    school = await execute_one(query, school_data.name, school_data.address, owner_admin_id, school_id)
     return {"message": "School updated successfully", "school": dict(school)}
 
 
-@router.delete("/schools/{school_id}")
+@router.post("/schools/{school_id}/assign-admin", dependencies=[Depends(require_super_admin)])
+async def assign_school_admin(school_id: str, payload: AssignSchoolAdminRequest):
+    """Assign an admin owner to a school."""
+    existing = await execute_one("SELECT id, tenant_id FROM schools WHERE id = $1::uuid", school_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    owner_admin_id = await _validate_admin_owner_id(
+        payload.admin_user_id,
+        str(existing["tenant_id"]) if existing.get("tenant_id") else None,
+    )
+    school = await execute_one(
+        """
+        UPDATE schools
+        SET admin_id = $1::uuid, updated_at = NOW()
+        WHERE id = $2::uuid
+        RETURNING id, tenant_id, name, address, admin_id
+        """,
+        owner_admin_id,
+        school_id,
+    )
+    return {"message": "School admin assigned successfully", "school": dict(school)}
+
+
+@router.delete("/schools/{school_id}", dependencies=[Depends(require_super_admin)])
 async def delete_school(school_id: str):
     """Delete a school"""
-    query = "DELETE FROM schools WHERE id = $1 RETURNING id"
-    deleted = await execute_one(query, school_id)
+    school = await execute_one("SELECT id FROM schools WHERE id = $1::uuid", school_id)
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    # Some runtime schemas use NO ACTION FK rules for school_id (e.g. users/audit logs).
+    # Clear references first so school deletion succeeds consistently.
+    try:
+        await execute_write(
+            "UPDATE users SET school_id = NULL, updated_at = NOW() WHERE school_id = $1::uuid",
+            school_id,
+        )
+    except Exception:
+        pass
+
+    try:
+        await execute_write(
+            "UPDATE teacher_profiles SET school_id = NULL, updated_at = NOW() WHERE school_id = $1::uuid",
+            school_id,
+        )
+    except Exception:
+        pass
+
+    try:
+        await execute_write(
+            "UPDATE student_profiles SET school_id = NULL, updated_at = NOW() WHERE school_id = $1::uuid",
+            school_id,
+        )
+    except Exception:
+        pass
+
+    # Best effort for optional audit/chat tables that may exist across environments.
+    for table_name in ("audit_logs", "chat_announcements"):
+        try:
+            await execute_write(
+                f"UPDATE {table_name} SET school_id = NULL WHERE school_id = $1::uuid",
+                school_id,
+            )
+        except Exception:
+            pass
+
+    query = "DELETE FROM schools WHERE id = $1::uuid RETURNING id"
+    try:
+        deleted = await execute_one(query, school_id)
+    except Exception as e:
+        raise HTTPException(status_code=409, detail=f"School cannot be deleted due to related records: {str(e)}")
+
     if not deleted:
         raise HTTPException(status_code=404, detail="School not found")
     return {"message": "School deleted successfully"}
 
 
 @router.get("/schools/{school_id}/branches")
-async def get_school_branches(school_id: str):
+async def get_school_branches(school_id: str, current_user: dict = Depends(require_admin)):
     """Get all branches for a school with class and student counts"""
+    await _assert_school_scope(current_user, school_id)
     query = """
         SELECT
             b.id, b.school_id, b.name, b.city, b.address, b.created_at,
@@ -1360,15 +2436,21 @@ async def get_school_branches(school_id: str):
 
 
 @router.post("/branches")
-async def create_branch(branch_data: CreateBranchRequest):
+async def create_branch(branch_data: CreateBranchRequest, current_user: dict = Depends(require_admin)):
     """Create new branch"""
+    await _assert_school_scope(current_user, branch_data.school_id)
+    school = await execute_one("SELECT id, tenant_id FROM schools WHERE id = $1::uuid", branch_data.school_id)
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
     query = """
-        INSERT INTO branches (school_id, name, city, address)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, school_id, name, city, address
+        INSERT INTO branches (tenant_id, school_id, name, city, address)
+        VALUES ($1::uuid, $2::uuid, $3, $4, $5)
+        RETURNING id, tenant_id, school_id, name, city, address
     """
     branch = await execute_one(
         query,
+        school["tenant_id"],
         branch_data.school_id,
         branch_data.name,
         branch_data.city,
@@ -1378,8 +2460,16 @@ async def create_branch(branch_data: CreateBranchRequest):
 
 
 @router.put("/branches/{branch_id}")
-async def update_branch(branch_id: str, branch_data: UpdateBranchRequest):
+async def update_branch(branch_id: str, branch_data: UpdateBranchRequest, current_user: dict = Depends(require_admin)):
     """Update a branch"""
+    branch_scope = await execute_one(
+        "SELECT id, tenant_id FROM branches WHERE id = $1::uuid",
+        branch_id,
+    )
+    if not branch_scope:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    await _assert_tenant_scope(current_user, _normalize_uuid_text(branch_scope.get("tenant_id")))
+
     query = """
         UPDATE branches 
         SET name = COALESCE($1, name), 
@@ -1395,8 +2485,16 @@ async def update_branch(branch_id: str, branch_data: UpdateBranchRequest):
 
 
 @router.delete("/branches/{branch_id}")
-async def delete_branch(branch_id: str):
+async def delete_branch(branch_id: str, current_user: dict = Depends(require_admin)):
     """Delete a branch"""
+    branch_scope = await execute_one(
+        "SELECT id, tenant_id FROM branches WHERE id = $1::uuid",
+        branch_id,
+    )
+    if not branch_scope:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    await _assert_tenant_scope(current_user, _normalize_uuid_text(branch_scope.get("tenant_id")))
+
     query = "DELETE FROM branches WHERE id = $1 RETURNING id"
     deleted = await execute_one(query, branch_id)
     if not deleted:
@@ -1404,7 +2502,7 @@ async def delete_branch(branch_id: str):
     return {"message": "Branch deleted successfully"}
 
 
-@router.get("/classes")
+@router.get("/classes", dependencies=[Depends(require_super_admin)])
 async def get_all_classes():
     """Get all classes across all branches"""
     query = """
@@ -1427,7 +2525,7 @@ async def get_all_classes():
     return {"data": [dict(c) for c in classes]}
 
 
-@router.get("/branches/{branch_id}/classes")
+@router.get("/branches/{branch_id}/classes", dependencies=[Depends(require_super_admin)])
 async def get_branch_classes(branch_id: str):
     """Get all classes for a branch with section and student count"""
     query = """
@@ -1447,16 +2545,21 @@ async def get_branch_classes(branch_id: str):
     return [dict(c) for c in classes]
 
 
-@router.post("/classes")
+@router.post("/classes", dependencies=[Depends(require_super_admin)])
 async def create_class(class_data: CreateClassRequest):
     """Create a new class under a branch"""
+    branch = await execute_one("SELECT id, tenant_id FROM branches WHERE id = $1::uuid", class_data.branch_id)
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
     query = """
-        INSERT INTO classes (branch_id, name, grade_level, section)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, branch_id, name, grade_level, section
+        INSERT INTO classes (tenant_id, branch_id, name, grade_level, section)
+        VALUES ($1::uuid, $2::uuid, $3, $4, $5)
+        RETURNING id, tenant_id, branch_id, name, grade_level, section
     """
     cls = await execute_one(
         query,
+        branch["tenant_id"],
         class_data.branch_id,
         class_data.name,
         class_data.grade_level,
@@ -1465,7 +2568,7 @@ async def create_class(class_data: CreateClassRequest):
     return {"message": "Class created successfully", "class": dict(cls)}
 
 
-@router.put("/classes/{class_id}")
+@router.put("/classes/{class_id}", dependencies=[Depends(require_super_admin)])
 async def update_class(class_id: str, class_data: UpdateClassRequest):
     """Update a class"""
     query = """
@@ -1483,7 +2586,7 @@ async def update_class(class_id: str, class_data: UpdateClassRequest):
     return {"message": "Class updated successfully", "class": dict(cls)}
 
 
-@router.delete("/classes/{class_id}")
+@router.delete("/classes/{class_id}", dependencies=[Depends(require_super_admin)])
 async def delete_class(class_id: str):
     """Delete a class"""
     query = "DELETE FROM classes WHERE id = $1 RETURNING id"
@@ -1824,7 +2927,7 @@ async def generate_topic_content_ai(topic_id: str):
 # AI CURRICULUM MANAGEMENT
 # ============================================
 
-@router.post("/curriculum/parse-metadata")
+@router.post("/curriculum/parse-metadata", dependencies=[Depends(require_super_admin)])
 async def parse_book_metadata(file: UploadFile = File(...)):
     """Extract only title/author/board/grade/subject from a book — fast, no full parse."""
     from app.utils.claude_ai import extract_book_metadata
@@ -1841,7 +2944,7 @@ async def parse_book_metadata(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Metadata extraction failed: {str(e)}")
 
 
-@router.post("/curriculum/parse-book")
+@router.post("/curriculum/parse-book", dependencies=[Depends(require_super_admin)])
 async def parse_curriculum_book(file: UploadFile = File(...)):
     """Upload a curriculum book (PDF or text) and parse it with Claude AI."""
     from app.utils.claude_ai import parse_curriculum_document, _parse_curriculum_heuristic
@@ -1888,7 +2991,7 @@ async def parse_curriculum_book(file: UploadFile = File(...)):
         return _local_fallback_payload()
 
 
-@router.post("/curriculum/save-parsed")
+@router.post("/curriculum/save-parsed", dependencies=[Depends(require_super_admin)])
 async def save_parsed_curriculum(data: SaveParsedCurriculumRequest):
     """Save AI-parsed curriculum structure (subjects + chapters + topics) to the database."""
     created = {"subjects": 0, "topics": 0}
@@ -2395,7 +3498,7 @@ class BulkImportRequest(BaseModel):
 
 
 @router.post("/import/bulk")
-async def bulk_import_data(import_data: BulkImportRequest):
+async def bulk_import_data(import_data: BulkImportRequest, current_user: dict = Depends(require_admin)):
     """
     Bulk import schools, branches, classes, students, subjects, and topics
     """
@@ -2412,24 +3515,29 @@ async def bulk_import_data(import_data: BulkImportRequest):
     # Import schools
     if import_data.schools:
         for school in import_data.schools:
+            tenant_id = school.get("tenant_id") or current_user.get("tenant_id")
             query = """
-                INSERT INTO schools (name, address)
-                VALUES ($1, $2)
+                INSERT INTO schools (tenant_id, name, address)
+                VALUES ($1::uuid, $2, $3)
                 ON CONFLICT DO NOTHING
             """
-            await execute_write(query, school.get("name"), school.get("address"))
+            await execute_write(query, tenant_id, school.get("name"), school.get("address"))
             results["schools"] += 1
     
     # Import branches
     if import_data.branches:
         for branch in import_data.branches:
+            school_row = await execute_one("SELECT tenant_id FROM schools WHERE id = $1::uuid", branch.get("school_id"))
+            if not school_row:
+                continue
             query = """
-                INSERT INTO branches (school_id, name, address)
-                VALUES ($1, $2, $3)
+                INSERT INTO branches (tenant_id, school_id, name, address)
+                VALUES ($1::uuid, $2::uuid, $3, $4)
                 ON CONFLICT DO NOTHING
             """
             await execute_write(
                 query,
+                school_row.get("tenant_id"),
                 branch.get("school_id"),
                 branch.get("name"),
                 branch.get("address")
@@ -2439,13 +3547,17 @@ async def bulk_import_data(import_data: BulkImportRequest):
     # Import classes
     if import_data.classes:
         for cls in import_data.classes:
+            branch_row = await execute_one("SELECT tenant_id FROM branches WHERE id = $1::uuid", cls.get("branch_id"))
+            if not branch_row:
+                continue
             query = """
-                INSERT INTO classes (branch_id, name, grade_level, teacher_id)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO classes (tenant_id, branch_id, name, grade_level, teacher_id)
+                VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid)
                 ON CONFLICT DO NOTHING
             """
             await execute_write(
                 query,
+                branch_row.get("tenant_id"),
                 cls.get("branch_id"),
                 cls.get("name"),
                 cls.get("grade_level"),
@@ -2511,7 +3623,7 @@ async def bulk_import_data(import_data: BulkImportRequest):
 # SYSTEM CONFIGURATION
 # ============================================
 
-@router.get("/config/models")
+@router.get("/config/models", dependencies=[Depends(require_super_admin)])
 async def get_model_configuration():
     """Get AI model configuration"""
     
@@ -2524,7 +3636,7 @@ async def get_model_configuration():
     }
 
 
-@router.get("/stats/system")
+@router.get("/stats/system", dependencies=[Depends(require_super_admin)])
 async def get_system_stats():
     """Get overall system statistics"""
     
@@ -2558,7 +3670,7 @@ class TrainModelRequest(BaseModel):
     scope: str = "all"  # all, subjects, topics, videos
 
 
-@router.post("/ai/train")
+@router.post("/ai/train", dependencies=[Depends(require_super_admin)])
 async def train_model_context(request: TrainModelRequest):
     """
     Push curriculum data as context to Claude AI.

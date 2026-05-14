@@ -1,12 +1,10 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import managerService from "../../services/managerService";
 import SchoolCard from "../../components/manager/SchoolCard";
 import { PageSpinner } from "../../components/common/Spinner";
 import Alert from "../../components/common/Alert";
 import {
   BuildingOffice2Icon,
-  UsersIcon,
   AcademicCapIcon,
 } from "@heroicons/react/24/outline";
 
@@ -58,14 +56,6 @@ export default function ManagerDashboard() {
           value={totalClasses}
         />
       </div>
-
-      {/* Quick links */}
-      <div className="flex gap-3 mb-8 flex-wrap">
-        <QuickLink to="/manager/student-reports" label="Student Reports" />
-        <QuickLink to="/manager/class-reports" label="Class Reports" />
-        <QuickLink to="/manager/teacher-reports" label="Teacher Reports" />
-      </div>
-
       <h2 className="font-semibold text-gray-700 text-sm uppercase tracking-wide mb-4">
         Schools
       </h2>
@@ -95,16 +85,5 @@ function StatCard({ icon, label, value }) {
         <p className="text-xs text-gray-400">{label}</p>
       </div>
     </div>
-  );
-}
-
-function QuickLink({ to, label }) {
-  return (
-    <Link
-      to={to}
-      className="px-4 py-2 rounded-xl bg-blue-50 text-blue-700 text-sm font-medium hover:bg-blue-100 transition-colors"
-    >
-      {label} →
-    </Link>
   );
 }

@@ -42,12 +42,18 @@ edge-tts==7.2.8
 httpx>=0.25.2
 aiofiles==23.2.1
 pydantic-settings==2.1.0
+python-magic==0.4.27
+bleach==6.2.0
+openpyxl==3.1.5
 
 # Data validation
 email-validator==2.1.0
 
 # Async support
 asyncpg==0.29.0
+
+# Real-time (Socket.IO)
+python-socketio[asyncio]==5.11.3
 
 # Caching
 aiocache==0.12.2
