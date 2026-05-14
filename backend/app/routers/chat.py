@@ -490,12 +490,30 @@ async def create_conversation(
             recipient_id, f"New message from {student_name}", conv_id
         )
 
-    # Fetch and return full conversation object
+    # Fetch and return full conversation object with participant's full_name
     new_conv = await execute_one(
-        "SELECT * FROM chat_conversations WHERE id = $1",
-        conv_id
+        """SELECT cc.*,
+                  (CASE
+                    WHEN cc.participant_a_id = $2 THEN (SELECT full_name FROM users WHERE id = cc.participant_b_id)
+                    ELSE (SELECT full_name FROM users WHERE id = cc.participant_a_id)
+                   END) as full_name
+           FROM chat_conversations cc
+           WHERE cc.id = $1""",
+        conv_id, user_id
     )
-    return dict(new_conv) if new_conv else {"id": conv_id, "conversation_key": conv_key, "status": status, "school_id": school_id}
+    if new_conv:
+        result = dict(new_conv)
+        result['unread_count'] = 0
+        return result
+    else:
+        return {
+            "id": conv_id,
+            "conversation_key": conv_key,
+            "status": status,
+            "school_id": school_id,
+            "full_name": "Unknown",
+            "unread_count": 0
+        }
 
 @router.get("/conversations/{conversation_id}/messages")
 async def get_messages(
