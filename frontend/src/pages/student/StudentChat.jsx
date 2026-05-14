@@ -134,14 +134,19 @@ export default function StudentChat() {
     if (!messageInput.trim() || !selectedConversation) return;
 
     setSendingMessage(true);
+    const tempMessage = messageInput;
     try {
-      console.log('Sending message to conversation:', selectedConversation.id, 'Content:', messageInput);
-      await chatService.sendMessage(selectedConversation.id, messageInput);
+      console.log('Sending message to conversation:', selectedConversation.id, 'Content:', tempMessage);
+      const response = await chatService.sendMessage(selectedConversation.id, tempMessage);
       console.log('Message sent successfully');
       setMessageInput('');
-      // Reload messages to show the newly sent message
-      await loadMessages(selectedConversation.id);
-      // Reload conversations to ensure it appears in the list
+
+      // Add message to UI immediately from response
+      if (response.data.message) {
+        setMessages((prev) => [...prev, response.data.message]);
+      }
+
+      // Reload conversations to ensure preview updates
       loadConversations();
     } catch (err) {
       console.error('Failed to send message:', err);

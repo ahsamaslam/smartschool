@@ -110,11 +110,11 @@ async def execute_scalar(query: str, *args):
 async def execute_write(query: str, *args):
     """
     Execute INSERT/UPDATE/DELETE query
-    
+
     Args:
         query: SQL query string
         *args: Query parameters
-    
+
     Returns:
         Status string
     """

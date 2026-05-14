@@ -610,20 +610,30 @@ async def send_message(
 
     # Create message
     msg_id = str(uuid.uuid4())
-    await execute_write(
-        """INSERT INTO chat_messages
-           (id, conversation_id, sender_id, message_type, content, delivery_status)
-           VALUES ($1, $2, $3, 'text', $4, 'sent')""",
-        msg_id, conversation_id, user_id, content
-    )
+    try:
+        await execute_write(
+            """INSERT INTO chat_messages
+               (id, conversation_id, sender_id, message_type, content, delivery_status)
+               VALUES ($1, $2, $3, 'text', $4, 'sent')""",
+            msg_id, conversation_id, user_id, content
+        )
+        print(f"[OK] Message inserted: {msg_id}")
+    except Exception as e:
+        print(f"[ERROR] Failed to insert message: {str(e)}")
+        raise
 
     # Update conversation metadata
-    await execute_write(
-        """UPDATE chat_conversations
-           SET last_message_at = NOW(), last_message_preview = $2, last_message_sender_id = $3
-           WHERE id = $1""",
-        conversation_id, content[:100], user_id
-    )
+    try:
+        await execute_write(
+            """UPDATE chat_conversations
+               SET last_message_at = NOW(), last_message_preview = $2, last_message_sender_id = $3
+               WHERE id = $1""",
+            conversation_id, content[:100], user_id
+        )
+        print(f"[OK] Conversation updated")
+    except Exception as e:
+        print(f"[ERROR] Failed to update conversation: {str(e)}")
+        raise
 
     # Insert notification for recipient
     recipient_id = conv["participant_b_id"] if conv["participant_a_id"] == user_id else conv["participant_a_id"]
@@ -655,7 +665,18 @@ async def send_message(
     # Send to sender (so they see it immediately)
     await manager.send_to_user(user_id, message_data)
 
-    return {"id": msg_id, "status": "sent"}
+    return {
+        "id": msg_id,
+        "status": "sent",
+        "message": {
+            "id": msg_id,
+            "conversation_id": conversation_id,
+            "sender_id": user_id,
+            "content": content,
+            "created_at": datetime.utcnow().isoformat(),
+            "delivery_status": "sent"
+        }
+    }
 
 @router.post("/conversations/{conversation_id}/upload")
 async def upload_file(
