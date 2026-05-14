@@ -13,6 +13,9 @@ export default function StudentChat() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('conversations');
   const [selectedConversation, setSelectedConversation] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [messageInput, setMessageInput] = useState('');
+  const [sendingMessage, setSendingMessage] = useState(false);
 
   const loadConversations = async () => {
     try {
@@ -26,14 +29,9 @@ export default function StudentChat() {
   const loadEligibleTeachers = async () => {
     try {
       const response = await chatService.getEligibleTeachers();
-      console.log('Eligible teachers response:', response);
-      console.log('Teachers data:', response.data);
-      console.log('Teachers array:', response.data.data);
       setEligibleTeachers(response.data.data || []);
-      console.log('State updated with teachers:', response.data.data);
     } catch (err) {
       console.error('Failed to load eligible teachers:', err);
-      console.error('Error response:', err.response?.data);
     }
   };
 
@@ -65,12 +63,106 @@ export default function StudentChat() {
     }
   };
 
+  const loadMessages = async (conversationId) => {
+    try {
+      const response = await chatService.getMessages(conversationId);
+      setMessages(response.data.data || []);
+    } catch (err) {
+      console.error('Failed to load messages:', err);
+    }
+  };
+
+  const sendMessage = async () => {
+    if (!messageInput.trim() || !selectedConversation) return;
+
+    setSendingMessage(true);
+    try {
+      console.log('Sending message to conversation:', selectedConversation.id, 'Content:', messageInput);
+      await chatService.sendMessage(selectedConversation.id, messageInput);
+      console.log('Message sent successfully');
+      setMessageInput('');
+      await loadMessages(selectedConversation.id);
+    } catch (err) {
+      console.error('Failed to send message:', err);
+      console.error('Error response:', err.response?.data);
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
+  const handleSelectConversation = (conv) => {
+    setSelectedConversation(conv);
+    loadMessages(conv.id);
+  };
+
   if (loading) return <Spinner />;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900">
       <div className="max-w-7xl mx-auto px-6 py-8">
         <h1 className="text-4xl font-bold text-white mb-8">Messages</h1>
+
+        {selectedConversation && (
+          <div className="mb-8 p-6 bg-slate-800 rounded-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-2xl font-bold text-white">{selectedConversation.full_name}</h2>
+              <button
+                onClick={() => setSelectedConversation(null)}
+                className="px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition"
+              >
+                Close
+              </button>
+            </div>
+
+            {/* Messages Display */}
+            <div className="h-96 bg-slate-900 rounded-lg p-4 mb-4 overflow-y-auto">
+              {messages.length === 0 ? (
+                <p className="text-slate-400 text-center py-20">No messages yet. Start the conversation!</p>
+              ) : (
+                <div className="space-y-3">
+                  {messages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`flex ${msg.sender_id === user?.id ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div
+                        className={`max-w-xs px-4 py-2 rounded-lg ${
+                          msg.sender_id === user?.id
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-slate-700 text-slate-100'
+                        }`}
+                      >
+                        <p>{msg.content}</p>
+                        <p className="text-xs mt-1 opacity-70">
+                          {new Date(msg.created_at).toLocaleTimeString()}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Message Input */}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Type a message..."
+                value={messageInput}
+                onChange={(e) => setMessageInput(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                className="flex-1 px-4 py-2 bg-slate-700 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 placeholder-slate-500"
+              />
+              <button
+                onClick={sendMessage}
+                disabled={sendingMessage || !messageInput.trim()}
+                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:bg-slate-600 disabled:cursor-not-allowed"
+              >
+                {sendingMessage ? 'Sending...' : 'Send'}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="flex gap-4 mb-8">
           <button
@@ -116,8 +208,12 @@ export default function StudentChat() {
                 {conversations.map((conv) => (
                   <div
                     key={conv.id}
-                    onClick={() => setSelectedConversation(conv)}
-                    className="p-4 bg-slate-700 rounded-lg cursor-pointer hover:bg-slate-600 transition"
+                    onClick={() => handleSelectConversation(conv)}
+                    className={`p-4 rounded-lg cursor-pointer transition ${
+                      selectedConversation?.id === conv.id
+                        ? 'bg-blue-600'
+                        : 'bg-slate-700 hover:bg-slate-600'
+                    }`}
                   >
                     <div className="flex justify-between items-center">
                       <div>

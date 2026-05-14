@@ -454,7 +454,7 @@ async def create_conversation(
 
     # Create new conversation
     conv_id = str(uuid.uuid4())
-    status = "pending" if role == "student" else "active"
+    status = "active"  # Automatically active for all new conversations
 
     print(f"DEBUG [create_conversation]: Inserting conversation {conv_id} with school_id={school_id}, initiator={user_id}, recipient={recipient_id}")
     await execute_write(
