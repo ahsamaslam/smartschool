@@ -102,9 +102,19 @@ export default function StudentChat() {
   const startNewChat = async (teacherId) => {
     try {
       const response = await chatService.createConversation(teacherId);
-      setSelectedConversation(response.data);
-      loadMessages(response.data.id);
-      loadConversations();
+      const newConv = response.data;
+      setSelectedConversation(newConv);
+      loadMessages(newConv.id);
+
+      // Add new conversation to list if it doesn't exist
+      setConversations((prev) => {
+        const exists = prev.some((c) => c.id === newConv.id);
+        if (!exists) {
+          return [newConv, ...prev];
+        }
+        return prev;
+      });
+
       setActiveTab('conversations');
     } catch (err) {
       console.error('Failed to start conversation:', err);
@@ -129,7 +139,8 @@ export default function StudentChat() {
       await chatService.sendMessage(selectedConversation.id, messageInput);
       console.log('Message sent successfully');
       setMessageInput('');
-      // Don't call loadMessages - WebSocket will deliver the message in real-time
+      // Reload conversations to ensure it appears in the list
+      loadConversations();
     } catch (err) {
       console.error('Failed to send message:', err);
       console.error('Error response:', err.response?.data);
