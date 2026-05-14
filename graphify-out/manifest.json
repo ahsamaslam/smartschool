@@ -40,8 +40,8 @@
     "hash": "a28057eae0434b14186412df28334e46"
   },
   "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\chat.py": {
-    "mtime": 1778708322.096074,
-    "hash": "d70ad63e0949c9960fcfea6322a04326"
+    "mtime": 1778748293.8198645,
+    "hash": "db1c9eaf55101f2e1fa4e0fc508d5c79"
   },
   "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\backend\\app\\routers\\classes.py": {
     "mtime": 1778588831.895847,
@@ -376,8 +376,8 @@
     "hash": "58a7c53c313b032b340d28fb2665ad20"
   },
   "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\hooks\\useChat.js": {
-    "mtime": 1778698141.2180784,
-    "hash": "6361da3a2177133bda0a945fdd28a644"
+    "mtime": 1778747234.044653,
+    "hash": "eb0462ed6596dd8b5518aabfb10c0f3d"
   },
   "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\hooks\\useDebounce.js": {
     "mtime": 1778241142.631136,
@@ -568,8 +568,8 @@
     "hash": "91ad890b651f73c25d0c84fdb8c6a1b7"
   },
   "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\student\\StudentChat.jsx": {
-    "mtime": 1778708267.966809,
-    "hash": "d364b31136066493a1a3ca7badd3365e"
+    "mtime": 1778748898.247039,
+    "hash": "25e444b66bf18f5663302ed3b5bc4f8c"
   },
   "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\student\\StudentCourseBook.jsx": {
     "mtime": 1778409074.5024793,
@@ -672,8 +672,8 @@
     "hash": "5828ccf383971935a78c5c152f271d1d"
   },
   "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\TeacherChat.jsx": {
-    "mtime": 1778745280.5664377,
-    "hash": "65a8932490fa0066972c130483ac8ecb"
+    "mtime": 1778748912.6621804,
+    "hash": "3257549d6e755bfa0e7c74e895f93043"
   },
   "C:\\Users\\Lenovo\\Documents\\Smart School\\smartschool\\frontend\\src\\pages\\teacher\\TeacherClassHomework.jsx": {
     "mtime": 1778431600.9986112,

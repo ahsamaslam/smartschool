@@ -526,7 +526,7 @@ async def get_messages(
     messages = await execute_query(f"""
         SELECT * FROM chat_messages
         WHERE conversation_id = $1 AND is_deleted = false
-        ORDER BY created_at DESC
+        ORDER BY created_at ASC
         LIMIT $2 OFFSET $3
     """, conversation_id, page_size, offset)
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useChatContext } from '../../context/ChatContext';
 import chatService from '../../services/chatService';
 import { useAuth } from '../../hooks/useAuth';
@@ -16,6 +16,7 @@ export default function StudentChat() {
   const [messages, setMessages] = useState([]);
   const [messageInput, setMessageInput] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
+  const messagesEndRef = useRef(null);
 
   const loadConversations = async () => {
     try {
@@ -57,9 +58,9 @@ export default function StudentChat() {
     if (incomingMessage) {
       console.log('📬 Incoming message in StudentChat:', incomingMessage);
 
-      // Update conversation list with new message preview
-      setConversations((prev) =>
-        prev.map((conv) =>
+      // Update conversation list: move conversation to top and update preview
+      setConversations((prev) => {
+        const updated = prev.map((conv) =>
           conv.id === incomingMessage.conversation_id
             ? {
                 ...conv,
@@ -67,8 +68,15 @@ export default function StudentChat() {
                 last_message_at: incomingMessage.created_at,
               }
             : conv
-        )
-      );
+        );
+
+        // Sort so conversations with latest messages appear first
+        return updated.sort((a, b) => {
+          const aTime = new Date(a.last_message_at || 0).getTime();
+          const bTime = new Date(b.last_message_at || 0).getTime();
+          return bTime - aTime; // Newest first
+        });
+      });
 
       if (selectedConversation) {
         console.log('Selected conversation ID:', selectedConversation.id, 'Message conversation ID:', incomingMessage.conversation_id);
@@ -85,6 +93,11 @@ export default function StudentChat() {
       }
     }
   }, [incomingMessage, selectedConversation]);
+
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   const startNewChat = async (teacherId) => {
     try {
@@ -174,6 +187,7 @@ export default function StudentChat() {
                       </div>
                     </div>
                   ))}
+                  <div ref={messagesEndRef} />
                 </div>
               )}
             </div>

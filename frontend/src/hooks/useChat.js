@@ -20,6 +20,7 @@ export const useChat = (onMessage, onTyping, onDelivery) => {
       wsRef.current = new WebSocket(url);
 
       wsRef.current.onopen = () => {
+        console.log('✅ WebSocket connected');
         setIsConnected(true);
         reconnectAttemptsRef.current = 0;
 
@@ -34,10 +35,12 @@ export const useChat = (onMessage, onTyping, onDelivery) => {
       wsRef.current.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          console.log('📨 WebSocket message received:', data);
 
           if (data.type === 'pong') {
-            // Acknowledge pong
+            console.log('✅ Pong received');
           } else if (data.type === 'new_message') {
+            console.log('💬 New message:', data);
             onMessage?.(data);
           } else if (data.type === 'typing') {
             onTyping?.(data);
