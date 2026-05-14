@@ -21,15 +21,30 @@ export default function TeacherChat() {
 
   // Listen for incoming messages via WebSocket
   useEffect(() => {
-    if (incomingMessage && selectedConversation) {
-      // If the message is for the current conversation, add it to messages
-      if (incomingMessage.conversation_id === selectedConversation.id) {
-        setMessages((prev) => [...prev, {
-          id: incomingMessage.message_id,
-          content: incomingMessage.content,
-          sender_id: incomingMessage.sender_id,
-          created_at: new Date().toISOString(),
-        }]);
+    if (incomingMessage) {
+      // Update conversation list with new message preview
+      setConversations((prev) =>
+        prev.map((conv) =>
+          conv.id === incomingMessage.conversation_id
+            ? {
+                ...conv,
+                last_message_preview: incomingMessage.content.substring(0, 100),
+                last_message_at: incomingMessage.created_at,
+              }
+            : conv
+        )
+      );
+
+      if (selectedConversation) {
+        // If the message is for the current conversation, add it to messages
+        if (incomingMessage.conversation_id === selectedConversation.id) {
+          setMessages((prev) => [...prev, {
+            id: incomingMessage.message_id,
+            content: incomingMessage.content,
+            sender_id: incomingMessage.sender_id,
+            created_at: new Date().toISOString(),
+          }]);
+        }
       }
     }
   }, [incomingMessage, selectedConversation]);

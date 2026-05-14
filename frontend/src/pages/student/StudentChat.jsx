@@ -56,6 +56,20 @@ export default function StudentChat() {
   useEffect(() => {
     if (incomingMessage) {
       console.log('📬 Incoming message in StudentChat:', incomingMessage);
+
+      // Update conversation list with new message preview
+      setConversations((prev) =>
+        prev.map((conv) =>
+          conv.id === incomingMessage.conversation_id
+            ? {
+                ...conv,
+                last_message_preview: incomingMessage.content.substring(0, 100),
+                last_message_at: incomingMessage.created_at,
+              }
+            : conv
+        )
+      );
+
       if (selectedConversation) {
         console.log('Selected conversation ID:', selectedConversation.id, 'Message conversation ID:', incomingMessage.conversation_id);
         // If the message is for the current conversation, add it to messages
