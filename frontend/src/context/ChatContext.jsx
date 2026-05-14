@@ -17,7 +17,10 @@ export const ChatProvider = ({ children }) => {
       const response = await chatService.getUnreadCount();
       setUnreadCount(response.data.total);
     } catch (err) {
-      console.error('Failed to refresh unread count:', err);
+      // Silently ignore errors (user may not be authenticated)
+      if (err.response?.status !== 401) {
+        console.error('Failed to refresh unread count:', err);
+      }
     }
   }, []);
 
@@ -86,9 +89,13 @@ export const ChatProvider = ({ children }) => {
     setWsConnected(isConnected);
   }, [isConnected]);
 
-  // Initial load of unread count
+  // Initial load of unread count (only if authenticated)
   useEffect(() => {
-    refreshUnreadCount();
+    // Only refresh if we have a valid auth token
+    const token = localStorage.getItem('authToken');
+    if (token) {
+      refreshUnreadCount();
+    }
   }, [refreshUnreadCount]);
 
   const value = {
