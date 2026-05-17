@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { AppState } from "react-native";
 import { io } from "socket.io-client";
 import { useAuth } from "./useAuth";
-
-// In production this is the same origin as the API (nginx proxies /socket.io/)
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:8000";
+import { SOCKET_URL } from "../config";
 
 export const useChat = (onMessage, onTyping, onDelivery) => {
   const { token: authToken } = useAuth();
@@ -24,11 +23,9 @@ export const useChat = (onMessage, onTyping, onDelivery) => {
     onDeliveryRef.current = onDelivery;
   }, [onDelivery]);
 
-  // Only depends on authToken — callbacks are accessed via refs
   const connect = useCallback(() => {
     if (!authToken) return;
 
-    // Tear down any existing connection first
     if (socketRef.current) {
       socketRef.current.disconnect();
       socketRef.current = null;
@@ -36,7 +33,7 @@ export const useChat = (onMessage, onTyping, onDelivery) => {
 
     const socket = io(SOCKET_URL, {
       auth: { token: authToken },
-      transports: ["websocket"],
+      transports: ["websocket", "polling"],
       autoConnect: false,
       reconnection: true,
       reconnectionAttempts: 10,
@@ -57,7 +54,6 @@ export const useChat = (onMessage, onTyping, onDelivery) => {
     socket.on("connect_error", (err) => {
       console.error("Socket.IO connect error:", err.message);
       setIsConnected(false);
-      // Auth rejected — stop reconnecting so we don't hammer the server
       if (err.message === "auth_failed") {
         console.warn("Socket.IO auth rejected — session expired.");
         socket.disconnect();
@@ -65,7 +61,6 @@ export const useChat = (onMessage, onTyping, onDelivery) => {
     });
 
     socket.on("new_message", (data) => {
-      console.log("💬 Socket.IO new_message:", data);
       onMessageRef.current?.(data);
     });
 
@@ -87,7 +82,16 @@ export const useChat = (onMessage, onTyping, onDelivery) => {
 
   useEffect(() => {
     connect();
+
+    // Reconnect when app returns from background
+    const appStateSub = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active" && !socketRef.current?.connected) {
+        connect();
+      }
+    });
+
     return () => {
+      appStateSub.remove();
       if (socketRef.current) {
         socketRef.current.disconnect();
         socketRef.current = null;
@@ -104,23 +108,19 @@ export const useChat = (onMessage, onTyping, onDelivery) => {
   }, []);
 
   const sendTypingStart = useCallback(
-    (conversationId) => {
-      send("typing_start", { conversation_id: conversationId });
-    },
+    (conversationId) =>
+      send("typing_start", { conversation_id: conversationId }),
     [send],
   );
 
   const sendTypingStop = useCallback(
-    (conversationId) => {
-      send("typing_stop", { conversation_id: conversationId });
-    },
+    (conversationId) =>
+      send("typing_stop", { conversation_id: conversationId }),
     [send],
   );
 
   const markMessageRead = useCallback(
-    (messageId) => {
-      send("mark_read", { message_id: messageId });
-    },
+    (messageId) => send("mark_read", { message_id: messageId }),
     [send],
   );
 

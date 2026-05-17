@@ -1,0 +1,42 @@
+node_modules/
+.expo/
+dist/
+web-build/
+assets/
+
+# native
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Android build outputs
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+android/.cxx/
+android/.idea/
+
+# Expo / Metro
+.metro-health-check*
+.expo-shared/
+
+# Environment
+.env
+.env.local
+*.env
+
+# TypeScript
+*.tsbuildinfo

@@ -98,6 +98,29 @@ redis_data/
 # ----- Local SQLite / DB files ------------------------------
 *.db
 *.sqlite
+
+# ----- Mobile app ------------------------------------------
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/android/build/
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/android/.cxx/
+mobile/android/app/build/
+mobile/.metro-health-check*
+
+# ----- Graphify output -------------------------------------
+graphify-out/cache/
+
+# ----- Temp scripts / one-off files ------------------------
+reset_pw.py
+*.tmp
+
+# ----- OS / misc -------------------------------------------
+desktop.ini
+Thumbs.db
+.DS_Store
 *.sqlite3
 
 # ----- Graphify (all generated files except the text report) -

@@ -572,12 +572,17 @@ async def get_messages(
     )
 
     # Get messages (exclude hard-deleted ones, but respect soft-delete per participant)
+    # Use DESC to fetch the most-recent page first, then re-order ASC so the
+    # client always receives messages in chronological (oldest→newest) order.
     offset = (page - 1) * page_size
-    messages = await execute_query(f"""
-        SELECT * FROM chat_messages
-        WHERE conversation_id = $1 AND is_deleted = false
+    messages = await execute_query("""
+        SELECT * FROM (
+            SELECT * FROM chat_messages
+            WHERE conversation_id = $1 AND is_deleted = false
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+        ) sub
         ORDER BY created_at ASC
-        LIMIT $2 OFFSET $3
     """, conversation_id, page_size, offset)
 
     # Update conversation_reads
