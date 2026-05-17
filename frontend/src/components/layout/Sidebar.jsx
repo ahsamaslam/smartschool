@@ -120,9 +120,19 @@ const NAV_BY_ROLE = {
     { label: "My Classes", to: "/teacher/classes", icon: "AcademicCapIcon" },
     { label: "My Curriculum", to: "/teacher/curriculum", icon: "BookOpenIcon" },
     {
+      label: "Homework",
+      to: "/teacher/homework",
+      icon: "ClipboardDocumentListIcon",
+    },
+    {
       label: "Attendance",
       to: "/teacher/attendance",
-      icon: "ClipboardDocumentListIcon",
+      icon: "ClipboardDocumentCheckIcon",
+    },
+    {
+      label: "Slides",
+      to: "/teacher/slides",
+      icon: "PresentationChartBarIcon",
     },
     {
       label: "Publish Video",
@@ -144,6 +154,7 @@ const NAV_BY_ROLE = {
       to: "/teacher/exams",
       icon: "DocumentTextIcon",
     },
+    { label: "My Lectures", to: "/teacher/my-lectures", icon: "FilmIcon" },
     { label: "Messages", to: "/teacher/chat", icon: "ChatBubbleLeftIcon" },
     { label: "Reports", to: "/teacher/reports", icon: "ChartBarIcon" },
   ],

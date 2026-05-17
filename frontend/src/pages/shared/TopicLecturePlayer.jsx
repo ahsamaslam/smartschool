@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import libraryService from "../../services/libraryService";
+import teacherService from "../../services/teacherService";
+import { useAuth } from "../../context/AuthContext";
 import { PageSpinner } from "../../components/common/Spinner";
 
 const API_BASE = (import.meta.env.VITE_API_URL || "http://localhost:8000/api").replace("/api", "");
 
 export default function TopicLecturePlayer() {
   const { topicId } = useParams();
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [topic, setTopic] = useState(null);
   const [speed, setSpeed] = useState(1);
@@ -18,8 +21,17 @@ export default function TopicLecturePlayer() {
     (async () => {
       setLoading(true);
       try {
-        const res = await libraryService.getTopic(topicId);
-        const row = res?.data?.data ?? res?.data;
+        let row;
+        if (user?.role === "student") {
+          // Students get their assigned teacher's content via the learning endpoint
+          const res = await libraryService.getTopic(topicId);
+          row = res?.data?.data ?? res?.data;
+        } else {
+          // All other roles see their own personal content
+          const res = await teacherService.getMyTopicContent(topicId);
+          const raw = res?.data?.data ?? res?.data;
+          row = raw ? { ...raw, id: raw.library_topic_id || raw.id } : null;
+        }
         if (!cancel) setTopic(row || null);
       } catch {
         if (!cancel) toast.error("Failed to load lecture.");
@@ -30,7 +42,7 @@ export default function TopicLecturePlayer() {
     return () => {
       cancel = true;
     };
-  }, [topicId]);
+  }, [topicId, user?.role]);
 
   useEffect(() => {
     if (!videoRef.current) return;

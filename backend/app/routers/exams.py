@@ -2,13 +2,13 @@
 Exam Module Router
 Handles AI-generated and manual exam papers for teachers.
 """
-from fastapi import APIRouter, HTTPException, Depends, File, UploadFile
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import json
 import logging
-import os
 import uuid
+from datetime import date as date_type
 from uuid import NAMESPACE_URL, uuid5
 
 from app.utils.database import execute_query, execute_one, execute_write
@@ -41,6 +41,8 @@ class CreateExamRequest(BaseModel):
 class UpdateExamRequest(BaseModel):
     title: Optional[str] = None
     status: Optional[str] = None
+    exam_date: Optional[str] = None   # ISO date string "YYYY-MM-DD"
+    exam_time: Optional[str] = None   # "HH:MM" 24-hour
 
 
 class UpdateQuestionRequest(BaseModel):
@@ -212,8 +214,8 @@ async def _resolve_exam_topic_ids(req: CreateExamRequest) -> List[str]:
     )
 
 
-async def _chapters_with_topics_for_book(book_id: str) -> List[Dict]:
-    """Chapters and topics for one book; topic flags for learner UI."""
+async def _chapters_with_topics_for_book(book_id: str, class_id: str = None) -> List[Dict]:
+    """Chapters and topics for one book; topic flags sourced from teacher_topic_content when class_id given."""
     chapters = await execute_query(
         """
         SELECT id, chapter_number, title
@@ -225,26 +227,55 @@ async def _chapters_with_topics_for_book(book_id: str) -> List[Dict]:
     )
     out = []
     for ch in chapters:
-        topics = await execute_query(
-            """
-            SELECT id, title,
-                   (
-                       lecture_video_url IS NOT NULL
-                       AND btrim(COALESCE(lecture_video_url::text, '')) <> ''
-                   ) AS has_lecture,
-                   (
-                       slides_json IS NOT NULL
-                       AND btrim(COALESCE(slides_json, '')) <> ''
-                       AND replace(lower(btrim(slides_json)), ' ', '')
-                           NOT IN ('null', '[]', '""', '{}')
-                       AND length(btrim(slides_json)) > 2
-                   ) AS has_slides
-            FROM library_topics
-            WHERE chapter_id = $1::uuid
-            ORDER BY created_at ASC
-            """,
-            ch["id"],
-        )
+        if class_id:
+            # Use the teacher assigned to this class+book to determine has_slides / has_lecture
+            topics = await execute_query(
+                """
+                SELECT lt.id, lt.title,
+                       (
+                           COALESCE(ttc.lecture_video_url, lt.lecture_video_url) IS NOT NULL
+                           AND btrim(COALESCE(COALESCE(ttc.lecture_video_url, lt.lecture_video_url)::text, '')) <> ''
+                       ) AS has_lecture,
+                       (
+                           COALESCE(ttc.slides_json, lt.slides_json) IS NOT NULL
+                           AND btrim(COALESCE(COALESCE(ttc.slides_json, lt.slides_json), '')) <> ''
+                           AND replace(lower(btrim(COALESCE(ttc.slides_json, lt.slides_json))), ' ', '')
+                               NOT IN ('null', '[]', '""', '{}')
+                           AND length(btrim(COALESCE(ttc.slides_json, lt.slides_json))) > 2
+                       ) AS has_slides
+                FROM library_topics lt
+                LEFT JOIN teacher_class_subject_assignments tcsa
+                    ON tcsa.library_book_id = $2::uuid
+                    AND tcsa.class_id = $3::uuid
+                LEFT JOIN teacher_topic_content ttc
+                    ON ttc.teacher_id = tcsa.teacher_id
+                    AND ttc.library_topic_id = lt.id
+                WHERE lt.chapter_id = $1::uuid
+                ORDER BY lt.created_at ASC
+                """,
+                ch["id"], book_id, class_id,
+            )
+        else:
+            topics = await execute_query(
+                """
+                SELECT id, title,
+                       (
+                           lecture_video_url IS NOT NULL
+                           AND btrim(COALESCE(lecture_video_url::text, '')) <> ''
+                       ) AS has_lecture,
+                       (
+                           slides_json IS NOT NULL
+                           AND btrim(COALESCE(slides_json, '')) <> ''
+                           AND replace(lower(btrim(slides_json)), ' ', '')
+                               NOT IN ('null', '[]', '""', '{}')
+                           AND length(btrim(slides_json)) > 2
+                       ) AS has_slides
+                FROM library_topics
+                WHERE chapter_id = $1::uuid
+                ORDER BY created_at ASC
+                """,
+                ch["id"],
+            )
         out.append(
             {
                 "id": str(ch["id"]),
@@ -317,7 +348,7 @@ async def _build_library_exam_tree(class_id: str) -> List[Dict]:
                         {
                             "id": str(bk["id"]),
                             "title": bk["title"],
-                            "chapters": await _chapters_with_topics_for_book(str(bk["id"])),
+                            "chapters": await _chapters_with_topics_for_book(str(bk["id"]), class_id),
                         }
                     )
                 subj_list.append(
@@ -367,7 +398,7 @@ async def _build_library_exam_tree(class_id: str) -> List[Dict]:
             {
                 "id": str(row["book_id"]),
                 "title": row["book_title"],
-                "chapters": await _chapters_with_topics_for_book(str(row["book_id"])),
+                "chapters": await _chapters_with_topics_for_book(str(row["book_id"]), class_id),
             }
         )
 
@@ -561,7 +592,7 @@ async def list_exams(teacher_id: str):
     """List all exams created by a teacher."""
     exams = await execute_query(
         """SELECT te.id, te.title, te.complexity, te.status, te.exam_format,
-                  te.created_at, te.updated_at,
+                  te.created_at, te.updated_at, te.exam_date, te.exam_time,
                   COALESCE(s.name, ls.name) AS subject_name,
                   cl.name AS class_name,
                   COUNT(eq.id)::int AS question_count,
@@ -576,7 +607,13 @@ async def list_exams(teacher_id: str):
            ORDER BY te.created_at DESC""",
         teacher_id,
     )
-    return [dict(e) for e in exams]
+    result = []
+    for e in exams:
+        row = dict(e)
+        if row.get("exam_date"):
+            row["exam_date"] = row["exam_date"].isoformat()
+        result.append(row)
+    return result
 
 
 @router.post("/")
@@ -708,6 +745,17 @@ async def update_exam(exam_id: str, req: UpdateExamRequest):
     if req.status is not None:
         updates.append(f"status = ${i}")
         values.append(req.status)
+        i += 1
+    if req.exam_date is not None:
+        updates.append(f"exam_date = ${i}")
+        try:
+            values.append(date_type.fromisoformat(req.exam_date) if req.exam_date else None)
+        except ValueError:
+            values.append(None)
+        i += 1
+    if req.exam_time is not None:
+        updates.append(f"exam_time = ${i}")
+        values.append(req.exam_time if req.exam_time else None)
         i += 1
     if not updates:
         raise HTTPException(status_code=400, detail="Nothing to update")
@@ -903,345 +951,59 @@ async def add_question(exam_id: str, req: AddQuestionRequest):
 
 
 # ============================================
-# STUDENT EXAM SUBMISSION
+# STUDENT — SCHEDULED EXAM VIEW (read-only)
 # ============================================
 
-class AnswerIn(BaseModel):
-    question_id: str
-    answer_text: str
-
-
-class SubmitExamRequest(BaseModel):
-    answers: List[AnswerIn]
-
-
-@router.post("/{exam_id}/submit")
-async def submit_exam(
-    exam_id: str,
-    body: SubmitExamRequest,
-    current_user: dict = Depends(get_user_from_token),
-):
-    """
-    Student submits their answers for an exam.
-    Auto-grades MCQ questions; text questions get marks_awarded=0 for manual grading.
-    """
-    if current_user.get("role") not in ("student", "admin"):
-        raise HTTPException(status_code=403, detail="Students only")
-
-    student_id = current_user["user_id"]
-
-    exam = await execute_one("SELECT id, class_id FROM teacher_exams WHERE id = $1", exam_id)
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
-
-    # Load all questions for this exam
-    questions = await execute_query(
-        "SELECT id, question_type, correct_answer, marks FROM exam_questions WHERE exam_id = $1",
-        exam_id,
-    )
-    q_map = {str(q["id"]): dict(q) for q in questions}
-
-    total_marks = sum(float(q["marks"] or 0) for q in questions)
-    earned = 0.0
-    per_question = []
-
-    for ans in body.answers:
-        qid = ans.question_id
-        q = q_map.get(qid)
-        if not q:
-            continue
-        is_mcq = q["question_type"] == "mcq"
-        correct = q.get("correct_answer") or ""
-        is_correct = is_mcq and ans.answer_text.strip().lower() == correct.strip().lower()
-        marks_awarded = float(q["marks"] or 0) if is_correct else 0.0
-        earned += marks_awarded
-
-        await execute_write(
-            """INSERT INTO student_exam_answers (exam_id, student_id, question_id, answer_text, is_correct, marks_awarded)
-               VALUES ($1, $2, $3, $4, $5, $6)
-               ON CONFLICT (student_id, question_id) DO UPDATE
-                 SET answer_text = EXCLUDED.answer_text,
-                     is_correct = EXCLUDED.is_correct,
-                     marks_awarded = EXCLUDED.marks_awarded""",
-            exam_id, student_id, qid, ans.answer_text, is_correct if is_mcq else None, marks_awarded,
-        )
-        per_question.append({
-            "question_id": qid,
-            "answer_text": ans.answer_text,
-            "is_correct": is_correct if is_mcq else None,
-            "marks_awarded": marks_awarded,
-        })
-
-    percentage = round(earned / total_marks * 100, 1) if total_marks > 0 else 0
-
-    # Upsert assignment row
-    await execute_write(
-        """INSERT INTO student_exam_assignments (student_id, exam_id, status, submitted_at, score)
-           VALUES ($1, $2, 'submitted', NOW(), $3)
-           ON CONFLICT (student_id, exam_id) DO UPDATE
-             SET status = 'submitted', submitted_at = NOW(), score = EXCLUDED.score""",
-        student_id, exam_id, earned,
-    )
-
-    return {
-        "score": earned,
-        "total_marks": total_marks,
-        "percentage": percentage,
-        "passed": percentage >= 50,
-        "per_question": per_question,
-    }
-
-
-@router.get("/{exam_id}/my-result")
-async def get_my_exam_result(
-    exam_id: str,
-    current_user: dict = Depends(get_user_from_token),
-):
-    """Returns a student's submitted answers and marks for an exam."""
-    if current_user.get("role") not in ("student", "admin"):
-        raise HTTPException(status_code=403, detail="Students only")
-
-    student_id = current_user["user_id"]
-
-    assignment = await execute_one(
-        "SELECT status, submitted_at, score FROM student_exam_assignments WHERE student_id = $1 AND exam_id = $2",
-        student_id, exam_id,
-    )
-    if not assignment or assignment["status"] != "submitted":
-        raise HTTPException(status_code=404, detail="No submission found for this exam")
-
-    answers = await execute_query(
-        """SELECT sea.question_id, sea.answer_text, sea.is_correct, sea.marks_awarded,
-                  eq.question_text, eq.question_type, eq.correct_answer, eq.marks
-           FROM student_exam_answers sea
-           JOIN exam_questions eq ON eq.id = sea.question_id
-           WHERE sea.student_id = $1 AND sea.exam_id = $2
-           ORDER BY eq.order_index""",
-        student_id, exam_id,
-    )
-
-    total_marks = sum(float(a["marks"] or 0) for a in answers)
-    score = float(assignment["score"] or 0)
-    percentage = round(score / total_marks * 100, 1) if total_marks > 0 else 0
-
-    return {
-        "status": assignment["status"],
-        "submitted_at": assignment["submitted_at"],
-        "score": score,
-        "total_marks": total_marks,
-        "percentage": percentage,
-        "passed": percentage >= 50,
-        "answers": [dict(a) for a in answers],
-    }
-
-
-@router.post("/submissions/integrity")
-async def submit_exam_integrity_report(
-    body: dict,
+@router.get("/student/my-exams")
+async def get_student_scheduled_exams(
     user: dict = Depends(get_user_from_token),
 ):
-    """Store integrity tracking data for exam submission."""
-    if user.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    exam_id = body.get("exam_id")
-    reports = body.get("reports", [])
-
-    if not exam_id or not reports:
-        return {"status": "ok"}
-
-    # Create integrity tracking table for exams if not exists
-    await execute_write(
-        """
-        CREATE TABLE IF NOT EXISTS exam_integrity_reports (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            exam_id UUID NOT NULL REFERENCES exams(id),
-            student_id UUID NOT NULL REFERENCES users(id),
-            question_id UUID,
-            paste_events JSONB,
-            typing_analysis JSONB,
-            focus_losses JSONB,
-            draft_history JSONB,
-            flags JSONB,
-            risk_level VARCHAR(20),
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-        """
-    )
-
+    """
+    Returns all finalized exams for the student's enrolled classes.
+    Groups them by: today / upcoming / past based on exam_date.
+    """
     student_id = user["user_id"]
 
-    # Store each report
-    for report in reports:
-        await execute_write(
-            """
-            INSERT INTO exam_integrity_reports
-            (exam_id, student_id, question_id, paste_events, typing_analysis,
-             focus_losses, draft_history, flags, risk_level)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            """,
-            exam_id,
-            student_id,
-            report.get("questionId"),
-            json.dumps(report.get("pasteEvents", [])),
-            json.dumps(report.get("typingAnalysis", {})),
-            json.dumps(report.get("focusLosses", [])),
-            json.dumps(report.get("draftHistory", [])),
-            json.dumps(report.get("flags", [])),
-            report.get("riskLevel"),
-        )
-
-    return {"status": "ok", "stored": len(reports)}
-
-
-@router.get("/{exam_id}/integrity-reports")
-async def get_exam_integrity_reports(
-    exam_id: str,
-    user: dict = Depends(get_user_from_token),
-):
-    """Get integrity reports for all submissions of an exam (teacher/admin only)."""
-    if user.get("role") not in ("teacher", "admin"):
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    # Verify teacher owns this exam
-    exam = await execute_one(
-        "SELECT id, teacher_id FROM exams WHERE id = $1::uuid",
-        exam_id,
-    )
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
-
-    if user.get("role") != "admin" and str(exam["teacher_id"]) != user["user_id"]:
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    # Get all integrity reports grouped by submission
-    reports = await execute_query(
+    exams = await execute_query(
         """
-        SELECT
-            ir.id,
-            ir.student_id,
-            u.full_name,
-            u.email,
-            ir.question_id,
-            ir.paste_events,
-            ir.typing_analysis,
-            ir.focus_losses,
-            ir.flags,
-            ir.risk_level,
-            ir.created_at,
-            sea.is_correct
-        FROM exam_integrity_reports ir
-        JOIN users u ON u.id = ir.student_id
-        LEFT JOIN student_exam_answers sea ON sea.exam_id = ir.exam_id AND sea.student_id = ir.student_id
-        WHERE ir.exam_id = $1::uuid
-        ORDER BY ir.created_at DESC, ir.student_id
+        SELECT te.id, te.title, te.status, te.exam_date, te.exam_time,
+               te.complexity, te.exam_format, te.created_at,
+               COALESCE(s.name, ls.name) AS subject_name,
+               cl.name AS class_name,
+               cl.grade_level, cl.section,
+               u.full_name AS teacher_name,
+               COUNT(eq.id)::int AS question_count,
+               COALESCE(SUM(eq.marks), 0)::int AS total_marks
+        FROM teacher_exams te
+        JOIN classes cl ON cl.id = te.class_id
+        JOIN enrollments e ON e.class_id = cl.id AND e.student_id = $1::uuid AND e.is_active = true
+        LEFT JOIN subjects s ON te.subject_id = s.id
+        LEFT JOIN library_subjects ls ON te.library_subject_id = ls.id
+        LEFT JOIN users u ON u.id = te.teacher_id
+        LEFT JOIN exam_questions eq ON eq.exam_id = te.id
+        WHERE te.status = 'finalized'
+        GROUP BY te.id, s.name, ls.name, cl.name, cl.grade_level, cl.section, u.full_name
+        ORDER BY te.exam_date ASC NULLS LAST, te.created_at DESC
         """,
-        exam_id,
-    )
-
-    # Group by student
-    grouped = {}
-    for row in reports:
-        sid = str(row["student_id"])
-        if sid not in grouped:
-            grouped[sid] = {
-                "student_id": sid,
-                "student_name": row["full_name"],
-                "student_email": row["email"],
-                "reports": [],
-            }
-        grouped[sid]["reports"].append({
-            "id": str(row["id"]),
-            "question_id": str(row["question_id"]) if row["question_id"] else None,
-            "paste_events": row["paste_events"] or [],
-            "typing_analysis": row["typing_analysis"] or {},
-            "focus_losses": row["focus_losses"] or [],
-            "flags": row["flags"] or [],
-            "risk_level": row["risk_level"],
-            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-        })
-
-    return {"data": list(grouped.values())}
-
-
-@router.post("/{exam_id}/submit-files")
-async def submit_exam_files(
-    exam_id: str,
-    user: dict = Depends(get_user_from_token),
-    files: List[UploadFile] = File(...),
-):
-    """Student submits exam via file upload."""
-    if user.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    student_id = user["user_id"]
-
-    exam = await execute_one(
-        "SELECT id, class_id FROM exams WHERE id = $1::uuid",
-        exam_id,
-    )
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
-
-    # Check if student can access this exam (enrolled in class)
-    enrollment = await execute_one(
-        "SELECT id FROM enrollments WHERE student_id = $1::uuid AND class_id = $2::uuid AND is_active = true",
         student_id,
-        exam["class_id"],
-    )
-    if not enrollment:
-        raise HTTPException(status_code=403, detail="Not enrolled in this class")
-
-    # Create or update submission record
-    assignment = await execute_one(
-        "SELECT id FROM student_exam_assignments WHERE student_id = $1::uuid AND exam_id = $2::uuid",
-        student_id,
-        exam_id,
     )
 
-    submission_id = str(assignment["id"]) if assignment else str(uuid.uuid4())
+    today = date_type.today()
+    today_list, upcoming_list, past_list = [], [], []
 
-    # Create folder for uploads
-    folder = os.path.join("static", "exam_uploads", submission_id)
-    os.makedirs(folder, exist_ok=True)
+    for e in exams:
+        row = dict(e)
+        ed = row.get("exam_date")
+        if ed:
+            row["exam_date"] = ed.isoformat()
+            if ed == today:
+                today_list.append(row)
+            elif ed > today:
+                upcoming_list.append(row)
+            else:
+                past_list.append(row)
+        else:
+            past_list.append(row)
 
-    stored = []
-    for f in files:
-        fname = f"{uuid.uuid4().hex}_{f.filename}"
-        path = os.path.join(folder, fname)
-        content = await f.read()
-        with open(path, "wb") as out:
-            out.write(content)
-        rel = f"/static/exam_uploads/{submission_id}/{fname}"
-        stored.append(
-            {
-                "path": rel,
-                "original_name": f.filename or fname,
-                "mime": f.content_type or "application/octet-stream",
-            }
-        )
+    return {"today": today_list, "upcoming": upcoming_list, "past": past_list}
 
-    # Store files as JSON
-    if assignment:
-        await execute_write(
-            """
-            UPDATE student_exam_assignments
-            SET upload_files_json = $2::jsonb, submitted_at = NOW(), status = 'submitted'
-            WHERE id = $1::uuid
-            """,
-            assignment["id"],
-            json.dumps(stored),
-        )
-    else:
-        await execute_write(
-            """
-            INSERT INTO student_exam_assignments (id, student_id, exam_id, status, submitted_at, upload_files_json)
-            VALUES ($1::uuid, $2::uuid, $3::uuid, 'submitted', NOW(), $4::jsonb)
-            """,
-            submission_id,
-            student_id,
-            exam_id,
-            json.dumps(stored),
-        )
-
-    return {"ok": True, "submission_id": submission_id, "files": stored}

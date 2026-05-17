@@ -83,6 +83,34 @@ const teacherService = {
   // Teacher curriculum (My Books)
   getMyCurriculum: () => api.get(`${API_ROUTES.TEACHERS}/my-curriculum`),
   getTeacherBook: (bookId) => api.get(`${API_ROUTES.TEACHERS}/books/${bookId}`),
+
+  // AI Slide generation (no admin permission required)
+  generateAISlides: (data) =>
+    api.post(`${API_ROUTES.TEACHERS}/generate-slides`, data, { timeout: 120000 }),
+
+  // Teacher-specific topic content (slides + lectures — isolated per teacher)
+  getMyTopicContent: (topicId) =>
+    api.get(`${API_ROUTES.TEACHERS}/topics/${topicId}/my-content`),
+
+  saveMyTopicSlides: (topicId, data) =>
+    api.put(`${API_ROUTES.TEACHERS}/topics/${topicId}/slides`, data),
+
+  uploadMyTopicLecture: (topicId, formData) =>
+    api.post(`${API_ROUTES.TEACHERS}/topics/${topicId}/lecture`, formData, {
+      timeout: 600000,
+    }),
+
+  deleteMyTopicLecture: (topicId) =>
+    api.delete(`${API_ROUTES.TEACHERS}/topics/${topicId}/lecture`),
+
+  deleteMyTopicSlides: (topicId) =>
+    api.delete(`${API_ROUTES.TEACHERS}/topics/${topicId}/slides`),
+
+  listMyLectures: (params = {}) =>
+    api.get(`${API_ROUTES.TEACHERS}/my-lectures`, { params }),
+
+  getMyContentStatusForBook: (bookId) =>
+    api.get(`${API_ROUTES.TEACHERS}/my-content-status/book/${bookId}`),
 };
 
 export default teacherService;

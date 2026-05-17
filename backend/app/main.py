@@ -323,6 +323,8 @@ async def startup_event():
             "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS branch_id UUID REFERENCES branches(id) ON DELETE SET NULL;",
             "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS board_id UUID;",
             "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS due_at TIMESTAMP;",
+            "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS exam_date DATE;",
+            "ALTER TABLE teacher_exams ADD COLUMN IF NOT EXISTS exam_time VARCHAR(10);",
             # Student learning progress (library topics)
             """CREATE TABLE IF NOT EXISTS student_topic_progress (
                 id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

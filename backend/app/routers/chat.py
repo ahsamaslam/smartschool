@@ -304,17 +304,23 @@ async def list_conversations(
     try:
         user_id = user["user_id"]
 
-        # Get user's school_id
+        # Get user's school_id and role
         user_data = await execute_one(
-            "SELECT school_id FROM users WHERE id = $1",
+            "SELECT school_id, role FROM users WHERE id = $1",
             user_id
         )
         school_id = user_data.get("school_id") if user_data else None
+        user_role = user_data.get("role") if user_data else user.get("role", "")
 
-        if not school_id:
+        # Only students may derive school_id from enrollments;
+        # admin/super_admin intentionally have NULL school_id — don't try the fallback
+        if not school_id and user_role == "student":
             enrollment = await execute_one(
-                """SELECT c.school_id FROM enrollments e
+                """SELECT s.id AS school_id
+                   FROM enrollments e
                    JOIN classes c ON e.class_id = c.id
+                   JOIN branches b ON c.branch_id = b.id
+                   JOIN schools s ON b.school_id = s.id
                    WHERE e.student_id = $1 LIMIT 1""",
                 user_id
             )
@@ -323,33 +329,62 @@ async def list_conversations(
 
         # Query conversations where user is a participant
         offset = (page - 1) * page_size
-        conversations = await execute_query(
-            """SELECT
-                cc.id, cc.status, cc.last_message_at, cc.last_message_preview,
-                cc.participant_a_id, cc.participant_b_id,
-                (CASE
-                    WHEN cc.participant_a_id = $2 THEN cc.participant_b_id
-                    ELSE cc.participant_a_id
-                END) as other_user_id,
-                (CASE
-                    WHEN cc.participant_a_id = $2 THEN (SELECT full_name FROM users WHERE id = cc.participant_b_id)
-                    ELSE (SELECT full_name FROM users WHERE id = cc.participant_a_id)
-                END) as full_name,
-                (CASE
-                    WHEN cc.participant_a_id = $2 THEN (SELECT role FROM users WHERE id = cc.participant_b_id)
-                    ELSE (SELECT role FROM users WHERE id = cc.participant_a_id)
-                END) as other_user_role,
-                (SELECT COUNT(*) FROM chat_messages cm
-                 WHERE cm.conversation_id = cc.id
-                 AND cm.is_read = false
-                 AND cm.sender_id != $2) as unread_count
-               FROM chat_conversations cc
-               WHERE cc.school_id = $1
-               AND (cc.participant_a_id = $2 OR cc.participant_b_id = $2)
-               ORDER BY cc.last_message_at DESC NULLS LAST
-               LIMIT $3 OFFSET $4""",
-            school_id, user_id, page_size, offset
-        )
+        # Admin/super_admin have school_id=NULL — skip school filter so they see all their convos
+        if not school_id:
+            conversations = await execute_query(
+                """SELECT
+                    cc.id, cc.status, cc.last_message_at, cc.last_message_preview,
+                    cc.participant_a_id, cc.participant_b_id,
+                    (CASE
+                        WHEN cc.participant_a_id = $1 THEN cc.participant_b_id
+                        ELSE cc.participant_a_id
+                    END) as other_user_id,
+                    (CASE
+                        WHEN cc.participant_a_id = $1 THEN (SELECT full_name FROM users WHERE id = cc.participant_b_id)
+                        ELSE (SELECT full_name FROM users WHERE id = cc.participant_a_id)
+                    END) as full_name,
+                    (CASE
+                        WHEN cc.participant_a_id = $1 THEN (SELECT role FROM users WHERE id = cc.participant_b_id)
+                        ELSE (SELECT role FROM users WHERE id = cc.participant_a_id)
+                    END) as other_user_role,
+                    (SELECT COUNT(*) FROM chat_messages cm
+                     WHERE cm.conversation_id = cc.id
+                     AND cm.is_read = false
+                     AND cm.sender_id != $1) as unread_count
+                   FROM chat_conversations cc
+                   WHERE (cc.participant_a_id = $1 OR cc.participant_b_id = $1)
+                   ORDER BY cc.last_message_at DESC NULLS LAST
+                   LIMIT $2 OFFSET $3""",
+                user_id, page_size, offset
+            )
+        else:
+            conversations = await execute_query(
+                """SELECT
+                    cc.id, cc.status, cc.last_message_at, cc.last_message_preview,
+                    cc.participant_a_id, cc.participant_b_id,
+                    (CASE
+                        WHEN cc.participant_a_id = $2 THEN cc.participant_b_id
+                        ELSE cc.participant_a_id
+                    END) as other_user_id,
+                    (CASE
+                        WHEN cc.participant_a_id = $2 THEN (SELECT full_name FROM users WHERE id = cc.participant_b_id)
+                        ELSE (SELECT full_name FROM users WHERE id = cc.participant_a_id)
+                    END) as full_name,
+                    (CASE
+                        WHEN cc.participant_a_id = $2 THEN (SELECT role FROM users WHERE id = cc.participant_b_id)
+                        ELSE (SELECT role FROM users WHERE id = cc.participant_a_id)
+                    END) as other_user_role,
+                    (SELECT COUNT(*) FROM chat_messages cm
+                     WHERE cm.conversation_id = cc.id
+                     AND cm.is_read = false
+                     AND cm.sender_id != $2) as unread_count
+                   FROM chat_conversations cc
+                   WHERE cc.school_id = $1
+                   AND (cc.participant_a_id = $2 OR cc.participant_b_id = $2)
+                   ORDER BY cc.last_message_at DESC NULLS LAST
+                   LIMIT $3 OFFSET $4""",
+                school_id, user_id, page_size, offset
+            )
 
         # Convert to simple format
         result = [
@@ -391,26 +426,38 @@ async def create_conversation(
 
     # Fetch user's current school_id from database (ensures it's not NULL from stale JWT)
     user_data = await execute_one(
-        "SELECT school_id FROM users WHERE id = $1",
+        "SELECT school_id, role FROM users WHERE id = $1",
         user_id
     )
     school_id = user_data.get("school_id") if user_data else None
+    role = user_data.get("role", role) if user_data else role
     print(f"DEBUG [create_conversation]: User {user_id} has school_id from DB: {school_id}")
 
-    # If user doesn't have school_id, derive from their first enrollment
-    if not school_id:
-        print(f"DEBUG [create_conversation]: User has no school_id, checking enrollments...")
+    # If user doesn't have school_id and is a student, derive from enrollment
+    if not school_id and role == "student":
+        print(f"DEBUG [create_conversation]: Student has no school_id, checking enrollments...")
         enrollment = await execute_one(
-            """SELECT c.school_id FROM enrollments e
+            """SELECT s.id AS school_id
+               FROM enrollments e
                JOIN classes c ON e.class_id = c.id
+               JOIN branches b ON c.branch_id = b.id
+               JOIN schools s ON b.school_id = s.id
                WHERE e.student_id = $1 LIMIT 1""",
             user_id
         )
         if enrollment:
             school_id = enrollment.get("school_id")
             print(f"DEBUG [create_conversation]: Found enrollment with school_id: {school_id}")
-        else:
-            print(f"DEBUG [create_conversation]: No enrollments found for user {user_id}")
+
+    # If still no school_id (admin/super_admin), use recipient's school_id
+    if not school_id:
+        recipient_data = await execute_one(
+            "SELECT school_id FROM users WHERE id = $1",
+            recipient_id
+        )
+        if recipient_data:
+            school_id = recipient_data.get("school_id")
+            print(f"DEBUG [create_conversation]: Using recipient school_id: {school_id}")
 
     # Student-to-student block
     recipient = await execute_one("SELECT role FROM users WHERE id = $1", recipient_id)
@@ -445,7 +492,10 @@ async def create_conversation(
 
     # Create new conversation
     conv_id = str(uuid.uuid4())
-    status = "active"  # Automatically active for all new conversations
+    # Only student→teacher requires a request/accept step
+    recipient_role = recipient["role"]
+    needs_request = (role == "student" and recipient_role == "teacher")
+    status = "pending" if needs_request else "active"
 
     print(f"DEBUG [create_conversation]: Inserting conversation {conv_id} with school_id={school_id}, initiator={user_id}, recipient={recipient_id}")
     await execute_write(
@@ -975,22 +1025,154 @@ async def get_eligible_teachers(
 
     print(f"DEBUG: Getting eligible teachers for student {user_id} in school {school_id}")
 
-    # Get teachers from student's enrolled classes
-    # Use IS NOT DISTINCT FROM to properly handle NULL school_id
+    # Get teachers assigned to student's enrolled classes via teacher_class_subject_assignments
     teachers = await execute_query("""
         SELECT DISTINCT u.id, u.full_name, u.email,
                CASE WHEN u.accept_new_requests = false THEN true ELSE false END as busy,
                CASE WHEN u.is_online = true THEN 'online' ELSE 'offline' END as presence,
                u.last_seen_at
         FROM enrollments e
-        JOIN classes c ON e.class_id = c.id
-        JOIN users u ON c.teacher_id = u.id
-        WHERE e.student_id = $1 AND u.school_id IS NOT DISTINCT FROM $2
+        JOIN teacher_class_subject_assignments tcsa ON tcsa.class_id = e.class_id
+        JOIN users u ON u.id = tcsa.teacher_id
+        WHERE e.student_id = $1 AND e.is_active = true
         ORDER BY u.full_name
-    """, user_id, school_id)
+    """, user_id)
 
     print(f"DEBUG: Found {len(teachers)} teachers")
     return {"data": [dict(t) for t in teachers]}
+
+
+@router.get("/eligible-contacts")
+async def get_eligible_contacts(user: dict = Depends(get_user_from_token)):
+    """Return grouped suggested contacts based on the caller's role."""
+    user_id = user["user_id"]
+    role = user["role"]
+
+    user_data = await execute_one("SELECT school_id FROM users WHERE id = $1", user_id)
+    school_id = user_data.get("school_id") if user_data else None
+
+    groups = []
+
+    if role == "student":
+        rows = await execute_query("""
+            SELECT DISTINCT u.id, u.full_name, u.email, u.role,
+                   COALESCE(u.is_online, false) as is_online, u.last_seen_at
+            FROM enrollments e
+            JOIN teacher_class_subject_assignments tcsa ON tcsa.class_id = e.class_id
+            JOIN users u ON u.id = tcsa.teacher_id
+            WHERE e.student_id = $1 AND e.is_active = true
+            ORDER BY u.full_name
+        """, user_id)
+        if rows:
+            groups.append({"label": "Your Teachers", "members": [dict(r) for r in rows]})
+
+    elif role == "teacher":
+        # Students in teacher's classes
+        students = await execute_query("""
+            SELECT DISTINCT u.id, u.full_name, u.email, u.role,
+                   COALESCE(u.is_online, false) as is_online, u.last_seen_at
+            FROM teacher_class_subject_assignments tcsa
+            JOIN enrollments e ON e.class_id = tcsa.class_id AND e.is_active = true
+            JOIN users u ON u.id = e.student_id
+            WHERE tcsa.teacher_id = $1
+            ORDER BY u.full_name
+        """, user_id)
+        if students:
+            groups.append({"label": "Students", "members": [dict(r) for r in students]})
+
+        # Other teachers in same school
+        teachers = await execute_query("""
+            SELECT id, full_name, email, role,
+                   COALESCE(is_online, false) as is_online, last_seen_at
+            FROM users
+            WHERE school_id = $1 AND role = 'teacher' AND id != $2 AND is_active = true
+            ORDER BY full_name
+        """, school_id, user_id)
+        if teachers:
+            groups.append({"label": "Teachers", "members": [dict(r) for r in teachers]})
+
+        # Managers of the school
+        managers = await execute_query("""
+            SELECT id, full_name, email, role,
+                   COALESCE(is_online, false) as is_online, last_seen_at
+            FROM users
+            WHERE school_id = $1 AND role = 'manager' AND is_active = true
+            ORDER BY full_name
+        """, school_id)
+        if managers:
+            groups.append({"label": "Managers", "members": [dict(r) for r in managers]})
+
+    elif role == "manager":
+        # Super admins (school_id is NULL for super_admins)
+        super_admins = await execute_query("""
+            SELECT id, full_name, email, role,
+                   COALESCE(is_online, false) as is_online, last_seen_at
+            FROM users
+            WHERE role = 'super_admin' AND is_active = true
+            ORDER BY full_name
+        """)
+        if super_admins:
+            groups.append({"label": "Super Admins", "members": [dict(r) for r in super_admins]})
+
+        # Admins (may have NULL school_id — they are school-wide admins)
+        admins = await execute_query("""
+            SELECT id, full_name, email, role,
+                   COALESCE(is_online, false) as is_online, last_seen_at
+            FROM users
+            WHERE role = 'admin' AND (school_id = $1 OR school_id IS NULL) AND is_active = true
+            ORDER BY full_name
+        """, school_id)
+        if admins:
+            groups.append({"label": "Admins", "members": [dict(r) for r in admins]})
+
+        # Teachers in the school
+        teachers = await execute_query("""
+            SELECT id, full_name, email, role,
+                   COALESCE(is_online, false) as is_online, last_seen_at
+            FROM users
+            WHERE school_id = $1 AND role = 'teacher' AND is_active = true
+            ORDER BY full_name
+        """, school_id)
+        if teachers:
+            groups.append({"label": "Teachers", "members": [dict(r) for r in teachers]})
+
+    elif role == "admin":
+        # Super admins
+        super_admins = await execute_query("""
+            SELECT id, full_name, email, role,
+                   COALESCE(is_online, false) as is_online, last_seen_at
+            FROM users
+            WHERE role = 'super_admin' AND is_active = true
+            ORDER BY full_name
+        """)
+        if super_admins:
+            groups.append({"label": "Super Admins", "members": [dict(r) for r in super_admins]})
+
+        # Managers in the school
+        managers = await execute_query("""
+            SELECT id, full_name, email, role,
+                   COALESCE(is_online, false) as is_online, last_seen_at
+            FROM users
+            WHERE school_id = $1 AND role = 'manager' AND is_active = true
+            ORDER BY full_name
+        """, school_id)
+        if managers:
+            groups.append({"label": "Managers", "members": [dict(r) for r in managers]})
+
+    elif role == "super_admin":
+        # All admins
+        admins = await execute_query("""
+            SELECT id, full_name, email, role,
+                   COALESCE(is_online, false) as is_online, last_seen_at
+            FROM users
+            WHERE role = 'admin' AND is_active = true
+            ORDER BY full_name
+        """)
+        if admins:
+            groups.append({"label": "Admins", "members": [dict(r) for r in admins]})
+
+    return {"groups": groups}
+
 
 @router.post("/announcements")
 async def create_announcement(

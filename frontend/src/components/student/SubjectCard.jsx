@@ -1,4 +1,3 @@
-import { Link } from "react-router-dom";
 import clsx from "clsx";
 
 /**
@@ -21,10 +20,7 @@ export default function SubjectCard({ subject }) {
   };
 
   return (
-    <Link
-      to={`/student/subject/${subject_id}`}
-      className="block bg-white rounded-2xl shadow-sm border border-gray-200 p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
-    >
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
       {/* Scores row — intentionally BEFORE the subject name per business requirement */}
       <div className="flex items-center gap-6 mb-3">
         <div className="text-center">
@@ -56,6 +52,6 @@ export default function SubjectCard({ subject }) {
       {description && (
         <p className="text-xs text-gray-500 mt-1 line-clamp-2">{description}</p>
       )}
-    </Link>
+    </div>
   );
 }

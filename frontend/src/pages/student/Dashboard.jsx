@@ -165,22 +165,24 @@ export default function StudentDashboard() {
           <table className="min-w-full text-sm">
             <thead>
               <tr className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
-                <th className="text-left px-4 py-3">Course Name</th>
-                <th className="text-left px-4 py-3">Teacher Name</th>
-                <th className="text-left px-4 py-3">Type</th>
+                <th className="text-left px-4 py-3">Subject</th>
+                <th className="text-left px-4 py-3">Book</th>
+                <th className="text-left px-4 py-3">Teacher</th>
+                <th className="text-left px-4 py-3">Class</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {(attendanceSummary?.courses || []).map((c) => (
-                <tr key={c.class_id}>
-                  <td className="px-4 py-3 font-medium text-gray-900">{c.class_name}</td>
+              {(attendanceSummary?.courses || []).map((c, i) => (
+                <tr key={`${c.class_id}-${c.subject_name}-${i}`}>
+                  <td className="px-4 py-3 font-medium text-gray-900">{c.subject_name || c.class_name}</td>
+                  <td className="px-4 py-3 text-gray-700">{c.book_title || '—'}</td>
                   <td className="px-4 py-3 text-gray-800">{c.teacher_name}</td>
-                  <td className="px-4 py-3 text-gray-700">{c.teaching_type}</td>
+                  <td className="px-4 py-3 text-gray-600 text-xs">{c.class_name}</td>
                 </tr>
               ))}
               {(attendanceSummary?.courses || []).length === 0 && (
                 <tr>
-                  <td className="px-4 py-6 text-center text-gray-400" colSpan={3}>
+                  <td className="px-4 py-6 text-center text-gray-400" colSpan={4}>
                     No enrolled classes found.
                   </td>
                 </tr>
@@ -201,6 +203,7 @@ export default function StudentDashboard() {
             <thead>
               <tr className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
                 <th className="text-left px-4 py-3">Teacher Name</th>
+                <th className="text-left px-4 py-3">Subject</th>
                 <th className="text-left px-4 py-3">T/L</th>
                 <th className="text-left px-4 py-3">P</th>
                 <th className="text-left px-4 py-3">A</th>
@@ -208,9 +211,10 @@ export default function StudentDashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {(attendanceSummary?.courses || []).map((c) => (
-                <tr key={`${c.class_id}-attendance`}>
+              {(attendanceSummary?.courses || []).map((c, i) => (
+                <tr key={`${c.class_id}-${c.subject_name}-att-${i}`}>
                   <td className="px-4 py-3 font-medium text-gray-900">{c.teacher_name}</td>
+                  <td className="px-4 py-3 text-gray-700">{c.subject_name || '—'}</td>
                   <td className="px-4 py-3 text-gray-700">{c.teaching_type}</td>
                   <td className="px-4 py-3 text-gray-700">{c.present_days}</td>
                   <td className="px-4 py-3 text-gray-700">{c.absent_days}</td>
@@ -221,7 +225,7 @@ export default function StudentDashboard() {
               ))}
               {(attendanceSummary?.courses || []).length === 0 && (
                 <tr>
-                  <td className="px-4 py-6 text-center text-gray-400" colSpan={5}>
+                  <td className="px-4 py-6 text-center text-gray-400" colSpan={6}>
                     Attendance has not been marked yet.
                   </td>
                 </tr>

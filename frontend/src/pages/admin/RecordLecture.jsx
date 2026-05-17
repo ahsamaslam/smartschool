@@ -16,6 +16,7 @@ import {
   TrashIcon,
 } from "@heroicons/react/24/outline";
 import libraryService from "../../services/libraryService";
+import teacherService from "../../services/teacherService";
 import { SlideThumbnail } from "../../components/slides/SlideThumbnail";
 import { SLIDE_TEMPLATES, SLIDE_ANIMATIONS } from "../../data/slideTemplates";
 import { SlideRenderer } from "../../components/slides/SlideRenderer";
@@ -182,10 +183,12 @@ export default function AdminRecordLecture() {
     (async () => {
       setLoading(true);
       try {
-        const res = await libraryService.getTopic(topicKey, { timeout: 20000 });
+        const res = await teacherService.getMyTopicContent(topicKey);
         const rowRaw = res.data?.data ?? res.data;
         const row =
-          rowRaw && typeof rowRaw === "object" && !Array.isArray(rowRaw) ? rowRaw : null;
+          rowRaw && typeof rowRaw === "object" && !Array.isArray(rowRaw)
+            ? { ...rowRaw, id: rowRaw.library_topic_id || rowRaw.id }
+            : null;
         if (!cancel) {
           setTopicRow(row?.id ? row : null);
           if (row?.slide_theme) {
@@ -922,10 +925,10 @@ export default function AdminRecordLecture() {
       fd.append("slide_timestamps_json", JSON.stringify(slideTimestamps || []));
       fd.append("transcript", "");
       fd.append("captions_json", JSON.stringify([]));
-      const res = await libraryService.uploadTopicLecture(topicRow.id, fd);
+      const res = await teacherService.uploadMyTopicLecture(topicRow.id, fd);
       const row = res?.data?.data ?? res?.data;
-      if (row?.id) setTopicRow(row);
-      toast.success("Lecture saved. It will appear on Recorded lectures once you refresh that page.");
+      if (row?.id) setTopicRow((prev) => ({ ...prev, ...row, id: row.library_topic_id || row.id }));
+      toast.success("Lecture saved. It will appear on Recorded Lectures once you refresh that page.");
     } catch (e) {
       const msg = formatFastApiDetail(e?.response?.data?.detail, "Failed to save lecture.");
       setSaveError(msg);
@@ -940,9 +943,9 @@ export default function AdminRecordLecture() {
     if (!window.confirm("Delete recorded lecture for this topic?")) return;
     setDeletingLecture(true);
     try {
-      const res = await libraryService.deleteTopicLecture(topicRow.id);
+      const res = await teacherService.deleteMyTopicLecture(topicRow.id);
       const row = res?.data?.data ?? res?.data;
-      if (row?.id) setTopicRow(row);
+      if (row?.id) setTopicRow((prev) => ({ ...prev, ...row, id: row.library_topic_id || row.id }));
       toast.success("Lecture deleted.");
     } catch (e) {
       toast.error(formatFastApiDetail(e?.response?.data?.detail, "Failed to delete lecture."));

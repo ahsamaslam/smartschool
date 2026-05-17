@@ -58,6 +58,7 @@ const chatService = {
 
   // Teachers / Members
   getEligibleTeachers: () => api.get(`${API_ROUTES.CHAT}/eligible-teachers`),
+  getEligibleContacts: () => api.get(`${API_ROUTES.CHAT}/eligible-contacts`),
 
   searchSchoolMembers: (query = "") =>
     api.get(`${API_ROUTES.CHAT}/school-members`, { params: { q: query } }),

@@ -16,35 +16,41 @@ router = APIRouter()
 
 async def _attendance_graph_for_student(student_id: str, courses: List[dict]) -> List[dict]:
     """
-    Prefer one bar per curriculum subject on the student's enrolled sections.
-    Attendance % is still the section (class) aggregate — each subject row inherits its class %.
-    Falls back to one bar per enrolled class when no subject links exist.
+    One bar per curriculum subject. Attendance % is per-subject: only records
+    marked by that subject's assigned teacher count toward that subject's bar.
+    Falls back to class-level % when no curriculum subject links exist.
     """
-    pct_by_class = {str(c["class_id"]): float(c.get("attendance_percent") or 0) for c in courses}
-
+    # Per-subject attendance: join through teacher_class_subject_assignments so
+    # only the subject's teacher's records count for each subject bar.
     section_sql = """
-        SELECT DISTINCT
+        SELECT
             s.id AS subject_id,
             s.name AS subject_name,
             c.id AS class_id,
-            c.name AS class_name
+            c.name AS class_name,
+            COALESCE(att.total_days, 0) AS total_days,
+            COALESCE(att.present_days, 0) AS present_days,
+            CASE
+                WHEN COALESCE(att.total_days, 0) = 0 THEN 0.0
+                ELSE ROUND(
+                    100.0 * COALESCE(att.present_days, 0) /
+                    NULLIF(COALESCE(att.total_days, 0), 0), 2
+                )
+            END AS attendance_percent
         FROM enrollments e
         JOIN classes c ON c.id = e.class_id
         JOIN section_subjects ss ON ss.class_id = c.id
         JOIN library_subjects s ON s.id = ss.subject_id
-        WHERE e.student_id = $1::uuid AND e.is_active = true
-        ORDER BY c.name, s.name
-    """
-    legacy_sql = """
-        SELECT DISTINCT
-            s.id AS subject_id,
-            s.name AS subject_name,
-            c.id AS class_id,
-            c.name AS class_name
-        FROM enrollments e
-        JOIN classes c ON c.id = e.class_id
-        JOIN class_subjects cs ON cs.class_id = c.id
-        JOIN subjects s ON s.id = cs.subject_id
+        LEFT JOIN teacher_class_subject_assignments tcsa
+            ON tcsa.class_id = c.id AND tcsa.library_subject_id = s.id
+        LEFT JOIN (
+            SELECT class_id, marked_by,
+                   COUNT(*) AS total_days,
+                   SUM(CASE WHEN is_present THEN 1 ELSE 0 END) AS present_days
+            FROM attendance
+            WHERE student_id = $1::uuid
+            GROUP BY class_id, marked_by
+        ) att ON att.class_id = c.id AND att.marked_by = tcsa.teacher_id
         WHERE e.student_id = $1::uuid AND e.is_active = true
         ORDER BY c.name, s.name
     """
@@ -54,18 +60,15 @@ async def _attendance_graph_for_student(student_id: str, courses: List[dict]) ->
         subject_rows = await execute_query(section_sql, student_id)
     except Exception:
         subject_rows = []
-    if not subject_rows:
-        try:
-            subject_rows = await execute_query(legacy_sql, student_id)
-        except Exception:
-            subject_rows = []
 
     if not subject_rows:
+        # Fallback: one bar per enrolled class using the class-level aggregate
+        pct_by_class = {str(c["class_id"]): float(c.get("attendance_percent") or 0) for c in courses}
         return [
             {
                 "course": str(c.get("class_name") or "Class"),
                 "full_label": str(c.get("class_name") or "Class"),
-                "attendance_percent": float(c.get("attendance_percent") or 0),
+                "attendance_percent": pct_by_class.get(str(c.get("class_id")), 0.0),
             }
             for c in courses
         ]
@@ -82,7 +85,7 @@ async def _attendance_graph_for_student(student_id: str, courses: List[dict]) ->
         c_id = str(r.get("class_id"))
         sname = (r.get("subject_name") or "").strip() or "Subject"
         cname = (r.get("class_name") or "").strip() or "Section"
-        pct = pct_by_class.get(c_id, 0.0)
+        pct = float(r.get("attendance_percent") or 0)
         if name_counts.get(sname, 0) > 1:
             short = f"{sname[:18]}{'…' if len(sname) > 18 else ''} · {cname[:14]}{'…' if len(cname) > 14 else ''}"
             full = f"{sname} — {cname}"
@@ -146,58 +149,64 @@ class VideoEventRequest(BaseModel):
 @router.get("/dashboard/{student_id}")
 async def get_student_dashboard(student_id: str):
     """
-    Get student dashboard with subjects and performance summary
+    Get student dashboard with subjects and performance summary.
+    Uses new curriculum tables (section_subjects + library_subjects) with
+    a fallback to legacy (class_subjects + subjects).
     """
-    
-    # Get enrolled classes and subjects
-    query = """
+    # New curriculum schema: section_subjects → library_subjects
+    new_query = """
         SELECT DISTINCT
-            s.id as subject_id,
-            s.name as subject_name,
-            s.description,
-            cs.class_id,
-            c.name as class_name
+            ls.id AS subject_id,
+            ls.name AS subject_name,
+            ls.description,
+            c.id AS class_id,
+            c.name AS class_name
         FROM enrollments e
-        JOIN classes c ON e.class_id = c.id
-        JOIN class_subjects cs ON c.id = cs.class_id
-        JOIN subjects s ON cs.subject_id = s.id
+        JOIN classes c ON c.id = e.class_id
+        JOIN section_subjects ss ON ss.class_id = c.id
+        JOIN library_subjects ls ON ls.id = ss.subject_id
+        WHERE e.student_id = $1::uuid AND e.is_active = true
+        ORDER BY ls.name
+    """
+    # Legacy schema fallback
+    legacy_query = """
+        SELECT DISTINCT
+            s.id AS subject_id,
+            s.name AS subject_name,
+            s.description,
+            c.id AS class_id,
+            c.name AS class_name
+        FROM enrollments e
+        JOIN classes c ON c.id = e.class_id
+        JOIN class_subjects cs ON cs.class_id = c.id
+        JOIN subjects s ON s.id = cs.subject_id
         WHERE e.student_id = $1 AND e.is_active = true
         ORDER BY s.name
     """
-    
-    subjects = await execute_query(query, student_id)
-    
-    # Get performance summary for each subject
+
+    subjects = []
+    try:
+        subjects = await execute_query(new_query, student_id)
+    except Exception:
+        subjects = []
+    if not subjects:
+        try:
+            subjects = await execute_query(legacy_query, student_id)
+        except Exception:
+            subjects = []
+
     result = []
     for subject in subjects:
-        # Get latest quiz score and average
-        quiz_query = """
-            SELECT 
-                MAX(qa.score) as highest_score,
-                AVG(qa.score) as average_score,
-                COUNT(*) as attempt_count
-            FROM quiz_attempts qa
-            JOIN quiz_instances qi ON qa.quiz_instance_id = qi.id
-            JOIN published_videos pv ON qi.published_video_id = pv.id
-            JOIN video_templates vt ON pv.video_template_id = vt.id
-            JOIN topics t ON vt.topic_id = t.id
-            WHERE qa.student_id = $1 
-                AND t.subject_id = $2
-                AND qa.is_completed = true
-        """
-        
-        quiz_stats = await execute_one(quiz_query, student_id, subject["subject_id"])
-        
         result.append({
             "subject_id": str(subject["subject_id"]),
             "subject_name": subject["subject_name"],
-            "description": subject["description"],
+            "description": subject.get("description") or "",
             "class_name": subject["class_name"],
-            "highest_score": float(quiz_stats["highest_score"] or 0),
-            "average_score": float(quiz_stats["average_score"] or 0),
-            "total_attempts": quiz_stats["attempt_count"] or 0
+            "highest_score": 0.0,
+            "average_score": 0.0,
+            "total_attempts": 0,
         })
-    
+
     return {
         "student_id": student_id,
         "subjects": result
@@ -220,11 +229,15 @@ async def get_student_attendance_summary(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     await ensure_attendance_schema()
+    # One row per (class, subject-teacher assignment). Attendance % is per-subject:
+    # only records marked by that subject's assigned teacher count for that row.
     query = """
         SELECT
             c.id AS class_id,
             c.name AS class_name,
-            COALESCE(t.full_name, 'Unassigned') AS teacher_name,
+            COALESCE(u.full_name, 'Unassigned') AS teacher_name,
+            COALESCE(ls.name, '') AS subject_name,
+            COALESCE(lb.title, '') AS book_title,
             CASE
                 WHEN LOWER(c.name) LIKE '%lab%' THEN 'Lab'
                 WHEN LOWER(c.name) LIKE '%thesis%' THEN 'Thesis'
@@ -233,14 +246,17 @@ async def get_student_attendance_summary(
             COALESCE(att.present_days, 0) AS present_days,
             COALESCE(att.absent_days, 0) AS absent_days,
             COALESCE(att.total_days, 0) AS total_days,
-            COALESCE(att.attendance_percent, 0) AS attendance_percent
+            COALESCE(att.attendance_percent, 0.0) AS attendance_percent
         FROM enrollments e
         JOIN classes c ON c.id = e.class_id
-        LEFT JOIN users t ON t.id = c.teacher_id
+        LEFT JOIN teacher_class_subject_assignments tcsa ON tcsa.class_id = c.id
+        LEFT JOIN users u ON u.id = tcsa.teacher_id
+        LEFT JOIN library_subjects ls ON ls.id = tcsa.library_subject_id
+        LEFT JOIN library_books lb ON lb.id = tcsa.library_book_id
         LEFT JOIN (
             SELECT
-                student_id,
                 class_id,
+                marked_by,
                 COUNT(*) AS total_days,
                 SUM(CASE WHEN is_present THEN 1 ELSE 0 END) AS present_days,
                 SUM(CASE WHEN is_present THEN 0 ELSE 1 END) AS absent_days,
@@ -250,18 +266,27 @@ async def get_student_attendance_summary(
                 ) AS attendance_percent
             FROM attendance
             WHERE student_id = $1::uuid
-            GROUP BY student_id, class_id
-        ) att ON att.class_id = c.id
+            GROUP BY class_id, marked_by
+        ) att ON att.class_id = c.id AND att.marked_by = tcsa.teacher_id
         WHERE e.student_id = $1::uuid
           AND e.is_active = true
-        ORDER BY c.name
+        ORDER BY c.name, ls.name
     """
 
     rows = await execute_query(query, student_id)
     courses = [dict(r) for r in rows]
     graph = await _attendance_graph_for_student(student_id, courses)
-    overall_total = sum(int(c["total_days"] or 0) for c in courses)
-    overall_present = sum(int(c["present_days"] or 0) for c in courses)
+
+    # Overall totals: count distinct (student, class, date) records to avoid double-counting
+    overall_row = await execute_one("""
+        SELECT
+            COUNT(*) AS total_days,
+            SUM(CASE WHEN is_present THEN 1 ELSE 0 END) AS present_days
+        FROM attendance
+        WHERE student_id = $1::uuid
+    """, student_id)
+    overall_total = int(overall_row["total_days"] or 0) if overall_row else 0
+    overall_present = int(overall_row["present_days"] or 0) if overall_row else 0
     overall_percent = round((overall_present * 100.0 / overall_total), 2) if overall_total else 0.0
 
     return {
@@ -517,7 +542,7 @@ async def get_student_profile(student_id: str):
 async def get_student_enrollment(student_id: str):
     """Return the student's active enrollment details: school, branch, class, subjects, teachers."""
     enrollment = await execute_one(
-        """SELECT e.id, e.created_at as enrolled_at,
+        """SELECT e.id, e.enrolled_at,
                   c.id as class_id, c.name as class_name, c.grade_level, c.section,
                   b.id as branch_id, b.name as branch_name, b.city,
                   s.id as school_id, s.name as school_name, s.address as school_address,
@@ -528,7 +553,7 @@ async def get_student_enrollment(student_id: str):
            JOIN schools s ON s.id = b.school_id
            LEFT JOIN users teacher ON teacher.id = c.teacher_id
            WHERE e.student_id = $1 AND e.is_active = true
-           ORDER BY e.created_at DESC
+           ORDER BY e.enrolled_at DESC
            LIMIT 1""",
         student_id,
     )
@@ -537,13 +562,13 @@ async def get_student_enrollment(student_id: str):
 
     # Subject assignments for the class
     subjects = await execute_query(
-        """SELECT ls.id, ls.name as subject_name, lb.title as book_title,
-                  u.full_name as teacher_name
+        """SELECT DISTINCT ls.id, ls.name as subject_name,
+                  lb.title as book_title, u.full_name as teacher_name
            FROM section_subjects ss
-           JOIN library_subjects ls ON ls.id = ss.library_subject_id
-           LEFT JOIN section_books sb ON sb.class_id = ss.class_id AND sb.library_subject_id = ss.library_subject_id
-           LEFT JOIN library_books lb ON lb.id = sb.library_book_id
-           LEFT JOIN teacher_class_subject_assignments tsa ON tsa.class_id = ss.class_id AND tsa.library_subject_id = ss.library_subject_id
+           JOIN library_subjects ls ON ls.id = ss.subject_id
+           LEFT JOIN teacher_class_subject_assignments tsa
+               ON tsa.class_id = ss.class_id AND tsa.library_subject_id = ss.subject_id
+           LEFT JOIN library_books lb ON lb.id = tsa.library_book_id
            LEFT JOIN users u ON u.id = tsa.teacher_id
            WHERE ss.class_id = $1
            ORDER BY ls.name""",

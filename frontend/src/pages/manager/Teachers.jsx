@@ -36,7 +36,7 @@ const Modal = ({ isOpen, onClose, title, children }) => {
   );
 };
 
-// â”€â”€ Manual Add Form Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Manual Add Form Modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function AddTeacherModal({ isOpen, onClose, onSuccess, classes }) {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
@@ -151,7 +151,7 @@ function AddTeacherModal({ isOpen, onClose, onSuccess, classes }) {
               onChange={handleChange}
               className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="">â€” Select Branch â€”</option>
+              <option value="">- Select Branch -</option>
               {(() => {
                 const branches = {};
                 classes?.forEach((c) => {
@@ -309,65 +309,115 @@ function AddTeacherModal({ isOpen, onClose, onSuccess, classes }) {
   );
 }
 
-// â”€â”€ Edit Teacher Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function EditTeacherModal({
-  isOpen,
-  onClose,
-  onSuccess,
-  teacher,
-  branches = [],
-}) {
+// â"€â"€ Edit Teacher Modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+function EditTeacherModal({ isOpen, onClose, onSuccess, teacher, branches = [], classes = [] }) {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
-    full_name: "",
-    email: "",
-    password: "",
-    branch_id: "",
-    designation: "",
-    contact: "",
-    emergency_contact: "",
-    employment_status: "active",
-    date_of_joining: "",
-    qualifications: "",
-    experience_years: "",
-    languages: "",
+    full_name: "", email: "", password: "", branch_id: "", designation: "",
+    contact: "", emergency_contact: "", employment_status: "active",
+    date_of_joining: "", qualifications: "", experience_years: "", languages: "",
   });
+  const [assignmentRows, setAssignmentRows] = useState([{ branch_id: "", class_id: "", board_id: "", subject_id: "", book_id: "" }]);
+  const [examScopeByClass, setExamScopeByClass] = useState({});
+  const scopeCache = useRef({});
+
+  const emptyRow = () => ({ branch_id: "", class_id: "", board_id: "", subject_id: "", book_id: "" });
 
   useEffect(() => {
-    if (teacher) {
-      setForm({
-        full_name: teacher.full_name || "",
-        email: teacher.email || "",
-        password: "",
-        branch_id: teacher.branch_id || "",
-        designation: teacher.designation || "",
-        contact: teacher.contact || "",
-        emergency_contact: teacher.emergency_contact || "",
-        employment_status: teacher.employment_status || "active",
-        date_of_joining: teacher.date_of_joining || "",
-        qualifications: teacher.qualifications || "",
-        experience_years: teacher.experience_years || "",
-        languages: teacher.languages || "",
-      });
-    }
-  }, [teacher, isOpen]);
+    if (!isOpen || !teacher) return;
+    setForm({
+      full_name: teacher.full_name || "", email: teacher.email || "", password: "",
+      branch_id: teacher.branch_id || "", designation: teacher.designation || "",
+      contact: teacher.contact || "", emergency_contact: teacher.emergency_contact || "",
+      employment_status: teacher.employment_status || "active",
+      date_of_joining: teacher.date_of_joining || "", qualifications: teacher.qualifications || "",
+      experience_years: teacher.experience_years || "", languages: teacher.languages || "",
+    });
+    setExamScopeByClass({});
+    scopeCache.current = {};
+    managerService.getTeacherAssignments(teacher.id).then((res) => {
+      const cur = res.data?.curriculum_assignments || [];
+      const cls = res.data?.class_assignments || [];
+      if (cur.length) {
+        setAssignmentRows(cur.map((r) => ({
+          branch_id: r.branch_id ? String(r.branch_id) : "",
+          class_id: r.class_id ? String(r.class_id) : "",
+          board_id: r.library_board_id ? String(r.library_board_id) : "",
+          subject_id: r.library_subject_id ? String(r.library_subject_id) : "",
+          book_id: r.library_book_id ? String(r.library_book_id) : "",
+        })));
+      } else if (cls.length) {
+        setAssignmentRows(cls.map((r) => ({
+          branch_id: r.branch_id ? String(r.branch_id) : "",
+          class_id: String(r.class_id), board_id: "", subject_id: "", book_id: "",
+        })));
+      } else {
+        setAssignmentRows([emptyRow()]);
+      }
+    }).catch(() => setAssignmentRows([emptyRow()]));
+  }, [isOpen, teacher]);
 
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setForm((f) => ({ ...f, [name]: value }));
+  const allBranches = [...new Map(
+    (branches.length ? branches : classes.filter((c) => c.branch_id).map((c) => ({ id: c.branch_id, name: c.branch_name })))
+      .map((b) => [b.id, b])
+  ).values()];
+  const classesForBranch = (branchId) => branchId ? classes.filter((c) => String(c.branch_id) === String(branchId)) : [];
+
+  const fetchScope = async (classId) => {
+    if (!classId) return;
+    if (scopeCache.current[classId]) {
+      setExamScopeByClass((p) => ({ ...p, [classId]: scopeCache.current[classId] }));
+      return;
+    }
+    try {
+      const { default: api } = await import("../../services/api");
+      const { data } = await api.get(`/exams/class/${classId}/exam-scope`);
+      scopeCache.current[classId] = data;
+      setExamScopeByClass((p) => ({ ...p, [classId]: data }));
+    } catch { /* no curriculum yet */ }
   };
+
+  const updateRow = (i, patch) => setAssignmentRows((prev) => prev.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  const setRowBranch = (i, v) => updateRow(i, { branch_id: v, class_id: "", board_id: "", subject_id: "", book_id: "" });
+  const setRowClass = (i, v) => { updateRow(i, { class_id: v, board_id: "", subject_id: "", book_id: "" }); if (v) fetchScope(v); };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    assignmentRows.forEach((r) => { if (r.class_id) fetchScope(r.class_id); });
+  }, [isOpen]);
+
+  const handleChange = (e) => { const { name, value } = e.target; setForm((f) => ({ ...f, [name]: value })); };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.full_name.trim()) return toast.error("Name is required.");
     if (!form.email.trim()) return toast.error("Email is required.");
 
+    const incomplete = assignmentRows.some((r) => {
+      if (!r.branch_id && !r.class_id) return false;
+      if (!r.class_id) return true;
+      return (r.board_id || r.subject_id || r.book_id) && !(r.subject_id && r.book_id);
+    });
+    if (incomplete) { toast.error("Each assignment needs a class. If selecting curriculum, subject and book are required."); return; }
+
     setSaving(true);
     try {
       const updateData = { ...form };
       if (!updateData.password) delete updateData.password;
-
       await managerService.updateTeacher(teacher.id, updateData);
+
+      const curriculumRows = assignmentRows.filter((r) => r.class_id && r.subject_id && r.book_id).map((r) => ({
+        class_id: r.class_id, branch_id: r.branch_id || null,
+        library_board_id: r.board_id || null, library_subject_id: r.subject_id, library_book_id: r.book_id,
+      }));
+      const assignedClasses = [...new Set(assignmentRows.filter((r) => r.class_id).map((r) => r.class_id))];
+      if (assignedClasses.length || curriculumRows.length) {
+        await managerService.saveTeacherAssignments(teacher.id, {
+          teacher_curriculum_assignments: curriculumRows,
+          assigned_classes: assignedClasses,
+        });
+      }
+
       toast.success("Teacher updated successfully!");
       onClose();
       onSuccess();
@@ -378,206 +428,221 @@ function EditTeacherModal({
     }
   };
 
+  const formatClass = (c) => {
+    const parts = [];
+    if (c.name) parts.push(c.name);
+    if (c.grade_level != null && c.grade_level !== "") parts.push(`Grade ${c.grade_level}`);
+    if (c.section) parts.push(`Sec ${c.section}`);
+    return parts.join(" · ") || "Class";
+  };
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Edit Teacher">
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Full Name *
-            </label>
-            <input
-              type="text"
-              name="full_name"
-              value={form.full_name}
-              onChange={handleChange}
-              required
+            <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
+            <input type="text" name="full_name" value={form.full_name} onChange={handleChange} required
               placeholder="Teacher's full name"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Email *
-            </label>
-            <input
-              type="email"
-              name="email"
-              value={form.email}
-              onChange={handleChange}
-              required
+            <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+            <input type="email" name="email" value={form.email} onChange={handleChange} required
               placeholder="teacher@school.com"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Branch
-            </label>
-            <select
-              name="branch_id"
-              value={form.branch_id}
-              onChange={handleChange}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">â€” Select Branch â€”</option>
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
+            <label className="block text-sm font-medium text-gray-700 mb-1">Branch</label>
+            <select name="branch_id" value={form.branch_id} onChange={handleChange}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">- Select Branch -</option>
+              {allBranches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Password (leave empty to keep current)
-            </label>
-            <input
-              type="password"
-              name="password"
-              value={form.password}
-              onChange={handleChange}
+            <label className="block text-sm font-medium text-gray-700 mb-1">Password (leave empty to keep current)</label>
+            <input type="password" name="password" value={form.password} onChange={handleChange}
               placeholder="Set a new password (optional)"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Designation
-            </label>
-            <input
-              type="text"
-              name="designation"
-              value={form.designation}
-              onChange={handleChange}
-              placeholder="e.g., Senior Teacher"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Contact
-            </label>
-            <input
-              type="tel"
-              name="contact"
-              value={form.contact}
-              onChange={handleChange}
-              placeholder="Phone number"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <label className="block text-sm font-medium text-gray-700 mb-1">Designation</label>
+            <select name="designation" value={form.designation} onChange={handleChange}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">- Select -</option>
+              <option value="pre_school_teacher">Pre-School Teacher</option>
+              <option value="junior_school_teacher">Junior School Teacher</option>
+              <option value="middle_school_teacher">Middle School Teacher</option>
+              <option value="senior_school_teacher">Senior School Teacher</option>
+              <option value="o_level_faculty">O-Level Faculty</option>
+              <option value="a_level_faculty">A-Level Faculty</option>
+              <option value="coordinator">Coordinator</option>
+              <option value="academic_head">Academic Head</option>
+            </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Emergency Contact
-            </label>
-            <input
-              type="tel"
-              name="emergency_contact"
-              value={form.emergency_contact}
-              onChange={handleChange}
-              placeholder="Emergency contact"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Employment Status
-            </label>
-            <select
-              name="employment_status"
-              value={form.employment_status}
-              onChange={handleChange}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
+            <label className="block text-sm font-medium text-gray-700 mb-1">Employment Status</label>
+            <select name="employment_status" value={form.employment_status} onChange={handleChange}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="active">Active</option>
               <option value="on_leave">On Leave</option>
-              <option value="inactive">Inactive</option>
+              <option value="resigned">Resigned</option>
             </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Date of Joining
-            </label>
-            <input
-              type="date"
-              name="date_of_joining"
-              value={form.date_of_joining}
-              onChange={handleChange}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Qualifications
-            </label>
-            <input
-              type="text"
-              name="qualifications"
-              value={form.qualifications}
-              onChange={handleChange}
-              placeholder="e.g., B.Ed, M.A"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <label className="block text-sm font-medium text-gray-700 mb-1">Contact</label>
+            <input type="tel" name="contact" value={form.contact} onChange={handleChange}
+              placeholder="Phone number"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Experience (Years)
-            </label>
-            <input
-              type="number"
-              name="experience_years"
-              value={form.experience_years}
-              onChange={handleChange}
-              placeholder="Years of experience"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <label className="block text-sm font-medium text-gray-700 mb-1">Emergency Contact</label>
+            <input type="tel" name="emergency_contact" value={form.emergency_contact} onChange={handleChange}
+              placeholder="Emergency contact"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Languages
-          </label>
-          <input
-            type="text"
-            name="languages"
-            value={form.languages}
-            onChange={handleChange}
-            placeholder="e.g., English, Urdu, Pashto"
-            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Date of Joining</label>
+            <input type="date" name="date_of_joining" value={form.date_of_joining} onChange={handleChange}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Experience (Years)</label>
+            <input type="number" name="experience_years" value={form.experience_years} onChange={handleChange}
+              placeholder="Years of experience"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
         </div>
 
-        <div className="flex gap-3 pt-4">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            className="flex-1 py-2 rounded-lg bg-gray-100 text-gray-700 text-sm font-semibold hover:bg-gray-200"
-          >
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Qualifications</label>
+            <input type="text" name="qualifications" value={form.qualifications} onChange={handleChange}
+              placeholder="e.g., B.Ed, M.A"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Languages</label>
+            <input type="text" name="languages" value={form.languages} onChange={handleChange}
+              placeholder="e.g., English, Urdu"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+        </div>
+
+        {/* Teaching Assignments */}
+        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4 space-y-4">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Teaching assignments</p>
+            <p className="text-xs text-gray-500 mt-1">
+              Optional — assign later once curriculum is set up. For each row: choose{" "}
+              <strong>branch</strong> → <strong>class/section</strong> → <strong>board</strong> →{" "}
+              <strong>subject</strong> → <strong>book</strong>. One subject per row.
+            </p>
+          </div>
+
+          {assignmentRows.map((row, i) => {
+            const scope = examScopeByClass[row.class_id];
+            const boards = scope?.boards || [];
+            const board = boards.find((b) => String(b.id) === String(row.board_id));
+            const subject = board?.subjects?.find((s) => String(s.id) === String(row.subject_id));
+            return (
+              <div key={i} className="rounded-xl border border-gray-200 bg-white p-4 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-gray-700">Assignment {i + 1}</p>
+                  {assignmentRows.length > 1 && (
+                    <button type="button" onClick={() => setAssignmentRows((p) => p.filter((_, idx) => idx !== i))}
+                      className="text-xs font-semibold text-red-600 hover:underline">Remove</button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Branch</label>
+                    <select value={row.branch_id} onChange={(e) => setRowBranch(i, e.target.value)}
+                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                      <option value="">-- Select Branch --</option>
+                      {allBranches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Class / section</label>
+                    <select value={row.class_id} onChange={(e) => setRowClass(i, e.target.value)}
+                      disabled={!row.branch_id}
+                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50">
+                      <option value="">-- Select Class --</option>
+                      {classesForBranch(row.branch_id).map((c) => <option key={c.id} value={c.id}>{formatClass(c)}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {row.class_id && scope === undefined && (
+                  <p className="text-xs text-gray-400">Loading curriculum...</p>
+                )}
+                {row.class_id && scope && !boards.length && (
+                  <p className="text-xs text-green-800 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+                    No library curriculum linked yet — class will be assigned to this teacher.
+                    Add boards, subjects &amp; books in <strong>Admin → Curriculum</strong> to also assign subjects.
+                  </p>
+                )}
+                {row.class_id && boards.length > 0 && (
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Board</label>
+                      <select value={row.board_id} onChange={(e) => updateRow(i, { board_id: e.target.value, subject_id: "", book_id: "" })}
+                        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Select...</option>
+                        {boards.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Subject</label>
+                      <select value={row.subject_id} onChange={(e) => updateRow(i, { subject_id: e.target.value, book_id: "" })}
+                        disabled={!row.board_id}
+                        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50">
+                        <option value="">Select...</option>
+                        {(board?.subjects || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Book</label>
+                      <select value={row.book_id} onChange={(e) => updateRow(i, { book_id: e.target.value })}
+                        disabled={!row.subject_id}
+                        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50">
+                        <option value="">Select...</option>
+                        {(subject?.books || []).map((bk) => <option key={bk.id} value={bk.id}>{bk.title}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          <button type="button" onClick={() => setAssignmentRows((p) => [...p, emptyRow()])}
+            className="text-sm font-semibold text-indigo-700 hover:text-indigo-900">
+            + Add another assignment
+          </button>
+        </div>
+
+        <div className="flex gap-3 pt-2">
+          <button type="button" onClick={onClose} disabled={saving}
+            className="flex-1 py-2 rounded-lg bg-gray-100 text-gray-700 text-sm font-semibold hover:bg-gray-200">
             Cancel
           </button>
-          <button
-            type="submit"
-            disabled={saving}
-            className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-60 flex items-center justify-center gap-2"
-          >
+          <button type="submit" disabled={saving}
+            className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-60 flex items-center justify-center gap-2">
             {saving && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
             {saving ? "Saving..." : "Save Changes"}
           </button>
@@ -587,7 +652,7 @@ function EditTeacherModal({
   );
 }
 
-// â”€â”€ Excel Import Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Excel Import Modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function ExcelImportModal({ isOpen, onClose, onSuccess }) {
   const [saving, setSaving] = useState(false);
   const [file, setFile] = useState(null);
@@ -727,7 +792,7 @@ function ExcelImportModal({ isOpen, onClose, onSuccess }) {
   );
 }
 
-// â”€â”€ Help Guide Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Help Guide Modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function HelpGuideModal({ isOpen, onClose }) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Teacher Import Guide">
@@ -803,7 +868,7 @@ function HelpGuideModal({ isOpen, onClose }) {
   );
 }
 
-// â”€â”€ Main Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -- Main Page ------------------------------------------------------------------
 export default function ManagerTeachers() {
   const [teachers, setTeachers] = useState([]);
   const [classes, setClasses] = useState([]);
@@ -816,7 +881,6 @@ export default function ManagerTeachers() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-
   const [editingTeacher, setEditingTeacher] = useState(null);
   const [deletingTeacher, setDeletingTeacher] = useState(null);
   const [deletingLoading, setDeletingLoading] = useState(false);
@@ -922,6 +986,7 @@ export default function ManagerTeachers() {
         onSuccess={load}
         teacher={editingTeacher}
         branches={branches}
+        classes={classes}
       />
       <BulkImportModal
         isOpen={showImportModal}
@@ -1031,14 +1096,14 @@ export default function ManagerTeachers() {
                       {teacher.email}
                     </span>
                   </td>
-                  <td className="px-5 py-3 text-sm text-gray-700 hidden md:table-cell">
-                    {teacher.school_name || "â€”"}
+                  <td className={"px-5 py-3 text-sm text-gray-700 hidden md:table-cell"}>
+                    {teacher.school_name || "N/A"}
                   </td>
-                  <td className="px-5 py-3 text-sm text-gray-700 hidden md:table-cell">
-                    {teacher.branch_name || "â€”"}
+                  <td className={"px-5 py-3 text-sm text-gray-700 hidden md:table-cell"}>
+                    {teacher.branch_name || "N/A"}
                   </td>
-                  <td className="px-5 py-3 text-sm text-gray-700 hidden lg:table-cell">
-                    {teacher.designation || "â€”"}
+                  <td className={"px-5 py-3 text-sm text-gray-700 hidden lg:table-cell"}>
+                    {teacher.designation || "N/A"}
                   </td>
                   <td className="px-5 py-3 hidden lg:table-cell">
                     <span

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import toast from "react-hot-toast";
 import libraryService from "../../services/libraryService";
+import teacherService from "../../services/teacherService";
 import { XMarkIcon } from "@heroicons/react/24/outline";
 
 function stripSlideIds(slides) {
@@ -24,6 +25,8 @@ export function SaveSlidesLibraryModal({
   /** topic row from Library navigation (includes id, chapter_id if present) */
   topicHint,
   onComplete,
+  /** "teacher" | "admin" | "super_admin" — controls which save path is used */
+  userRole,
 }) {
   const [saving, setSaving] = useState(false);
 
@@ -149,15 +152,41 @@ export function SaveSlidesLibraryModal({
       toast.error("No slides to save");
       return;
     }
+
+    const payloadSlides = stripSlideIds(slides);
+    const bodyNotes = lessonNotes || "";
+
+    // ── Personal save path: all roles save to their own isolated row ──
+    if (userRole) {
+      const targetTopicId = existingLibraryTopicId || topicHint?.id;
+      if (!targetTopicId) {
+        toast.error("Open a topic from My Curriculum first, then save slides.");
+        return;
+      }
+      setSaving(true);
+      try {
+        await teacherService.saveMyTopicSlides(targetTopicId, {
+          slides: payloadSlides,
+          slide_theme: slideThemeId,
+          content_body: bodyNotes,
+        });
+        toast.success("Slides saved — only visible to you.", { duration: 4500 });
+        onComplete?.({ bookId, chapterId, topicId: targetTopicId });
+        onClose();
+      } catch (err) {
+        toast.error(err?.response?.data?.detail || err?.message || "Save failed");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    // ── Admin / super_admin path: save to shared library topic ──
     if (!chapterId) {
       toast.error("Pick a chapter first");
       return;
     }
-
-    const payloadSlides = stripSlideIds(slides);
-    const bodyNotes = lessonNotes || "";
     const titleForNew = (newTitle || suggestedTitle || "Untitled topic").trim();
-
     setSaving(true);
     try {
       if (mode === "existing" && existingTopicId) {
@@ -198,15 +227,39 @@ export function SaveSlidesLibraryModal({
       <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div>
-            <h2 className="text-lg font-bold text-gray-900">Save deck to Library</h2>
-            <p className="text-xs text-gray-500">Board → Subject → Book → Chapter → Topic</p>
+            <h2 className="text-lg font-bold text-gray-900">Save slides</h2>
+            <p className="text-xs text-gray-500">
+              {userRole ? "Saved privately — only you can see these slides" : "Board → Subject → Book → Chapter → Topic"}
+            </p>
           </div>
           <button type="button" onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500">
             <XMarkIcon className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="px-5 py-4 space-y-3 text-sm">
+        {/* Personal save view — topic already known */}
+        {userRole && (existingLibraryTopicId || topicHint?.id) && (
+          <div className="px-5 py-5">
+            <div className="rounded-xl bg-indigo-50 border border-indigo-100 px-4 py-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-indigo-500 mb-1">Saving to topic</p>
+              <p className="text-base font-semibold text-indigo-900">{topicHint?.title || "Selected topic"}</p>
+              <p className="text-xs text-gray-500 mt-1">
+                These slides are stored under your account only. Other teachers using the same topic will not see them.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* No topic selected */}
+        {userRole && !(existingLibraryTopicId || topicHint?.id) && (
+          <div className="px-5 py-5">
+            <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-4 text-sm text-amber-900">
+              No topic selected. Go to <strong>My Curriculum</strong>, open a topic, then click <strong>Slides</strong> to create slides linked to that topic.
+            </div>
+          </div>
+        )}
+
+        <div className={`px-5 py-4 space-y-3 text-sm ${userRole ? "hidden" : ""}`}>
           {bookPreset ? (
             /* Book pre-set from navigation — show as read-only pill */
             <div className="flex items-center justify-between bg-indigo-50 rounded-xl px-3 py-2.5">
@@ -371,7 +424,12 @@ export function SaveSlidesLibraryModal({
           <button
             type="button"
             onClick={handleSave}
-            disabled={saving || !chapterId || (mode === "existing" && !existingTopicId)}
+            disabled={
+              saving ||
+              (userRole
+                ? !(existingLibraryTopicId || topicHint?.id)
+                : !chapterId || (mode === "existing" && !existingTopicId))
+            }
             className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save"}

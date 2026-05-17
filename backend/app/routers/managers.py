@@ -66,6 +66,20 @@ class AssignTeacherClassRequest(BaseModel):
     class_id: str
 
 
+class TeacherCurriculumRow(BaseModel):
+    branch_id: Optional[str] = None
+    class_id: str
+    library_board_id: Optional[str] = None
+    library_subject_id: Optional[str] = None
+    library_book_id: Optional[str] = None
+    school_id: Optional[str] = None
+
+
+class SaveTeacherAssignmentsRequest(BaseModel):
+    teacher_curriculum_assignments: Optional[List[TeacherCurriculumRow]] = None
+    assigned_classes: Optional[List[str]] = None
+
+
 class BulkDeleteTeachersRequest(BaseModel):
     teacher_ids: list[str]
 
@@ -156,6 +170,78 @@ def _parse_academic_session(value: str):
     if y2 != y1 + 1:
         raise HTTPException(status_code=400, detail="Academic session must use consecutive years")
     return normalized
+
+
+def _mgr_none_if_blank(value):
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
+def _mgr_extract_grade_number(value) -> Optional[int]:
+    if not value:
+        return None
+    match = re.search(r"\d+", str(value))
+    return int(match.group(0)) if match else None
+
+
+def _mgr_parse_date(value) -> Optional[date]:
+    if not value:
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value).strip())
+    except Exception:
+        return None
+
+
+async def _mgr_get_active_enrollment(student_id: str):
+    return await execute_one(
+        """SELECT e.id, e.class_id, e.academic_session, e.status, c.branch_id, c.grade_level, c.section
+           FROM enrollments e
+           JOIN classes c ON c.id = e.class_id
+           WHERE e.student_id = $1 AND e.is_active = true
+           ORDER BY e.enrolled_at DESC LIMIT 1""",
+        student_id,
+    )
+
+
+async def _mgr_activate_enrollment(student_id: str, class_id: str, academic_session: str, notes=None):
+    existing = await execute_one(
+        "SELECT id FROM enrollments WHERE student_id = $1 AND class_id = $2::uuid",
+        student_id, class_id,
+    )
+    if existing:
+        await execute_write(
+            """UPDATE enrollments SET academic_session = $1, status = 'active', is_active = true,
+               notes = $2, completed_at = NULL WHERE id = $3""",
+            academic_session, _mgr_none_if_blank(notes), existing["id"],
+        )
+    else:
+        await execute_write(
+            """INSERT INTO enrollments (student_id, class_id, academic_session, status, is_active, notes)
+               VALUES ($1, $2::uuid, $3, 'active', true, $4)""",
+            student_id, class_id, academic_session, _mgr_none_if_blank(notes),
+        )
+
+
+async def _mgr_check_student_access(current_user: dict, student_id: str):
+    student = await execute_one(
+        "SELECT id, school_id, tenant_id FROM users WHERE id = $1::uuid AND role = 'student'",
+        student_id,
+    )
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    if current_user.get("role") == "manager":
+        if str(current_user.get("school_id") or "") != str(student.get("school_id") or ""):
+            raise HTTPException(status_code=403, detail="Access denied to this student")
+    else:
+        if str(current_user.get("tenant_id") or "") != str(student.get("tenant_id") or ""):
+            raise HTTPException(status_code=403, detail="Access denied to this student")
+    return student
 
 
 @router.post("/users")
@@ -439,32 +525,18 @@ async def get_school_teachers(current_user: dict = Depends(require_manager)):
     if school_id:
         teachers = await execute_query(
             """SELECT u.id, u.full_name, u.email, u.is_active, u.branch_id,
-                      u.designation, u.contact, u.emergency_contact, u.employment_status,
-                      u.date_of_joining, u.qualifications, u.experience_years, u.languages,
-                      b.name as branch_name,
-                      COUNT(DISTINCT c.id) as class_count
-               FROM users u
-               LEFT JOIN branches b ON b.id = u.branch_id
-               LEFT JOIN classes c ON c.teacher_id = u.id OR c.id IN (
-                   SELECT class_id FROM teacher_class_assignments WHERE teacher_id = u.id
-               ) OR c.id IN (
-                   SELECT class_id FROM teacher_class_subject_assignments WHERE teacher_id = u.id
-               )
-               WHERE u.role = 'teacher' AND u.school_id = $1
-               GROUP BY u.id, u.full_name, u.email, u.is_active, u.branch_id, u.designation, u.contact,
-                        u.emergency_contact, u.employment_status, u.date_of_joining, u.qualifications,
-                        u.experience_years, u.languages, b.name
-               ORDER BY u.full_name""",
-            school_id,
-        )
-    else:
-        teachers = await execute_query(
-            """SELECT u.id, u.full_name, u.email, u.is_active, u.branch_id,
-                      u.designation, u.contact, u.emergency_contact, u.employment_status,
-                      u.date_of_joining, u.qualifications, u.experience_years, u.languages,
+                      COALESCE(u.designation, tp.designation) as designation,
+                      COALESCE(u.contact, tp.contact) as contact,
+                      COALESCE(u.emergency_contact, tp.emergency_contact) as emergency_contact,
+                      COALESCE(u.employment_status, tp.employment_status) as employment_status,
+                      COALESCE(u.date_of_joining, tp.date_of_joining) as date_of_joining,
+                      COALESCE(u.qualifications, tp.qualifications) as qualifications,
+                      COALESCE(u.experience_years, tp.experience_years) as experience_years,
+                      COALESCE(u.languages, tp.languages) as languages,
                       s.name as school_name, b.name as branch_name,
                       COUNT(DISTINCT c.id) as class_count
                FROM users u
+               LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
                LEFT JOIN schools s ON s.id = u.school_id
                LEFT JOIN branches b ON b.id = u.branch_id
                LEFT JOIN classes c ON c.teacher_id = u.id OR c.id IN (
@@ -472,12 +544,47 @@ async def get_school_teachers(current_user: dict = Depends(require_manager)):
                ) OR c.id IN (
                    SELECT class_id FROM teacher_class_subject_assignments WHERE teacher_id = u.id
                )
-                    WHERE u.role = 'teacher' AND u.tenant_id = $1::uuid
-               GROUP BY u.id, u.full_name, u.email, u.is_active, u.branch_id, u.designation, u.contact,
-                        u.emergency_contact, u.employment_status, u.date_of_joining, u.qualifications,
-                        u.experience_years, u.languages, s.name, b.name
-                    ORDER BY u.full_name""",
-                current_user.get("tenant_id"),
+               WHERE u.role = 'teacher' AND u.school_id = $1
+               GROUP BY u.id, u.full_name, u.email, u.is_active, u.branch_id,
+                        u.designation, tp.designation, u.contact, tp.contact,
+                        u.emergency_contact, tp.emergency_contact, u.employment_status, tp.employment_status,
+                        u.date_of_joining, tp.date_of_joining, u.qualifications, tp.qualifications,
+                        u.experience_years, tp.experience_years, u.languages, tp.languages,
+                        s.name, b.name
+               ORDER BY u.full_name""",
+            school_id,
+        )
+    else:
+        teachers = await execute_query(
+            """SELECT u.id, u.full_name, u.email, u.is_active, u.branch_id,
+                      COALESCE(u.designation, tp.designation) as designation,
+                      COALESCE(u.contact, tp.contact) as contact,
+                      COALESCE(u.emergency_contact, tp.emergency_contact) as emergency_contact,
+                      COALESCE(u.employment_status, tp.employment_status) as employment_status,
+                      COALESCE(u.date_of_joining, tp.date_of_joining) as date_of_joining,
+                      COALESCE(u.qualifications, tp.qualifications) as qualifications,
+                      COALESCE(u.experience_years, tp.experience_years) as experience_years,
+                      COALESCE(u.languages, tp.languages) as languages,
+                      s.name as school_name, b.name as branch_name,
+                      COUNT(DISTINCT c.id) as class_count
+               FROM users u
+               LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
+               LEFT JOIN schools s ON s.id = u.school_id
+               LEFT JOIN branches b ON b.id = u.branch_id
+               LEFT JOIN classes c ON c.teacher_id = u.id OR c.id IN (
+                   SELECT class_id FROM teacher_class_assignments WHERE teacher_id = u.id
+               ) OR c.id IN (
+                   SELECT class_id FROM teacher_class_subject_assignments WHERE teacher_id = u.id
+               )
+               WHERE u.role = 'teacher' AND u.tenant_id = $1::uuid
+               GROUP BY u.id, u.full_name, u.email, u.is_active, u.branch_id,
+                        u.designation, tp.designation, u.contact, tp.contact,
+                        u.emergency_contact, tp.emergency_contact, u.employment_status, tp.employment_status,
+                        u.date_of_joining, tp.date_of_joining, u.qualifications, tp.qualifications,
+                        u.experience_years, tp.experience_years, u.languages, tp.languages,
+                        s.name, b.name
+               ORDER BY u.full_name""",
+            current_user.get("tenant_id"),
         )
     return [dict(t) for t in teachers]
 
@@ -954,7 +1061,11 @@ async def update_school_teacher(
     if body.employment_status is not None:
         updates["employment_status"] = body.employment_status
     if body.date_of_joining is not None:
-        updates["date_of_joining"] = body.date_of_joining
+        try:
+            from datetime import date as _date
+            updates["date_of_joining"] = _date.fromisoformat(body.date_of_joining) if isinstance(body.date_of_joining, str) else body.date_of_joining
+        except (ValueError, TypeError):
+            updates["date_of_joining"] = None
     if body.qualifications is not None:
         updates["qualifications"] = body.qualifications
     if body.experience_years is not None:
@@ -965,9 +1076,17 @@ async def update_school_teacher(
     if not updates:
         return dict(teacher)
 
-    set_clause = ", ".join([f"{k} = ${i+2}" for i, k in enumerate(updates.keys())])
-    values = list(updates.values()) + [teacher_id]
-    query = f"UPDATE users SET {set_clause} WHERE id = $1 RETURNING id, email, full_name, role, school_id, branch_id"
+    uuid_fields = {"branch_id"}
+    clauses = []
+    for i, k in enumerate(updates.keys()):
+        n = i + 2
+        if k in uuid_fields:
+            clauses.append(f"{k} = ${n}::uuid")
+        else:
+            clauses.append(f"{k} = ${n}")
+    set_clause = ", ".join(clauses)
+    values = [teacher_id] + list(updates.values())
+    query = f"UPDATE users SET {set_clause} WHERE id = $1::uuid RETURNING id, email, full_name, role, school_id, branch_id"
 
     updated = await execute_one(query, *values)
     return dict(updated)
@@ -1086,6 +1205,103 @@ async def assign_teacher_to_class(
     return {"message": "Teacher assigned to class successfully"}
 
 
+@router.get("/teachers/{teacher_id}/assignments")
+async def get_teacher_assignments(teacher_id: str, current_user: dict = Depends(require_manager)):
+    """Get current class+curriculum assignments for a teacher."""
+    teacher = await execute_one(
+        "SELECT id, school_id, tenant_id FROM users WHERE id = $1::uuid AND role = 'teacher'",
+        teacher_id,
+    )
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    await _assert_tenant_access(current_user, teacher.get("tenant_id"))
+
+    curriculum_rows = await execute_query(
+        """SELECT tcsa.class_id, tcsa.branch_id, tcsa.school_id,
+                  tcsa.library_board_id, tcsa.library_subject_id, tcsa.library_book_id,
+                  c.name as class_name, c.grade_level, c.section,
+                  b.name as branch_name,
+                  lb.name as board_name, ls.name as subject_name, lbk.title as book_title
+           FROM teacher_class_subject_assignments tcsa
+           LEFT JOIN classes c ON c.id = tcsa.class_id
+           LEFT JOIN branches b ON b.id = tcsa.branch_id
+           LEFT JOIN library_boards lb ON lb.id = tcsa.library_board_id
+           LEFT JOIN library_subjects ls ON ls.id = tcsa.library_subject_id
+           LEFT JOIN library_books lbk ON lbk.id = tcsa.library_book_id
+           WHERE tcsa.teacher_id = $1::uuid""",
+        teacher_id,
+    )
+
+    class_rows = await execute_query(
+        """SELECT c.id as class_id, c.name, c.grade_level, c.section, c.branch_id,
+                  b.name as branch_name
+           FROM teacher_class_assignments tca
+           JOIN classes c ON c.id = tca.class_id
+           LEFT JOIN branches b ON b.id = c.branch_id
+           WHERE tca.teacher_id = $1::uuid""",
+        teacher_id,
+    )
+
+    return {
+        "curriculum_assignments": [dict(r) for r in curriculum_rows],
+        "class_assignments": [dict(r) for r in class_rows],
+    }
+
+
+@router.post("/teachers/{teacher_id}/save-assignments")
+async def save_teacher_assignments(
+    teacher_id: str,
+    body: SaveTeacherAssignmentsRequest,
+    current_user: dict = Depends(require_manager),
+):
+    """Save (replace) all class + curriculum assignments for a teacher."""
+    from app.routers.homework import sync_teacher_class_subject_assignments
+
+    school_id = current_user.get("school_id") if current_user.get("role") == "manager" else None
+
+    teacher = await execute_one(
+        "SELECT id, school_id, tenant_id FROM users WHERE id = $1::uuid AND role = 'teacher'",
+        teacher_id,
+    )
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    await _assert_tenant_access(current_user, teacher.get("tenant_id"))
+    if school_id and str(teacher["school_id"]) != str(school_id):
+        raise HTTPException(status_code=403, detail="Access denied to this teacher")
+
+    curriculum_rows = []
+    if body.teacher_curriculum_assignments:
+        for row in body.teacher_curriculum_assignments:
+            if not row.class_id:
+                continue
+            curriculum_rows.append({
+                "class_id": row.class_id,
+                "branch_id": row.branch_id,
+                "school_id": row.school_id or str(teacher["school_id"]),
+                "library_board_id": row.library_board_id,
+                "library_subject_id": row.library_subject_id,
+                "library_book_id": row.library_book_id,
+            })
+
+    await sync_teacher_class_subject_assignments(teacher_id, curriculum_rows or None)
+
+    curriculum_class_ids = {r["class_id"] for r in curriculum_rows if r.get("class_id")}
+    extra_class_ids = set(body.assigned_classes or []) - curriculum_class_ids
+
+    await execute_write(
+        "DELETE FROM teacher_class_assignments WHERE teacher_id = $1::uuid", teacher_id
+    )
+    for cid in (curriculum_class_ids | extra_class_ids):
+        await execute_write(
+            """INSERT INTO teacher_class_assignments (teacher_id, class_id)
+               VALUES ($1::uuid, $2::uuid)
+               ON CONFLICT DO NOTHING""",
+            teacher_id, cid,
+        )
+
+    return {"message": "Assignments saved successfully"}
+
+
 # ============================================
 # STUDENT MANAGEMENT
 # ============================================
@@ -1123,7 +1339,7 @@ async def get_school_students(
 
     students = await execute_query(
         f"""SELECT u.id, u.full_name, u.email, u.is_active,
-                   c.name as class_name, c.grade_level,
+                   c.name as class_name, c.grade_level, c.section,
                    COALESCE(b.name, ub.name) as branch_name,
                    e.academic_session,
                    sp.student_roll_no, sp.guardian_name,
@@ -1269,8 +1485,34 @@ class UpdateStudentRequest(BaseModel):
     email: Optional[str] = None
     student_roll_no: Optional[str] = None
     guardian_name: Optional[str] = None
+    primary_contact: Optional[str] = None
+    emergency_contact: Optional[str] = None
     date_of_birth: Optional[str] = None
     gender: Optional[str] = None
+    address: Optional[str] = None
+    blood_group: Optional[str] = None
+    medical_notes: Optional[str] = None
+
+
+class StudentLifecycleRequest(BaseModel):
+    academic_session: str
+    notes: Optional[str] = None
+
+
+class ChangeSectionRequest(BaseModel):
+    target_class_id: str
+    academic_session: str
+    notes: Optional[str] = None
+
+
+class SetCurrentEnrollmentRequest(BaseModel):
+    class_id: str
+    academic_session: str
+    notes: Optional[str] = None
+
+
+class SetStudentPasswordRequest(BaseModel):
+    password: str
 
 
 @router.patch("/students/{student_id}")
@@ -1320,20 +1562,31 @@ async def update_student(
     sp_school_id = str(student.get("school_id") or "")
 
     await execute_write(
-        """INSERT INTO student_profiles (user_id, school_id, student_roll_no, guardian_name, date_of_birth, gender)
-           VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6)
+        """INSERT INTO student_profiles (user_id, school_id, student_roll_no, guardian_name,
+               primary_contact, emergency_contact, date_of_birth, gender, address, blood_group, medical_notes)
+           VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            ON CONFLICT (user_id) DO UPDATE SET
-               student_roll_no = COALESCE($3, student_profiles.student_roll_no),
-               guardian_name   = COALESCE($4, student_profiles.guardian_name),
-               date_of_birth   = COALESCE($5, student_profiles.date_of_birth),
-               gender          = COALESCE($6, student_profiles.gender),
-               updated_at      = NOW()""",
+               student_roll_no   = COALESCE($3, student_profiles.student_roll_no),
+               guardian_name     = COALESCE($4, student_profiles.guardian_name),
+               primary_contact   = COALESCE($5, student_profiles.primary_contact),
+               emergency_contact = COALESCE($6, student_profiles.emergency_contact),
+               date_of_birth     = COALESCE($7, student_profiles.date_of_birth),
+               gender            = COALESCE($8, student_profiles.gender),
+               address           = COALESCE($9, student_profiles.address),
+               blood_group       = COALESCE($10, student_profiles.blood_group),
+               medical_notes     = COALESCE($11, student_profiles.medical_notes),
+               updated_at        = NOW()""",
         student_id,
         sp_school_id or None,
         body.student_roll_no.strip() if body.student_roll_no else None,
         body.guardian_name.strip() if body.guardian_name else None,
+        body.primary_contact.strip() if body.primary_contact else None,
+        body.emergency_contact.strip() if body.emergency_contact else None,
         dob,
         body.gender.strip() if body.gender else None,
+        body.address.strip() if body.address else None,
+        body.blood_group.strip() if body.blood_group else None,
+        body.medical_notes.strip() if body.medical_notes else None,
     )
     return {"message": "Student updated successfully"}
 
@@ -1366,6 +1619,191 @@ async def delete_student(
         student_id,
     )
     return {"message": "Student archived successfully"}
+
+
+@router.get("/students/{student_id}")
+async def get_student_detail(
+    student_id: str,
+    current_user: dict = Depends(require_manager),
+):
+    await _mgr_check_student_access(current_user, student_id)
+    profile = await execute_one(
+        """SELECT u.id, u.email, u.full_name, u.is_active, u.created_at,
+                  sp.school_id, sp.branch_id, sp.student_roll_no, sp.date_of_birth, sp.gender, sp.address,
+                  sp.guardian_name, sp.primary_contact, sp.emergency_contact, sp.blood_group, sp.medical_notes,
+                  sc.name AS school_name, b.name AS branch_name
+           FROM users u
+           LEFT JOIN student_profiles sp ON sp.user_id = u.id
+           LEFT JOIN schools sc ON sc.id = sp.school_id
+           LEFT JOIN branches b ON b.id = sp.branch_id
+           WHERE u.id = $1 AND u.role = 'student'""",
+        student_id,
+    )
+    if not profile:
+        raise HTTPException(status_code=404, detail="Student not found")
+    history = await execute_query(
+        """SELECT e.id, e.class_id, e.academic_session, e.status, e.promotion_result,
+                  e.is_active, e.enrolled_at, e.completed_at, e.notes,
+                  c.grade_level, c.section, c.name AS class_name,
+                  b.name AS branch_name, sc.name AS school_name
+           FROM enrollments e
+           JOIN classes c ON c.id = e.class_id
+           JOIN branches b ON b.id = c.branch_id
+           JOIN schools sc ON sc.id = b.school_id
+           WHERE e.student_id = $1
+           ORDER BY e.enrolled_at DESC""",
+        student_id,
+    )
+    return {"profile": dict(profile), "history": [dict(h) for h in history]}
+
+
+@router.post("/students/{student_id}/promote")
+async def promote_student(
+    student_id: str,
+    req: StudentLifecycleRequest,
+    current_user: dict = Depends(require_manager),
+):
+    await _mgr_check_student_access(current_user, student_id)
+    normalized_session = _parse_academic_session(req.academic_session)
+    active = await _mgr_get_active_enrollment(student_id)
+    if not active:
+        raise HTTPException(status_code=400, detail="No active enrollment found")
+    current_grade_num = _mgr_extract_grade_number(active["grade_level"])
+    if current_grade_num is None:
+        raise HTTPException(status_code=400, detail="Current class grade is not numeric")
+    branch_classes = await execute_query(
+        "SELECT id, grade_level, section FROM classes WHERE branch_id = $1",
+        active["branch_id"],
+    )
+    next_class = None
+    for cls in branch_classes:
+        if _mgr_extract_grade_number(cls["grade_level"]) == current_grade_num + 1 and \
+                (cls.get("section") or "") == (active.get("section") or ""):
+            next_class = cls
+            break
+    if not next_class:
+        raise HTTPException(status_code=400, detail="Next class not found in this branch. Create it first.")
+    await execute_write(
+        "UPDATE enrollments SET is_active = false, status = 'completed', promotion_result = 'promoted', completed_at = NOW(), notes = $1 WHERE id = $2",
+        _mgr_none_if_blank(req.notes), active["id"],
+    )
+    await _mgr_activate_enrollment(student_id, str(next_class["id"]), normalized_session, req.notes)
+    return {"message": "Student promoted successfully"}
+
+
+@router.post("/students/{student_id}/repeat")
+async def repeat_student(
+    student_id: str,
+    req: StudentLifecycleRequest,
+    current_user: dict = Depends(require_manager),
+):
+    await _mgr_check_student_access(current_user, student_id)
+    normalized_session = _parse_academic_session(req.academic_session)
+    active = await _mgr_get_active_enrollment(student_id)
+    if not active:
+        raise HTTPException(status_code=400, detail="No active enrollment found")
+    await execute_write(
+        "UPDATE enrollments SET is_active = false, status = 'completed', promotion_result = 'failed', completed_at = NOW(), notes = $1 WHERE id = $2",
+        _mgr_none_if_blank(req.notes), active["id"],
+    )
+    await _mgr_activate_enrollment(student_id, str(active["class_id"]), normalized_session, req.notes)
+    return {"message": "Student marked as repeat for next session"}
+
+
+@router.post("/students/{student_id}/change-section")
+async def change_student_section(
+    student_id: str,
+    req: ChangeSectionRequest,
+    current_user: dict = Depends(require_manager),
+):
+    await _mgr_check_student_access(current_user, student_id)
+    normalized_session = _parse_academic_session(req.academic_session)
+    active = await _mgr_get_active_enrollment(student_id)
+    if not active:
+        raise HTTPException(status_code=400, detail="No active enrollment found")
+    target = await execute_one(
+        "SELECT id, branch_id, grade_level FROM classes WHERE id = $1",
+        req.target_class_id,
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Target class not found")
+    if str(target["branch_id"]) != str(active["branch_id"]):
+        raise HTTPException(status_code=400, detail="Target section must be in the same branch.")
+    if str(target["grade_level"]) != str(active["grade_level"]):
+        raise HTTPException(status_code=400, detail="Target section must be in the same class/grade.")
+    await execute_write(
+        "UPDATE enrollments SET is_active = false, status = 'transferred', completed_at = NOW(), notes = $1 WHERE id = $2",
+        _mgr_none_if_blank(req.notes), active["id"],
+    )
+    await _mgr_activate_enrollment(student_id, req.target_class_id, normalized_session, req.notes)
+    return {"message": "Section changed successfully"}
+
+
+@router.get("/students/{student_id}/section-options")
+async def get_section_change_options(
+    student_id: str,
+    current_user: dict = Depends(require_manager),
+):
+    await _mgr_check_student_access(current_user, student_id)
+    active = await _mgr_get_active_enrollment(student_id)
+    if not active:
+        raise HTTPException(status_code=400, detail="No active enrollment found")
+    options = await execute_query(
+        """SELECT id, name, grade_level, section FROM classes
+           WHERE branch_id = $1 AND grade_level = $2 AND id <> $3
+           ORDER BY section NULLS LAST, name""",
+        active["branch_id"], active["grade_level"], active["class_id"],
+    )
+    return {"options": [dict(o) for o in options]}
+
+
+@router.post("/students/{student_id}/set-current-enrollment")
+async def set_current_enrollment(
+    student_id: str,
+    req: SetCurrentEnrollmentRequest,
+    current_user: dict = Depends(require_manager),
+):
+    await _mgr_check_student_access(current_user, student_id)
+    normalized_session = _parse_academic_session(req.academic_session)
+    student_profile = await execute_one(
+        "SELECT school_id FROM student_profiles WHERE user_id = $1::uuid",
+        student_id,
+    )
+    if not student_profile or not student_profile.get("school_id"):
+        raise HTTPException(status_code=400, detail="Student school profile not found")
+    target_class = await execute_one(
+        "SELECT c.id, b.school_id FROM classes c JOIN branches b ON b.id = c.branch_id WHERE c.id = $1::uuid",
+        req.class_id,
+    )
+    if not target_class:
+        raise HTTPException(status_code=404, detail="Class not found")
+    if str(target_class["school_id"]) != str(student_profile["school_id"]):
+        raise HTTPException(status_code=400, detail="Student and class must belong to the same school")
+    await execute_write(
+        """UPDATE enrollments SET is_active = false,
+           status = CASE WHEN status = 'active' THEN 'completed' ELSE status END,
+           completed_at = COALESCE(completed_at, NOW())
+           WHERE student_id = $1 AND is_active = true""",
+        student_id,
+    )
+    await _mgr_activate_enrollment(student_id, req.class_id, normalized_session, req.notes)
+    return {"message": "Current enrollment set successfully"}
+
+
+@router.post("/users/{user_id}/set-password")
+async def set_user_password(
+    user_id: str,
+    body: SetStudentPasswordRequest,
+    current_user: dict = Depends(require_manager),
+):
+    await _assert_user_access(current_user, user_id)
+    if not body.password or len(body.password) < 4:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
+    await execute_write(
+        "UPDATE users SET password_hash = $1, must_change_password = false, is_active = true, updated_at = NOW() WHERE id = $2::uuid",
+        hash_password(body.password), user_id,
+    )
+    return {"message": "Password updated successfully"}
 
 
 # ============================================

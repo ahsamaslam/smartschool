@@ -424,6 +424,31 @@ async def ensure_library_tables():
     await execute_write(
         "ALTER TABLE library_topics ADD COLUMN IF NOT EXISTS lecture_duration_seconds DOUBLE PRECISION"
     )
+    # Teacher-specific slides + lecture storage (one row per teacher per topic)
+    await execute_write(
+        """
+        CREATE TABLE IF NOT EXISTS teacher_topic_content (
+            id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            teacher_id               UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            library_topic_id         UUID NOT NULL REFERENCES library_topics(id) ON DELETE CASCADE,
+            slides_json              TEXT,
+            slide_theme              VARCHAR(160),
+            lecture_video_url        TEXT,
+            lecture_metadata_json    TEXT,
+            lecture_saved_at         TIMESTAMP,
+            lecture_duration_seconds DOUBLE PRECISION,
+            created_at               TIMESTAMP DEFAULT NOW(),
+            updated_at               TIMESTAMP DEFAULT NOW(),
+            UNIQUE(teacher_id, library_topic_id)
+        )
+        """
+    )
+    await execute_write(
+        "CREATE INDEX IF NOT EXISTS idx_ttc_teacher_id ON teacher_topic_content(teacher_id)"
+    )
+    await execute_write(
+        "CREATE INDEX IF NOT EXISTS idx_ttc_topic_id ON teacher_topic_content(library_topic_id)"
+    )
 
 
 # ============================================

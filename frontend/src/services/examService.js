@@ -50,10 +50,8 @@ const examService = {
   // Add a manual question
   addQuestion: (examId, data) => api.post(`${BASE}/${examId}/questions`, data),
 
-  // Student submission
-  submitExam: (examId, answers) =>
-    api.post(`${BASE}/${examId}/submit`, { answers }),
-  getMyResult: (examId) => api.get(`${BASE}/${examId}/my-result`),
+  // Student: read-only exam schedule
+  getMyScheduledExams: () => api.get(`${BASE}/student/my-exams`),
 };
 
 export default examService;

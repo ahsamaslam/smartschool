@@ -70,6 +70,9 @@ export default function ExamEditor() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [savingStatus, setSavingStatus] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState("");
+  const [scheduleTime, setScheduleTime] = useState("");
+  const [savingSchedule, setSavingSchedule] = useState(false);
 
   const printRef = useRef(null);
 
@@ -81,6 +84,8 @@ export default function ExamEditor() {
         const data = res.data;
         setExam(data);
         setQuestions(data.questions || []);
+        setScheduleDate(data.exam_date || "");
+        setScheduleTime(data.exam_time || "");
       })
       .catch(() => setError("Failed to load exam."))
       .finally(() => setLoading(false));
@@ -120,6 +125,23 @@ export default function ExamEditor() {
       toast.error("Failed to update status.");
     } finally {
       setSavingStatus(false);
+    }
+  };
+
+  // ── Save schedule ────────────────────────────────────────────────────────────
+  const handleSaveSchedule = async () => {
+    setSavingSchedule(true);
+    try {
+      const res = await examService.updateExam(examId, {
+        exam_date: scheduleDate || null,
+        exam_time: scheduleTime || null,
+      });
+      setExam(res.data);
+      toast.success("Schedule saved.");
+    } catch {
+      toast.error("Failed to save schedule.");
+    } finally {
+      setSavingSchedule(false);
     }
   };
 
@@ -241,6 +263,7 @@ export default function ExamEditor() {
 
         {/* Header card */}
         <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-6">
+          {/* Row 1: title + action buttons */}
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap mb-1">
@@ -295,6 +318,36 @@ export default function ExamEditor() {
                 Print
               </Button>
             </div>
+          </div>
+
+          {/* Row 2: Schedule */}
+          <div className="mt-4 pt-4 border-t border-gray-100 flex flex-wrap items-end gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Exam Date</label>
+              <input
+                type="date"
+                value={scheduleDate}
+                onChange={(e) => setScheduleDate(e.target.value)}
+                className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Exam Time</label>
+              <input
+                type="time"
+                value={scheduleTime}
+                onChange={(e) => setScheduleTime(e.target.value)}
+                className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleSaveSchedule}
+              loading={savingSchedule}
+            >
+              Save Schedule
+            </Button>
           </div>
         </div>
 

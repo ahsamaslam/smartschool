@@ -90,6 +90,37 @@ async def get_learning_topic(topic_id: str, current_user: dict = Depends(require
     if not row:
         raise HTTPException(status_code=404, detail="Topic not found")
 
+    # Find this student's assigned teacher for the topic's subject and overlay their content
+    teacher_content = await execute_one(
+        """
+        SELECT ttc.slides_json, ttc.slide_theme,
+               ttc.lecture_video_url, ttc.lecture_metadata_json,
+               ttc.lecture_saved_at, ttc.lecture_duration_seconds
+        FROM library_topics lt
+        JOIN library_chapters lc ON lc.id = lt.chapter_id
+        JOIN teacher_class_subject_assignments tcsa
+             ON tcsa.library_book_id = lc.book_id
+        JOIN enrollments e
+             ON e.class_id = tcsa.class_id
+            AND e.student_id = $1::uuid
+            AND e.is_active = true
+        LEFT JOIN teacher_topic_content ttc
+             ON ttc.teacher_id = tcsa.teacher_id
+            AND ttc.library_topic_id = lt.id
+        WHERE lt.id = $2::uuid
+        LIMIT 1
+        """,
+        student_id,
+        topic_id,
+    )
+
+    topic_data = dict(row)
+    if teacher_content:
+        for col in ("slides_json", "slide_theme", "lecture_video_url",
+                    "lecture_metadata_json", "lecture_saved_at", "lecture_duration_seconds"):
+            if teacher_content.get(col) is not None:
+                topic_data[col] = teacher_content[col]
+
     prog = await execute_one(
         """
         SELECT * FROM student_topic_progress
@@ -98,7 +129,7 @@ async def get_learning_topic(topic_id: str, current_user: dict = Depends(require
         student_id,
         topic_id,
     )
-    return {"data": dict(row), "progress": dict(prog) if prog else None}
+    return {"data": topic_data, "progress": dict(prog) if prog else None}
 
 
 @router.get("/learning/topics/{topic_id}/navigation")
@@ -155,9 +186,25 @@ async def upsert_learning_progress(req: ProgressUpdate, current_user: dict = Dep
         raise HTTPException(status_code=404, detail="Topic not found")
 
     topic_row = await execute_one(
-        "SELECT lecture_video_url FROM library_topics WHERE id = $1::uuid",
+        """
+        SELECT COALESCE(ttc.lecture_video_url, lt.lecture_video_url) AS lecture_video_url
+        FROM library_topics lt
+        JOIN library_chapters lc ON lc.id = lt.chapter_id
+        JOIN teacher_class_subject_assignments tcsa ON tcsa.library_book_id = lc.book_id
+        JOIN enrollments e ON e.class_id = tcsa.class_id
+            AND e.student_id = $1::uuid AND e.is_active = true
+        LEFT JOIN teacher_topic_content ttc
+            ON ttc.teacher_id = tcsa.teacher_id AND ttc.library_topic_id = lt.id
+        WHERE lt.id = $2::uuid
+        LIMIT 1
+        """,
+        student_id,
         req.topic_id,
     )
+    if not topic_row:
+        topic_row = await execute_one(
+            "SELECT lecture_video_url FROM library_topics WHERE id = $1::uuid", req.topic_id
+        )
     has_lecture = bool(
         topic_row and (topic_row.get("lecture_video_url") or "").strip()
     )

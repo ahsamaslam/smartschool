@@ -66,6 +66,8 @@ export default function AdminStudents() {
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [filterBranch, setFilterBranch] = useState("");
+  const [filterClass, setFilterClass] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
@@ -101,8 +103,13 @@ export default function AdminStudents() {
   });
   const [form, setForm] = useState(EMPTY_FORM);
   const [curriculumPreview, setCurriculumPreview] = useState(null);
-  /** Loaded when viewing a student: curriculum inherited via active enrollment → section */
   const [accessPreview, setAccessPreview] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkPromoteOpen, setBulkPromoteOpen] = useState(false);
+  const [bulkSession, setBulkSession] = useState("");
+  const [bulkNotes, setBulkNotes] = useState("");
+  const [bulkPromoting, setBulkPromoting] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0 });
 
   const loadStudents = async () => {
     setLoading(true);
@@ -254,11 +261,38 @@ export default function AdminStudents() {
     location.pathname,
   ]);
 
-  const filtered = students.filter(
-    (s) =>
-      s.full_name?.toLowerCase().includes(search.toLowerCase()) ||
-      s.email?.toLowerCase().includes(search.toLowerCase()),
-  );
+  const uniqueBranches = [...new Map(students.filter((s) => s.branch_name).map((s) => [s.branch_name, s.branch_name])).values()].sort();
+  const uniqueClasses = [...new Map(
+    students.filter((s) => s.class_name).map((s) => {
+      const key = s.class_name;
+      return [key, { name: s.class_name, grade_level: s.grade_level, section: s.section }];
+    })
+  ).values()].sort((a, b) => {
+    const ga = Number(a.grade_level) || 0;
+    const gb = Number(b.grade_level) || 0;
+    if (ga !== gb) return ga - gb;
+    return (a.section || "").localeCompare(b.section || "");
+  });
+  const filteredClassesByBranch = filterBranch
+    ? [...new Map(
+        students.filter((s) => s.branch_name === filterBranch && s.class_name).map((s) => [s.class_name, { name: s.class_name, grade_level: s.grade_level, section: s.section }])
+      ).values()].sort((a, b) => {
+        const ga = Number(a.grade_level) || 0;
+        const gb = Number(b.grade_level) || 0;
+        if (ga !== gb) return ga - gb;
+        return (a.section || "").localeCompare(b.section || "");
+      })
+    : uniqueClasses;
+
+  const q = search.toLowerCase();
+  const filtered = students.filter((s) => {
+    if (filterBranch && s.branch_name !== filterBranch) return false;
+    if (filterClass && s.class_name !== filterClass) return false;
+    return (
+      s.full_name?.toLowerCase().includes(q) ||
+      s.email?.toLowerCase().includes(q)
+    );
+  });
 
   if (loading) return <PageSpinner />;
 
@@ -565,6 +599,42 @@ export default function AdminStudents() {
     }
   };
 
+  const openBulkPromote = () => {
+    const nextYear = new Date().getFullYear();
+    setBulkSession(`${nextYear}-${nextYear + 1}`);
+    setBulkNotes("");
+    setBulkProgress({ done: 0, total: 0 });
+    setBulkPromoteOpen(true);
+  };
+
+  const submitBulkPromote = async () => {
+    const session = normalizeSession(bulkSession);
+    if (!/^\d{4}-\d{4}$/.test(session)) {
+      toast.error("Academic session must be in format 2025-2026.");
+      return;
+    }
+    const ids = [...selectedIds];
+    setBulkPromoting(true);
+    setBulkProgress({ done: 0, total: ids.length });
+    let succeeded = 0;
+    let failed = 0;
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        await adminService.promoteStudent(ids[i], { academic_session: session, notes: bulkNotes });
+        succeeded++;
+      } catch {
+        failed++;
+      }
+      setBulkProgress({ done: i + 1, total: ids.length });
+    }
+    setBulkPromoting(false);
+    setBulkPromoteOpen(false);
+    setSelectedIds(new Set());
+    if (failed === 0) toast.success(`${succeeded} student${succeeded !== 1 ? "s" : ""} promoted.`);
+    else toast.error(`${succeeded} promoted, ${failed} failed.`);
+    loadStudents();
+  };
+
   const handleEditStudent = async (e) => {
     e.preventDefault();
     const targetId = editTargetId || selectedStudent?.id;
@@ -668,17 +738,60 @@ export default function AdminStudents() {
         ))}
       </div>
 
-      {/* Search */}
-      <div className="relative mb-5 max-w-sm">
-        <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
-        <input
-          type="text"
-          placeholder="Search students…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-9 pr-4 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-        />
+      {/* Search & Filters */}
+      <div className="flex flex-wrap gap-3 mb-5">
+        <div className="relative">
+          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Search students…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9 pr-4 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white w-64"
+          />
+        </div>
+        <select
+          value={filterBranch}
+          onChange={(e) => { setFilterBranch(e.target.value); setFilterClass(""); }}
+          className="rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+        >
+          <option value="">All Branches</option>
+          {uniqueBranches.map((b) => (
+            <option key={b} value={b}>{b}</option>
+          ))}
+        </select>
+        <select
+          value={filterClass}
+          onChange={(e) => setFilterClass(e.target.value)}
+          className="rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+        >
+          <option value="">All Classes</option>
+          {filteredClassesByBranch.map((c) => (
+            <option key={c.name} value={c.name}>
+              {c.grade_level ? `Grade ${c.grade_level}${c.section ? ` - ${c.section}` : ""}` : c.name}
+            </option>
+          ))}
+        </select>
       </div>
+
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div className="mb-3 flex items-center gap-3 rounded-xl bg-indigo-50 border border-indigo-200 px-4 py-2.5">
+          <span className="text-sm font-semibold text-indigo-800">{selectedIds.size} student{selectedIds.size !== 1 ? "s" : ""} selected</span>
+          <button
+            onClick={openBulkPromote}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+          >
+            <ArrowUpCircleIcon className="h-4 w-4" /> Promote Selected
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="ml-auto text-xs text-indigo-500 hover:text-indigo-700"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
 
       {/* Table */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
@@ -693,24 +806,28 @@ export default function AdminStudents() {
             </p>
           </div>
         ) : (
+          <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-100">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  Student
+                <th className="pl-4 pr-2 py-3">
+                  <input
+                    type="checkbox"
+                    checked={filtered.length > 0 && filtered.every((s) => selectedIds.has(s.id))}
+                    onChange={(e) => {
+                      if (e.target.checked) setSelectedIds(new Set(filtered.map((s) => s.id)));
+                      else setSelectedIds(new Set());
+                    }}
+                    className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                  />
                 </th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  Email
-                </th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  Joined
-                </th>
-                <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>{" "}
+                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Student</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden sm:table-cell">Email</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Class</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Branch</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">Session</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">Status</th>
+                <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -728,37 +845,50 @@ export default function AdminStudents() {
                   }}
                   className="hover:bg-gray-50 transition-colors cursor-pointer"
                 >
+                  <td className="pl-4 pr-2 py-3" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(student.id)}
+                      onChange={(e) => {
+                        const next = new Set(selectedIds);
+                        if (e.target.checked) next.add(student.id);
+                        else next.delete(student.id);
+                        setSelectedIds(next);
+                      }}
+                      className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                  </td>
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-sm">
                         {student.full_name?.[0] || "S"}
                       </div>
-                      <span className="text-sm font-medium text-gray-900">
-                        {student.full_name}
-                      </span>
+                      <span className="text-sm font-medium text-gray-900">{student.full_name}</span>
                     </div>
                   </td>
-                  <td className="px-5 py-3">
+                  <td className="px-5 py-3 hidden sm:table-cell">
                     <span className="inline-flex items-center gap-1.5 text-sm text-gray-500">
                       <EnvelopeIcon className="h-3.5 w-3.5" />
                       {student.email}
                     </span>
                   </td>
                   <td className="px-5 py-3">
-                    <span
-                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        student.is_active
-                          ? "bg-green-50 text-green-700"
-                          : "bg-red-50 text-red-600"
-                      }`}
-                    >
-                      {student.is_active ? "Active" : "Inactive"}
+                    <span className="inline-flex items-center bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full text-xs font-medium">
+                      {student.class_name
+                        ? [student.grade_level && `Grade ${student.grade_level}`, student.section && `Sec ${student.section}`].filter(Boolean).join(" · ") || student.class_name
+                        : "—"}
                     </span>
                   </td>
-                  <td className="px-5 py-3 text-sm text-gray-400">
-                    {student.created_at
-                      ? new Date(student.created_at).toLocaleDateString()
-                      : "—"}
+                  <td className="px-5 py-3 text-sm text-gray-500 hidden md:table-cell">
+                    {student.branch_name || "—"}
+                  </td>
+                  <td className="px-5 py-3 text-sm text-gray-500 hidden lg:table-cell">
+                    {student.academic_session || "—"}
+                  </td>
+                  <td className="px-5 py-3 hidden lg:table-cell">
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${student.is_active ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                      {student.is_active ? "Active" : "Inactive"}
+                    </span>
                   </td>
                   <td className="px-5 py-3 text-right">
                     <div className="flex items-center justify-end gap-1.5">
@@ -801,6 +931,7 @@ export default function AdminStudents() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
@@ -956,11 +1087,19 @@ export default function AdminStudents() {
               setForm((f) => ({ ...f, date_of_birth: e.target.value }))
             }
           />
-          <Input
-            label="Gender"
-            value={form.gender}
-            onChange={(e) => setForm((f) => ({ ...f, gender: e.target.value }))}
-          />
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
+            <select
+              value={form.gender}
+              onChange={(e) => setForm((f) => ({ ...f, gender: e.target.value }))}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">-- Select --</option>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
           <Input
             label="Address"
             value={form.address}
@@ -1522,13 +1661,19 @@ export default function AdminStudents() {
               setEditForm((f) => ({ ...f, date_of_birth: e.target.value }))
             }
           />
-          <Input
-            label="Gender"
-            value={editForm.gender || ""}
-            onChange={(e) =>
-              setEditForm((f) => ({ ...f, gender: e.target.value }))
-            }
-          />
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
+            <select
+              value={editForm.gender || ""}
+              onChange={(e) => setEditForm((f) => ({ ...f, gender: e.target.value }))}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">-- Select --</option>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
           <Input
             label="Address"
             value={editForm.address || ""}
@@ -1554,6 +1699,37 @@ export default function AdminStudents() {
             Save Changes
           </Button>
         </form>
+      </Modal>
+
+      <Modal
+        isOpen={bulkPromoteOpen}
+        onClose={() => { if (!bulkPromoting) setBulkPromoteOpen(false); }}
+        title={`Promote ${selectedIds.size} Student${selectedIds.size !== 1 ? "s" : ""}`}
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-gray-500">
+            All selected students will be promoted to the next grade in the given academic session.
+          </p>
+          <Input
+            label="New Academic Session"
+            value={bulkSession}
+            onChange={(e) => setBulkSession(e.target.value)}
+            placeholder="2025-2026"
+          />
+          <Input
+            label="Notes (optional)"
+            value={bulkNotes}
+            onChange={(e) => setBulkNotes(e.target.value)}
+          />
+          {bulkPromoting && (
+            <div className="rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-700">
+              Promoting… {bulkProgress.done} / {bulkProgress.total}
+            </div>
+          )}
+          <Button onClick={submitBulkPromote} loading={bulkPromoting} fullWidth>
+            Confirm Promote All
+          </Button>
+        </div>
       </Modal>
 
       <Modal

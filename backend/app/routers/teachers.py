@@ -5,6 +5,9 @@ from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form, De
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional, Dict
 from datetime import datetime, date
+import uuid
+import json as _json
+import os
 
 from app.routers.auth import get_user_from_token
 from app.routers.homework import ensure_homework_schema, teacher_can_manage_class
@@ -1102,3 +1105,412 @@ async def get_teacher_book(book_id: str, current_user: dict = Depends(get_user_f
         chapter_list.append({**dict(ch), "topics": [dict(t) for t in topics]})
 
     return {**dict(book), "chapters": chapter_list}
+
+
+# ── Slide Generation ──────────────────────────────────────────────────────────
+
+@router.post("/generate-slides")
+async def teacher_generate_slides(
+    body: dict,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Generate AI slide deck for teacher (no admin role required)."""
+    from app.schemas.slides_ai import GenerateSlidesRequest
+    from app.utils.ai_slide_deck import generate_slide_deck
+    req = GenerateSlidesRequest(**body)
+    return await generate_slide_deck(req)
+
+
+# ============================================
+# TEACHER-SPECIFIC TOPIC CONTENT (slides + lectures)
+# Each teacher owns their own copy per library topic.
+# ============================================
+
+class TeacherSlideSaveRequest(BaseModel):
+    slides: List[Dict]
+    slide_theme: Optional[str] = None
+    content_body: Optional[str] = None
+
+
+def _ttc_row_json(row: dict) -> dict:
+    """Normalize asyncpg Record → JSON-safe dict for teacher_topic_content."""
+    out = dict(row)
+    for k, v in list(out.items()):
+        if isinstance(v, uuid.UUID):
+            out[k] = str(v)
+        elif hasattr(v, "isoformat"):
+            try:
+                out[k] = v.isoformat()
+            except Exception:
+                out[k] = str(v)
+    return out
+
+
+async def _ensure_teacher_content_table():
+    """Ensure teacher_topic_content table exists (delegates to library ensure)."""
+    from app.routers.library import ensure_library_tables
+    await ensure_library_tables()
+
+
+@router.get("/topics/{topic_id}/my-content")
+async def get_my_topic_content(
+    topic_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Get the calling teacher's slides + lecture for a library topic.
+    Returns null-field structure if the teacher has never saved anything (empty slate)."""
+    await _ensure_teacher_content_table()
+    teacher_id = str(current_user["user_id"])
+    topic_id = (topic_id or "").strip()
+
+    topic = await execute_one(
+        "SELECT id, title, content_body FROM library_topics WHERE id = $1::uuid",
+        topic_id,
+    )
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    row = await execute_one(
+        """
+        SELECT * FROM teacher_topic_content
+        WHERE teacher_id = $1::uuid AND library_topic_id = $2::uuid
+        """,
+        teacher_id,
+        topic_id,
+    )
+
+    if not row:
+        return {
+            "data": {
+                "id": None,
+                "teacher_id": teacher_id,
+                "library_topic_id": topic_id,
+                "topic_title": topic["title"],
+                "slides_json": None,
+                "slide_theme": None,
+                "lecture_video_url": None,
+                "lecture_metadata_json": None,
+                "lecture_saved_at": None,
+                "lecture_duration_seconds": None,
+            }
+        }
+
+    out = _ttc_row_json(dict(row))
+    out["topic_title"] = topic["title"]
+    return {"data": out}
+
+
+@router.put("/topics/{topic_id}/slides")
+async def save_my_topic_slides(
+    topic_id: str,
+    body: TeacherSlideSaveRequest,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Upsert this teacher's slide deck for a library topic."""
+    await _ensure_teacher_content_table()
+    teacher_id = str(current_user["user_id"])
+    topic_id = (topic_id or "").strip()
+
+    topic = await execute_one(
+        "SELECT id FROM library_topics WHERE id = $1::uuid", topic_id
+    )
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    try:
+        slides_str = _json.dumps(body.slides, ensure_ascii=False)
+    except Exception:
+        slides_str = "[]"
+    theme = (body.slide_theme or "")[:160] or None
+
+    row = await execute_one(
+        """
+        INSERT INTO teacher_topic_content
+            (teacher_id, library_topic_id, slides_json, slide_theme, updated_at)
+        VALUES ($1::uuid, $2::uuid, $3, $4, NOW())
+        ON CONFLICT (teacher_id, library_topic_id) DO UPDATE
+            SET slides_json = EXCLUDED.slides_json,
+                slide_theme = EXCLUDED.slide_theme,
+                updated_at  = NOW()
+        RETURNING *
+        """,
+        teacher_id, topic_id, slides_str, theme,
+    )
+    return {"data": _ttc_row_json(dict(row))}
+
+
+@router.post("/topics/{topic_id}/lecture")
+async def upload_my_topic_lecture(
+    topic_id: str,
+    video: UploadFile = File(...),
+    quality: str = Form(default="720p"),
+    duration_seconds: str = Form(default="0"),
+    has_camera: str = Form(default="false"),
+    has_microphone: str = Form(default="false"),
+    slide_timestamps_json: Optional[str] = Form(default=None),
+    transcript: Optional[str] = Form(default=None),
+    captions_json: Optional[str] = Form(default=None),
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Upload/replace this teacher's lecture video for a library topic."""
+    await _ensure_teacher_content_table()
+    teacher_id = str(current_user["user_id"])
+    topic_id = (topic_id or "").strip()
+
+    topic = await execute_one(
+        "SELECT id FROM library_topics WHERE id = $1::uuid", topic_id
+    )
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    # Teacher must have their own slides saved first
+    teacher_row = await execute_one(
+        """
+        SELECT id, slides_json, lecture_video_url FROM teacher_topic_content
+        WHERE teacher_id = $1::uuid AND library_topic_id = $2::uuid
+        """,
+        teacher_id, topic_id,
+    )
+    if not teacher_row or not (teacher_row.get("slides_json") or "").strip().replace("[]", ""):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot save lecture: save your slides for this topic first",
+        )
+
+    filename = (video.filename or "").lower()
+    if not filename.endswith((".webm", ".mp4", ".mov", ".mkv")):
+        raise HTTPException(status_code=400, detail="Unsupported video format")
+
+    content = await video.read()
+    if len(content) > 800 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Lecture file too large (max 800 MB)")
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty video upload")
+
+    lectures_dir = os.path.join("static", "lectures")
+    os.makedirs(lectures_dir, exist_ok=True)
+    ext = os.path.splitext(filename)[1] or ".webm"
+    # Teacher-scoped filename prevents collisions between teachers on same topic
+    safe_name = f"teacher_{teacher_id[:8]}_{topic_id[:8]}_{uuid.uuid4().hex}{ext}"
+    abs_path = os.path.join(lectures_dir, safe_name)
+    with open(abs_path, "wb") as f:
+        f.write(content)
+    video_url = f"/static/lectures/{safe_name}"
+
+    # Parse optional form fields
+    def _flt(v, d=0.0):
+        try:
+            return max(0.0, float(str(v or "").strip()))
+        except (TypeError, ValueError):
+            return d
+
+    def _fbool(v):
+        return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
+    slide_timestamps = []
+    if slide_timestamps_json:
+        try:
+            p = _json.loads(slide_timestamps_json)
+            if isinstance(p, list):
+                slide_timestamps = p
+        except Exception:
+            pass
+
+    captions = []
+    if captions_json:
+        try:
+            p = _json.loads(captions_json)
+            if isinstance(p, list):
+                captions = p
+        except Exception:
+            pass
+
+    dur_form = _flt(duration_seconds)
+    dur_ts = max((_flt(item.get("time")) for item in slide_timestamps if isinstance(item, dict)), default=0.0)
+    stored_dur = max(dur_form, dur_ts)
+
+    lecture_metadata = {
+        "lectureId": uuid.uuid4().hex,
+        "topicId": topic_id,
+        "videoUrl": video_url,
+        "duration": stored_dur,
+        "quality": str(quality or "720p"),
+        "hasCamera": _fbool(has_camera),
+        "hasMicrophone": _fbool(has_microphone),
+        "slideTimestamps": slide_timestamps,
+        "transcript": transcript or "",
+        "captions": captions,
+        "createdBy": teacher_id,
+    }
+
+    # Delete old lecture file if replacing
+    if teacher_row and teacher_row.get("lecture_video_url"):
+        from app.routers.library import _remove_local_static_file
+        _remove_local_static_file(teacher_row["lecture_video_url"])
+
+    dur_col = stored_dur if stored_dur > 0 else None
+    row = await execute_one(
+        """
+        INSERT INTO teacher_topic_content
+            (teacher_id, library_topic_id, lecture_video_url, lecture_metadata_json,
+             lecture_saved_at, lecture_duration_seconds, updated_at)
+        VALUES ($1::uuid, $2::uuid, $3, $4, NOW(), $5, NOW())
+        ON CONFLICT (teacher_id, library_topic_id) DO UPDATE
+            SET lecture_video_url        = EXCLUDED.lecture_video_url,
+                lecture_metadata_json    = EXCLUDED.lecture_metadata_json,
+                lecture_saved_at         = NOW(),
+                lecture_duration_seconds = EXCLUDED.lecture_duration_seconds,
+                updated_at               = NOW()
+        RETURNING *
+        """,
+        teacher_id, topic_id, video_url,
+        _json.dumps(lecture_metadata, ensure_ascii=False),
+        dur_col,
+    )
+    return {"data": _ttc_row_json(dict(row))}
+
+
+@router.delete("/topics/{topic_id}/lecture")
+async def delete_my_topic_lecture(
+    topic_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Delete this teacher's lecture video for a topic (slides remain intact)."""
+    await _ensure_teacher_content_table()
+    teacher_id = str(current_user["user_id"])
+    topic_id = (topic_id or "").strip()
+
+    row = await execute_one(
+        """
+        SELECT id, lecture_video_url FROM teacher_topic_content
+        WHERE teacher_id = $1::uuid AND library_topic_id = $2::uuid
+        """,
+        teacher_id, topic_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="No content found for this topic")
+
+    if row.get("lecture_video_url"):
+        from app.routers.library import _remove_local_static_file
+        _remove_local_static_file(row["lecture_video_url"])
+
+    updated = await execute_one(
+        """
+        UPDATE teacher_topic_content
+        SET lecture_video_url        = NULL,
+            lecture_metadata_json    = NULL,
+            lecture_saved_at         = NULL,
+            lecture_duration_seconds = NULL,
+            updated_at               = NOW()
+        WHERE teacher_id = $1::uuid AND library_topic_id = $2::uuid
+        RETURNING *
+        """,
+        teacher_id, topic_id,
+    )
+    return {"data": _ttc_row_json(dict(updated))}
+
+
+@router.get("/my-lectures")
+async def list_my_lectures(
+    q: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Paginated list of this teacher's recorded lectures with full hierarchy metadata."""
+    await _ensure_teacher_content_table()
+    teacher_id = str(current_user["user_id"])
+    lim = max(1, min(int(limit or 50), 100))
+    off = max(0, int(offset or 0))
+    search = (q or "").strip() or None
+
+    rows = await execute_query(
+        """
+        SELECT
+            ttc.id              AS content_id,
+            ttc.library_topic_id AS topic_id,
+            lt.title            AS topic_title,
+            ttc.lecture_video_url,
+            ttc.lecture_metadata_json,
+            ttc.lecture_duration_seconds,
+            ttc.lecture_saved_at,
+            ch.id               AS chapter_id,
+            ch.chapter_number,
+            ch.title            AS chapter_title,
+            b.id                AS book_id,
+            b.title             AS book_title,
+            b.board_name        AS book_board_name,
+            lc.id               AS library_class_id,
+            lc.name             AS library_class_name,
+            s.id                AS subject_id,
+            s.name              AS subject_name,
+            COUNT(*) OVER()     AS total_count
+        FROM teacher_topic_content ttc
+        JOIN library_topics lt   ON lt.id = ttc.library_topic_id
+        LEFT JOIN library_chapters ch ON ch.id = lt.chapter_id
+        LEFT JOIN library_books b     ON b.id  = ch.book_id
+        LEFT JOIN library_classes lc  ON lc.id = b.class_id
+        LEFT JOIN library_subjects s  ON s.id  = b.subject_id
+        WHERE ttc.teacher_id = $1::uuid
+          AND ttc.lecture_video_url IS NOT NULL
+          AND trim(ttc.lecture_video_url) <> ''
+          AND ($2::text IS NULL
+               OR lt.title   ILIKE ('%' || $2 || '%')
+               OR COALESCE(ch.title, '') ILIKE ('%' || $2 || '%')
+               OR COALESCE(b.title,  '') ILIKE ('%' || $2 || '%')
+               OR COALESCE(s.name,   '') ILIKE ('%' || $2 || '%')
+               OR COALESCE(lc.name,  '') ILIKE ('%' || $2 || '%'))
+        ORDER BY ttc.lecture_saved_at DESC NULLS LAST
+        LIMIT $3 OFFSET $4
+        """,
+        teacher_id, search, lim, off,
+    )
+
+    total = int(rows[0]["total_count"]) if rows else 0
+    items = [_ttc_row_json(dict(r)) for r in rows]
+    for item in items:
+        item.pop("total_count", None)
+    return {"data": items, "total": total, "limit": lim, "offset": off}
+
+
+@router.get("/my-content-status/book/{book_id}")
+async def get_my_content_status_for_book(
+    book_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Return {topic_id: {has_slides, has_lecture}} for every topic in book, for this user only."""
+    await _ensure_teacher_content_table()
+    user_id = current_user["user_id"]
+    rows = await execute_query(
+        """
+        SELECT ttc.library_topic_id::text AS topic_id,
+               (ttc.slides_json IS NOT NULL) AS has_slides,
+               (ttc.lecture_video_url IS NOT NULL) AS has_lecture
+        FROM teacher_topic_content ttc
+        JOIN library_topics lt ON lt.id = ttc.library_topic_id
+        JOIN library_chapters lc ON lc.id = lt.chapter_id
+        WHERE lc.book_id = $1::uuid
+          AND ttc.teacher_id = $2::uuid
+        """,
+        book_id, user_id,
+    )
+    return {r["topic_id"]: {"has_slides": bool(r["has_slides"]), "has_lecture": bool(r["has_lecture"])} for r in rows}
+
+
+@router.delete("/topics/{topic_id}/slides")
+async def delete_my_topic_slides(
+    topic_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Clear this user's slides for a topic (lecture stays untouched)."""
+    await _ensure_teacher_content_table()
+    user_id = current_user["user_id"]
+    await execute_write(
+        """
+        UPDATE teacher_topic_content
+        SET slides_json = NULL, slide_theme = NULL, updated_at = NOW()
+        WHERE teacher_id = $1::uuid AND library_topic_id = $2::uuid
+        """,
+        user_id, topic_id,
+    )
+    return {"ok": True}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import libraryService from "../../services/libraryService";
+import teacherService from "../../services/teacherService";
 import { PageSpinner } from "../../components/common/Spinner";
 import toast from "react-hot-toast";
 import {
@@ -29,6 +30,7 @@ export default function BookDetail() {
   const [deletingSlides, setDeletingSlides] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deletingLecture, setDeletingLecture] = useState(false);
+  const [contentStatus, setContentStatus] = useState({});
 
   // passed via navigate state for breadcrumb
   const boardId = location.state?.boardId;
@@ -38,10 +40,13 @@ export default function BookDetail() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await libraryService.getBookDetails(bookId);
-      const data = res?.data?.data ?? res?.data;
+      const [bookRes, statusRes] = await Promise.all([
+        libraryService.getBookDetails(bookId),
+        teacherService.getMyContentStatusForBook(bookId).catch(() => ({ data: {} })),
+      ]);
+      const data = bookRes?.data?.data ?? bookRes?.data;
       setBook(data);
-      // auto-expand first chapter
+      setContentStatus(statusRes?.data ?? {});
       if (data?.chapters?.length > 0) {
         setExpandedChapters({ [data.chapters[0].id]: true });
       }
@@ -67,36 +72,11 @@ export default function BookDetail() {
     if (!selectedTopic) return;
     setDeletingSlides(true);
     try {
-      await libraryService.updateTopic(selectedTopic.id, {
-        clear_slides: true,
-      });
-      toast.success("Slides deleted. You can now create new slides.");
-      // Update local state so UI reflects change immediately
-      setSelectedTopic((t) => ({
-        ...t,
-        has_slides: false,
-        slides_json: null,
-        has_lecture: false,
-        lecture_video_url: null,
-        lecture_metadata_json: null,
-      }));
-      setBook((b) => ({
-        ...b,
-        chapters: (b.chapters || []).map((ch) => ({
-          ...ch,
-          topics: (ch.topics || []).map((tp) =>
-            tp.id === selectedTopic.id
-              ? {
-                  ...tp,
-                  has_slides: false,
-                  slides_json: null,
-                  has_lecture: false,
-                  lecture_video_url: null,
-                  lecture_metadata_json: null,
-                }
-              : tp
-          ),
-        })),
+      await teacherService.deleteMyTopicSlides(selectedTopic.id);
+      toast.success("Your slides deleted.");
+      setContentStatus((prev) => ({
+        ...prev,
+        [selectedTopic.id]: { ...prev[selectedTopic.id], has_slides: false },
       }));
       setConfirmDelete(false);
     } catch {
@@ -108,27 +88,14 @@ export default function BookDetail() {
 
   const handleDeleteLecture = async () => {
     if (!selectedTopic?.id) return;
-    if (!window.confirm("Delete recorded lecture for this topic?")) return;
+    if (!window.confirm("Delete your recorded lecture for this topic?")) return;
     setDeletingLecture(true);
     try {
-      await libraryService.deleteTopicLecture(selectedTopic.id);
+      await teacherService.deleteMyTopicLecture(selectedTopic.id);
       toast.success("Recorded lecture deleted.");
-      setSelectedTopic((t) => ({
-        ...t,
-        has_lecture: false,
-        lecture_video_url: null,
-        lecture_metadata_json: null,
-      }));
-      setBook((b) => ({
-        ...b,
-        chapters: (b.chapters || []).map((ch) => ({
-          ...ch,
-          topics: (ch.topics || []).map((tp) =>
-            tp.id === selectedTopic.id
-              ? { ...tp, has_lecture: false, lecture_video_url: null, lecture_metadata_json: null }
-              : tp
-          ),
-        })),
+      setContentStatus((prev) => ({
+        ...prev,
+        [selectedTopic.id]: { ...prev[selectedTopic.id], has_lecture: false },
       }));
     } catch {
       toast.error("Failed to delete lecture.");
@@ -145,9 +112,9 @@ export default function BookDetail() {
   const totalTopics = (book.chapters || []).reduce(
     (s, ch) => s + (ch.topics || []).length, 0
   );
-  const lectureUrl = selectedTopic?.lecture_video_url
-    ? `${(import.meta.env.VITE_API_URL || "http://localhost:8000/api").replace("/api", "")}${selectedTopic.lecture_video_url}`
-    : "";
+  const myStatus = selectedTopic ? (contentStatus[selectedTopic.id] ?? {}) : {};
+  const hasMySlides = Boolean(myStatus.has_slides);
+  const hasMyLecture = Boolean(myStatus.has_lecture);
 
   return (
     <div className="p-6 max-w-7xl mx-auto pb-24">
@@ -254,7 +221,19 @@ export default function BookDetail() {
                           }`}
                         >
                           <span className="text-xs text-gray-400 mt-0.5 w-5 flex-shrink-0">{idx + 1}.</span>
-                          <span className="flex-1 min-w-0 line-clamp-2">{topic.title}</span>
+                          <span className="flex-1 min-w-0">
+                            <span className="line-clamp-2 block">{topic.title}</span>
+                            {(contentStatus[topic.id]?.has_slides || contentStatus[topic.id]?.has_lecture) && (
+                              <span className="flex gap-1 mt-1 flex-wrap">
+                                {contentStatus[topic.id]?.has_slides && (
+                                  <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">Slides</span>
+                                )}
+                                {contentStatus[topic.id]?.has_lecture && (
+                                  <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Lecture</span>
+                                )}
+                              </span>
+                            )}
+                          </span>
                         </button>
                       ))
                     )}
@@ -283,9 +262,9 @@ export default function BookDetail() {
                   </div>
                 </div>
 
-                {/* Action buttons — behaviour depends on whether slides exist */}
+                {/* Action buttons — behaviour depends on whether this user has personal slides */}
                 <div className="flex gap-2 mt-4 flex-wrap items-center">
-                  {selectedTopic.has_slides ? (
+                  {hasMySlides ? (
                     <>
                       {/* Present */}
                       <button
@@ -324,10 +303,10 @@ export default function BookDetail() {
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-rose-200 text-rose-700 text-xs font-semibold hover:bg-rose-50 transition-colors"
                       >
                         <FilmIcon className="h-3.5 w-3.5" />
-                        {selectedTopic.has_lecture ? "Re-record Lecture" : "Record Lecture"}
+                        {hasMyLecture ? "Re-record Lecture" : "Record Lecture"}
                       </button>
 
-                      {selectedTopic.has_lecture && lectureUrl && (
+                      {hasMyLecture && (
                         <>
                           <button
                             onClick={() => navigate(`/admin/topics/${selectedTopic.id}/lecture`)}

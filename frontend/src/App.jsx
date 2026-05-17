@@ -31,10 +31,6 @@ const StudentTopicLearn = lazy(
   () => import("./pages/student/StudentTopicLearn"),
 );
 const StudentExams = lazy(() => import("./pages/student/StudentExams"));
-const StudentExamTake = lazy(() => import("./pages/student/StudentExamTake"));
-const StudentExamResults = lazy(
-  () => import("./pages/student/StudentExamResults"),
-);
 const MyEnrollment = lazy(() => import("./pages/student/MyEnrollment"));
 const SubjectView = lazy(() => import("./pages/student/SubjectView"));
 const VideoLesson = lazy(() => import("./pages/student/VideoLesson"));
@@ -58,9 +54,6 @@ const LectureViewer = lazy(() => import("./pages/teacher/LectureViewerPage"));
 const GenerateExam = lazy(() => import("./pages/teacher/GenerateExam"));
 const ExamsPage = lazy(() => import("./pages/teacher/Exams"));
 const ExamEditor = lazy(() => import("./pages/teacher/ExamEditor"));
-const TeacherExamSubmissions = lazy(
-  () => import("./pages/teacher/TeacherExamSubmissions"),
-);
 const TeacherReports = lazy(() => import("./pages/teacher/Reports"));
 const TeacherClassHomework = lazy(
   () => import("./pages/teacher/TeacherClassHomework"),
@@ -73,6 +66,9 @@ const TeacherHomeworkSubmissions = lazy(
 );
 const TeacherHomework = lazy(() => import("./pages/teacher/Homework"));
 const TeacherMyCurriculum = lazy(() => import("./pages/teacher/MyCurriculum"));
+const TeacherSlides = lazy(() => import("./pages/teacher/Slides"));
+const TeacherRecordLecture = lazy(() => import("./pages/teacher/TeacherRecordLecture"));
+const TeacherMyLectures = lazy(() => import("./pages/teacher/MyLectures"));
 
 // Manager
 const ManagerDashboard = lazy(() => import("./pages/manager/Dashboard"));
@@ -177,14 +173,6 @@ export default function App() {
               element={<StudentHomeworkDetail />}
             />
             <Route path="/student/exams" element={<StudentExams />} />
-            <Route
-              path="/student/exams/:examId"
-              element={<StudentExamTake />}
-            />
-            <Route
-              path="/student/exam/:examId/results"
-              element={<StudentExamResults />}
-            />
             <Route path="/student/enrollment" element={<MyEnrollment />} />
             <Route
               path="/student/learn/topic/:topicId"
@@ -245,16 +233,15 @@ export default function App() {
               <Route path="/teacher/generate-exam" element={<GenerateExam />} />
               <Route path="/teacher/exams" element={<ExamsPage />} />
               <Route path="/teacher/exams/:examId" element={<ExamEditor />} />
-              <Route
-                path="/teacher/exams/:examId/submissions"
-                element={<TeacherExamSubmissions />}
-              />
               <Route path="/teacher/reports" element={<TeacherReports />} />
               <Route
                 path="/teacher/curriculum"
                 element={<TeacherMyCurriculum />}
               />
               <Route path="/teacher/chat" element={<TeacherChat />} />
+              <Route path="/teacher/slides" element={<TeacherSlides />} />
+              <Route path="/teacher/record-lecture/:libraryTopicId" element={<TeacherRecordLecture />} />
+              <Route path="/teacher/my-lectures" element={<TeacherMyLectures />} />
             </Route>
 
             {/* ── MANAGER ── */}

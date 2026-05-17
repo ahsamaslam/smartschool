@@ -41,15 +41,33 @@ const managerService = {
     api.post(`${API_ROUTES.MANAGERS}/teachers/${teacherId}/assign-class`, {
       class_id: classId,
     }),
+  getTeacherAssignments: (teacherId) =>
+    api.get(`${API_ROUTES.MANAGERS}/teachers/${teacherId}/assignments`),
+  saveTeacherAssignments: (teacherId, data) =>
+    api.post(`${API_ROUTES.MANAGERS}/teachers/${teacherId}/save-assignments`, data),
 
   // Students
   getStudents: (params) =>
     api.get(`${API_ROUTES.MANAGERS}/students`, { params }),
+  getStudentDetail: (studentId) =>
+    api.get(`${API_ROUTES.MANAGERS}/students/${studentId}`),
   createStudent: (data) => api.post(`${API_ROUTES.MANAGERS}/students`, data),
   updateStudent: (studentId, data) =>
     api.patch(`${API_ROUTES.MANAGERS}/students/${studentId}`, data),
   deleteStudent: (studentId) =>
     api.delete(`${API_ROUTES.MANAGERS}/students/${studentId}`),
+  promoteStudent: (studentId, data) =>
+    api.post(`${API_ROUTES.MANAGERS}/students/${studentId}/promote`, data),
+  repeatStudent: (studentId, data) =>
+    api.post(`${API_ROUTES.MANAGERS}/students/${studentId}/repeat`, data),
+  changeStudentSection: (studentId, data) =>
+    api.post(`${API_ROUTES.MANAGERS}/students/${studentId}/change-section`, data),
+  getStudentSectionOptions: (studentId) =>
+    api.get(`${API_ROUTES.MANAGERS}/students/${studentId}/section-options`),
+  setCurrentEnrollment: (studentId, data) =>
+    api.post(`${API_ROUTES.MANAGERS}/students/${studentId}/set-current-enrollment`, data),
+  setStudentPassword: (studentId, password) =>
+    api.post(`${API_ROUTES.MANAGERS}/users/${studentId}/set-password`, { password }),
   importStudents: (file) => {
     const formData = new FormData();
     formData.append("file", file);

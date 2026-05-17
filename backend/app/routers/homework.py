@@ -613,14 +613,17 @@ async def ai_generate_homework_draft(
 
     subject_hint = (meta or {}).get("topic_title")
 
-    raw = await generate_homework_structured_json(
-        body.topic_or_content.strip(),
-        subject_hint=subject_hint,
-        class_hint=class_hint,
-        num_mcq=body.num_mcq,
-        num_text=body.num_text,
-        difficulty=body.difficulty,
-    )
+    try:
+        raw = await generate_homework_structured_json(
+            body.topic_or_content.strip(),
+            subject_hint=subject_hint,
+            class_hint=class_hint,
+            num_mcq=body.num_mcq,
+            num_text=body.num_text,
+            difficulty=body.difficulty,
+        )
+    except RuntimeError as ai_err:
+        raise HTTPException(status_code=402, detail=str(ai_err))
 
     questions_out: List[dict] = []
     for q in raw.get("questions") or []:

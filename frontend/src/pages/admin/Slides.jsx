@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
+import { useAuth } from "../../context/AuthContext";
 import adminService from "../../services/adminService";
+import teacherService from "../../services/teacherService";
 import libraryService from "../../services/libraryService";
 import { parseLibraryTopicSlidesJson } from "../../utils/libraryTopicSlides";
 import { SlideRenderer } from "../../components/slides/SlideRenderer";
@@ -37,6 +39,15 @@ import {
 export default function AdminSlides() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = useAuth();
+
+  // Redirect teachers to their own slides page
+  useEffect(() => {
+    if (user?.role === "teacher") {
+      navigate("/teacher/slides", { replace: true, state: location.state });
+    }
+  }, [user, navigate, location.state]);
+
   const topicFromLibrary = location.state?.topic || null;
   const libraryContextFromNav = location.state?.libraryContext || null;
 
@@ -121,7 +132,8 @@ export default function AdminSlides() {
     setGenerating(true);
     const tid = toast.loading("AI is composing your slide deck…");
     try {
-      const res = await adminService.generateAISlides({
+      const slideService = user?.role === "teacher" ? teacherService : adminService;
+      const res = await slideService.generateAISlides({
         topic: topicInput,
         content: contentInput,
         audience,
@@ -179,7 +191,7 @@ export default function AdminSlides() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await libraryService.getTopic(tid, { timeout: 20000 });
+        const res = await teacherService.getMyTopicContent(tid);
         const row = res.data?.data ?? res.data;
         if (cancelled || !row) return;
         const deck = parseLibraryTopicSlidesJson(row.slides_json);
@@ -1020,6 +1032,7 @@ export default function AdminSlides() {
         existingLibraryTopicId={topicFromLibrary?.id}
         topicHint={topicFromLibrary}
         onComplete={(loc) => setPostSavePrompt(loc)}
+        userRole={user?.role}
       />
 
       {postSavePrompt && (

@@ -849,7 +849,7 @@ You MUST output exactly {nm} mcq-type questions and exactly {nt} text-type quest
 
     try:
         message = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=4096,
             temperature=0.65,
             system=system_prompt,
@@ -909,7 +909,14 @@ You MUST output exactly {nm} mcq-type questions and exactly {nt} text-type quest
             "questions": questions_out,
         }
     except Exception as e:
-        logger.warning("Structured homework AI failed: %s", str(e))
+        err_str = str(e)
+        logger.warning("Structured homework AI failed: %s", err_str)
+        # Surface billing / auth errors directly — don't silently return placeholder content
+        err_lower = err_str.lower()
+        if "credit balance" in err_lower or "too low" in err_lower:
+            raise RuntimeError("Anthropic account has no credits. Please top up at console.anthropic.com → Plans & Billing.")
+        if _looks_like_auth_error(err_str):
+            raise RuntimeError("Anthropic API key is invalid. Check ANTHROPIC_API_KEY in backend/.env.")
         return _fallback_homework_payload(text_in, nm, nt, subject_hint)
 
 

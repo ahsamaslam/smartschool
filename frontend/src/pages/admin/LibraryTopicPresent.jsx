@@ -4,6 +4,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { XMarkIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/24/outline";
 import libraryService from "../../services/libraryService";
+import teacherService from "../../services/teacherService";
 import { SlideRenderer } from "../../components/slides/SlideRenderer";
 import { SLIDE_TEMPLATES, SLIDE_ANIMATIONS } from "../../data/slideTemplates";
 import { PageSpinner } from "../../components/common/Spinner";
@@ -31,19 +32,12 @@ export default function LibraryTopicPresent() {
       }
       setLoading(true);
       try {
-        const res = await libraryService.getTopic(topicId, { timeout: 20000 });
+        const res = await teacherService.getMyTopicContent(topicId);
         const rowRaw = res.data?.data ?? res.data;
         const row =
           rowRaw && typeof rowRaw === "object" && !Array.isArray(rowRaw) ? rowRaw : null;
-        const rowPk = row
-          ? row.id ?? row.topic_id ?? row.topicId ?? row.library_topic_id ?? row.ID
-          : null;
-        const rowPkStr =
-          rowPk !== undefined && rowPk !== null && String(rowPk).trim() !== ""
-            ? String(rowPk).trim()
-            : "";
-        if (cancel || !row || !rowPkStr) throw new Error("Topic not found");
-        setTitle(row.title || "Slides");
+        if (cancel || !row) throw new Error("Topic not found");
+        setTitle(row.title || row.topic_title || "Slides");
         const deck = parseLibraryTopicSlidesJson(row.slides_json);
         if (!deck.length) {
           toast.error("No slides saved for this topic yet");

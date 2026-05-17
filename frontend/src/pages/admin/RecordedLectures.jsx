@@ -10,6 +10,7 @@ import {
   TrashIcon,
 } from "@heroicons/react/24/outline";
 import libraryService from "../../services/libraryService";
+import teacherService from "../../services/teacherService";
 import RecordedLectureDurationCell, {
   coerceLectureMeta,
 } from "../../components/library/RecordedLectureDuration";
@@ -124,13 +125,14 @@ export default function AdminRecordedLectures() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await libraryService.listRecordedLectures({
+      const res = await teacherService.listMyLectures({
         q: debouncedQ || undefined,
         limit,
         offset,
       });
       const payload = res?.data?.data ?? res?.data;
-      setItems(Array.isArray(payload?.items) ? payload.items : []);
+      const rawItems = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.items) ? payload.items : [];
+      setItems(rawItems);
       setTotal(Number(payload?.total) || 0);
     } catch (e) {
       console.error(e);
@@ -166,7 +168,7 @@ export default function AdminRecordedLectures() {
       return;
     }
     try {
-      await libraryService.deleteTopicLecture(topicId);
+      await teacherService.deleteMyTopicLecture(topicId);
       toast.success("Lecture deleted.");
       setRefreshKey((k) => k + 1);
     } catch {
@@ -244,7 +246,7 @@ export default function AdminRecordedLectures() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {items.map((row) => {
-                    const meta = coerceLectureMeta(row.lecture_metadata);
+                    const meta = coerceLectureMeta(row.lecture_metadata_json ?? row.lecture_metadata);
                     const libClass = row.library_class_name || row.class_name;
                     const split = splitGradeFromSchoolSections(row.sections_catalog, libClass);
                     const chapterLabel =

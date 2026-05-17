@@ -1,27 +1,46 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import learningService from "../../services/learningService";
+import examService from "../../services/examService";
 import { PageSpinner } from "../../components/common/Spinner";
 import Alert from "../../components/common/Alert";
 
-function ExamCard({ exam }) {
+function formatDateTime(dateStr, timeStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr + "T00:00:00");
+  const date = d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  if (!timeStr) return date;
+  const [h, m] = timeStr.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hour = h % 12 || 12;
+  return `${date} · ${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+function ExamCard({ exam, highlight }) {
+  const dateTime = formatDateTime(exam.exam_date, exam.exam_time);
   return (
-    <Link
-      to={`/student/exams/${exam.id}`}
-      className="block rounded-xl border border-gray-200 bg-white p-4 shadow-sm hover:border-indigo-200 transition-colors"
+    <div
+      className={`rounded-xl border p-4 shadow-sm ${
+        highlight
+          ? "border-indigo-400 bg-indigo-50"
+          : "border-gray-200 bg-white"
+      }`}
     >
       <p className="font-semibold text-gray-900">{exam.title}</p>
-      <p className="text-xs text-gray-500 mt-1">{exam.subject_name} · {exam.class_name}</p>
-      {exam.due_at && (
-        <p className="text-xs text-amber-700 mt-2">
-          Due {new Date(exam.due_at).toLocaleString()}
+      <p className="text-xs text-gray-500 mt-1">
+        {exam.subject_name} · {exam.class_name}
+      </p>
+      {exam.teacher_name && (
+        <p className="text-xs text-gray-400 mt-0.5">Teacher: {exam.teacher_name}</p>
+      )}
+      {dateTime && (
+        <p className={`text-xs mt-2 font-medium ${highlight ? "text-indigo-700" : "text-gray-600"}`}>
+          {dateTime}
         </p>
       )}
-    </Link>
+    </div>
   );
 }
 
-function Section({ title, description, exams, empty }) {
+function Section({ title, description, exams, empty, highlight }) {
   return (
     <section className="mb-10">
       <h2 className="text-lg font-bold text-gray-900 mb-1">{title}</h2>
@@ -33,7 +52,7 @@ function Section({ title, description, exams, empty }) {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {exams.map((e) => (
-            <ExamCard key={e.id} exam={e} />
+            <ExamCard key={e.id} exam={e} highlight={highlight} />
           ))}
         </div>
       )}
@@ -47,10 +66,10 @@ export default function StudentExams() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    learningService
-      .getGroupedExams()
+    examService
+      .getMyScheduledExams()
       .then((res) => setData(res.data))
-      .catch(() => setError("Could not load exams."))
+      .catch(() => setError("Could not load exam schedule."))
       .finally(() => setLoading(false));
   }, []);
 
@@ -60,35 +79,29 @@ export default function StudentExams() {
     <div className="p-6 max-w-4xl mx-auto">
       <h1 className="text-2xl font-bold text-gray-900 mb-1">My Exams</h1>
       <p className="text-sm text-gray-500 mb-8">
-        Exams from teachers for your enrolled sections. Open an exam to review questions
-        (answers are hidden until grading is enabled).
+        Scheduled exams from your teachers. Exams are physical — attend in class on the date and time shown.
       </p>
 
       {error && <Alert type="error" message={error} className="mb-6" />}
 
       <Section
-        title="Active"
-        description="You have started these exams."
-        exams={data?.active}
-        empty="No active exams."
+        title="Today"
+        description="Exams scheduled for today."
+        exams={data?.today}
+        empty="No exams scheduled for today."
+        highlight
       />
       <Section
         title="Upcoming"
-        description="Available to start when you are ready."
+        description="Future scheduled exams."
         exams={data?.upcoming}
         empty="No upcoming exams."
       />
       <Section
-        title="Missed"
-        description="Past due date and not submitted (if your teacher set a due date)."
-        exams={data?.missed}
-        empty="No missed exams."
-      />
-      <Section
-        title="Completed"
-        description="Submitted attempts."
-        exams={data?.completed}
-        empty="No completed exams yet."
+        title="Past"
+        description="Exams that have already taken place."
+        exams={data?.past}
+        empty="No past exams."
       />
     </div>
   );
