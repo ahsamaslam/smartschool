@@ -82,6 +82,56 @@ def calculate_daily_shs(
     return round(min(max(shs, 0), 100), 2)
 
 
+def calculate_live_shs(
+    video_rate: float,
+    homework_rate: float,
+    attendance_rate: float,
+    homework_submission_rate: float,
+    homework_retakes_avg: float = 0,
+    topic_revisits_avg: float = 0,
+    study_duration_minutes: float = 0,
+) -> tuple[float, float, float]:
+    """
+    Live (current cumulative) SHS using available data:
+    - Video Engagement: 25% (lectures watched ≥75%)
+    - Homework Comprehension: 40% (marks_awarded/total_marks)
+    - Consistency: 20% (attendance + submission rate)
+    - Behavioral Health: 15% (retakes + revisits + study duration)
+
+    Returns: (shs_score, consistency_score, behavioral_score)
+    """
+    # Video engagement (0-100)
+    video_engagement = video_rate
+
+    # Homework comprehension via marks (0-100)
+    homework_comprehension = homework_rate
+
+    # Consistency: average of attendance and submission rates
+    consistency = (attendance_rate + homework_submission_rate) / 2.0
+
+    # Behavioral health: weighted average of 3 factors
+    # Retakes: fewer attempts = higher score. Baseline: 1.5 attempts = 85
+    retakes_score = max(0, 100 - (homework_retakes_avg * 15))
+
+    # Revisits: more topic revisits = higher score. Baseline: 1 revisit per topic = 80
+    revisits_score = min(100, topic_revisits_avg * 40)
+
+    # Duration: more study time = higher score. Baseline: 300 min/month = 100
+    duration_score = min(100, (study_duration_minutes / 300.0) * 100) if study_duration_minutes > 0 else 50
+
+    behavioral = (retakes_score + revisits_score + duration_score) / 3.0
+
+    # Final SHS: 25% video + 40% homework + 20% consistency + 15% behavioral
+    shs = (
+        video_engagement * 0.25
+        + homework_comprehension * 0.40
+        + consistency * 0.20
+        + behavioral * 0.15
+    )
+
+    return round(min(max(shs, 0), 100), 2), round(consistency, 2), round(behavioral, 2)
+
+
 def get_risk_level(shs: float) -> str:
     if shs < 40:
         return "critical"

@@ -115,16 +115,18 @@ async def ensure_homework_schema():
         )
         """
     )
-    # Widen status check on existing DBs (CREATE IF NOT EXISTS does not update constraint)
-    await execute_write(
-        "ALTER TABLE homework_submissions DROP CONSTRAINT IF EXISTS homework_submissions_submission_status_check"
-    )
+    # Widen status check on existing DBs — idempotent via DO block
     await execute_write(
         """
-        ALTER TABLE homework_submissions ADD CONSTRAINT homework_submissions_submission_status_check
-        CHECK (submission_status IN (
-            'pending', 'in_progress', 'submitted', 'late', 'reviewed', 'returned', 'missing'
-        ))
+        DO $$
+        BEGIN
+            ALTER TABLE homework_submissions DROP CONSTRAINT IF EXISTS homework_submissions_submission_status_check;
+            ALTER TABLE homework_submissions ADD CONSTRAINT homework_submissions_submission_status_check
+                CHECK (submission_status IN (
+                    'pending', 'in_progress', 'submitted', 'late', 'reviewed', 'returned', 'missing'
+                ));
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$;
         """
     )
     await execute_write(

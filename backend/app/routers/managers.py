@@ -2222,7 +2222,69 @@ async def get_teacher_wise_report(
 # MANAGER ANALYTICS  (SPI / CVI / SHS)
 # ============================================
 
-from app.utils.score_calculator import get_date_range as _get_date_range, get_school_rating as _get_school_rating
+import statistics as _mgr_stats
+from app.utils.score_calculator import (
+    get_date_range as _get_date_range,
+    get_school_rating as _get_school_rating,
+    calculate_cvi as _mgr_calc_cvi,
+    calculate_spi as _mgr_calc_spi,
+    get_teacher_grade as _mgr_teacher_grade,
+    get_risk_level as _mgr_risk_level,
+)
+
+# Reusable live SHS SQL for manager scope — $1=class_id, $2=teacher_id (uuid or null-uuid)
+_MGR_SHS_SQL = """
+WITH base AS (
+    SELECT
+        u.id AS student_id,
+        u.full_name,
+        COALESCE((
+            SELECT CASE WHEN COUNT(tt.topic_id) = 0 THEN 0 ELSE
+                ROUND(100.0 * COUNT(CASE WHEN COALESCE(stp.lecture_watch_percent,0) >= 75 THEN 1 END)
+                / COUNT(tt.topic_id), 2) END
+            FROM (
+                SELECT DISTINCT lt.id AS topic_id
+                FROM teacher_topic_content ttc
+                JOIN library_topics lt ON lt.id = ttc.library_topic_id
+                JOIN library_chapters ch ON ch.id = lt.chapter_id
+                JOIN library_books b ON b.id = ch.book_id
+                JOIN teacher_class_subject_assignments tcsa
+                    ON tcsa.teacher_id = ttc.teacher_id
+                    AND tcsa.library_book_id = b.id
+                    AND tcsa.class_id = $1::uuid
+                WHERE ttc.lecture_video_url IS NOT NULL AND trim(ttc.lecture_video_url) != ''
+            ) tt
+            LEFT JOIN student_topic_progress stp ON stp.topic_id = tt.topic_id AND stp.student_id = u.id
+        ), 0) AS video_rate,
+        COALESCE(att.attendance_rate, 0) AS attendance_rate,
+        COALESCE(hw.homework_rate, 0) AS homework_rate
+    FROM enrollments e
+    JOIN users u ON e.student_id = u.id
+    LEFT JOIN (
+        SELECT student_id, class_id,
+            ROUND(100.0 * SUM(CASE WHEN is_present THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS attendance_rate
+        FROM attendance GROUP BY student_id, class_id
+    ) att ON att.student_id = u.id AND att.class_id = e.class_id
+    LEFT JOIN (
+        SELECT e2.student_id,
+            ROUND(COALESCE(AVG(CASE
+                WHEN hs.marks_awarded IS NOT NULL AND h.total_marks > 0
+                    THEN (hs.marks_awarded / h.total_marks * 100)
+                WHEN hs.submission_status IN ('submitted','late','in_progress')
+                    THEN 75
+                ELSE 0
+            END), 0), 2) AS homework_rate
+        FROM enrollments e2
+        JOIN homeworks h ON h.class_id = e2.class_id AND h.status = 'published'
+        LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = e2.student_id
+        WHERE e2.class_id = $1::uuid AND e2.is_active = true
+        GROUP BY e2.student_id
+    ) hw ON hw.student_id = u.id
+    WHERE e.class_id = $1 AND e.is_active = true
+)
+SELECT *, ROUND((video_rate * 0.25 + attendance_rate * 0.35 + homework_rate * 0.40), 2) AS shs_score
+FROM base
+"""
 
 
 @router.get("/analytics/overview")
@@ -2232,65 +2294,145 @@ async def get_manager_analytics_overview(
     end: Optional[str] = None,
     current_user: dict = Depends(require_manager),
 ):
-    """
-    Manager overview: SPI, teacher CVI ranking, class CVI ranking, risk summary.
-    period=last_month|last_year|custom (+ start/end for custom)
-    """
+    """Manager SPI overview — fully live from source tables."""
     school_id = str(current_user.get("school_id") or "")
     date_from, date_to = _get_date_range(period, start, end)
 
-    # Latest SPI for the school in period
-    spi_row = await execute_one(
-        "SELECT spi_score, avg_shs, avg_cvi, at_risk_percentage, top_performers_percentage, rating FROM school_performance_index WHERE school_id = $1::uuid AND week_start <= $2 ORDER BY week_start DESC LIMIT 1",
-        school_id, date_to,
-    )
-
-    # Class CVI summary for school
-    class_cvi = await execute_query(
-        """
-        SELECT
-            c.id AS class_id, c.name AS class_name,
-            u.full_name AS teacher_name,
-            COALESCE(AVG(cvi.cvi_score), 0) AS avg_cvi,
-            COALESCE(AVG(cvi.avg_shs), 0) AS avg_shs,
-            SUM(cvi.struggling_count) AS struggling,
-            SUM(cvi.excelling_count) AS excelling,
-            MAX(cvi.teacher_grade) AS teacher_grade
-        FROM classes c
-        JOIN branches b ON b.id = c.branch_id
-        LEFT JOIN users u ON u.id = c.teacher_id
-        LEFT JOIN class_vitality_index cvi ON cvi.class_id = c.id AND cvi.date BETWEEN $2 AND $3
-        WHERE b.school_id = $1::uuid
-        GROUP BY c.id, c.name, u.full_name
-        ORDER BY avg_cvi DESC NULLS LAST
-        """,
-        school_id, date_from, date_to,
-    )
-
-    # At-risk student count
-    risk_row = await execute_one(
-        """
-        SELECT
-            COUNT(*) FILTER (WHERE shs.risk_level = 'critical') AS critical,
-            COUNT(*) FILTER (WHERE shs.risk_level = 'at_risk') AS at_risk,
-            COUNT(*) FILTER (WHERE shs.risk_level = 'stable') AS stable,
-            COUNT(*) FILTER (WHERE shs.risk_level = 'excelling') AS excelling
-        FROM student_health_scores shs
-        JOIN enrollments e ON e.student_id = shs.student_id AND e.class_id = shs.class_id AND e.is_active = true
-        JOIN classes c ON c.id = e.class_id
-        JOIN branches b ON b.id = c.branch_id
-        WHERE b.school_id = $1::uuid
-        """,
+    # All classes in this school
+    classes = await execute_query(
+        """SELECT c.id, c.name, c.grade_level, c.section, b.name AS branch_name,
+                  c.teacher_id, u.full_name AS teacher_name
+           FROM classes c
+           JOIN branches b ON b.id = c.branch_id
+           LEFT JOIN users u ON u.id = c.teacher_id
+           WHERE b.school_id = $1::uuid ORDER BY c.name""",
         school_id,
     )
+
+    # Per-class live SHS + CVI
+    all_shs_vals, all_hw_vals, all_att_vals, class_analytics = [], [], [], []
+    teacher_cvi_map: dict = {}  # teacher_id → list of CVI scores
+
+    for cls in classes:
+        cid = str(cls["id"])
+        rows = await execute_query(_MGR_SHS_SQL, cid, "00000000-0000-0000-0000-000000000000")
+        shs_vals = [float(r["shs_score"] or 0) for r in rows]
+        hw_vals = [float(r["homework_rate"] or 0) for r in rows]
+        att_vals = [float(r["attendance_rate"] or 0) for r in rows]
+
+        all_shs_vals.extend(shs_vals)
+        all_hw_vals.extend(hw_vals)
+        all_att_vals.extend(att_vals)
+
+        if shs_vals:
+            avg_shs = _mgr_stats.mean(shs_vals)
+            variance = _mgr_stats.stdev(shs_vals) if len(shs_vals) > 1 else 0.0
+            hw_eff = _mgr_stats.mean(hw_vals) if hw_vals else 0.0
+            cvi = _mgr_calc_cvi(avg_shs, 50.0, variance, hw_eff)
+            grade = _mgr_teacher_grade(cvi)
+            struggling = sum(1 for v in shs_vals if v < 50)
+            excelling = sum(1 for v in shs_vals if v >= 80)
+        else:
+            avg_shs = cvi = variance = hw_eff = 0.0
+            grade = "No data"; struggling = excelling = 0
+
+        tid = str(cls["teacher_id"]) if cls["teacher_id"] else None
+        if tid:
+            teacher_cvi_map.setdefault(tid, []).append(cvi)
+
+        class_analytics.append({
+            "class_id": cid,
+            "class_name": cls["name"],
+            "branch_name": cls["branch_name"],
+            "teacher_name": cls["teacher_name"],
+            "avg_shs": round(avg_shs, 2),
+            "avg_cvi": round(cvi, 2),
+            "total_students": len(shs_vals),
+            "struggling_count": struggling,
+            "excelling_count": excelling,
+            "teacher_grade": grade,
+            "variance": round(variance, 2),
+        })
+
+    # School-level aggregates
+    total_students = len(all_shs_vals)
+    avg_shs = _mgr_stats.mean(all_shs_vals) if all_shs_vals else 0.0
+    avg_att = _mgr_stats.mean(all_att_vals) if all_att_vals else 0.0
+    avg_hw = _mgr_stats.mean(all_hw_vals) if all_hw_vals else 0.0
+    top_pct = sum(1 for v in all_shs_vals if v >= 80) / max(total_students, 1) * 100
+    at_risk_pct = sum(1 for v in all_shs_vals if v < 50) / max(total_students, 1) * 100
+
+    # Risk distribution
+    risk_dist = {
+        "critical": sum(1 for v in all_shs_vals if v < 40),
+        "at_risk": sum(1 for v in all_shs_vals if 40 <= v < 60),
+        "stable": sum(1 for v in all_shs_vals if 60 <= v < 80),
+        "excelling": sum(1 for v in all_shs_vals if v >= 80),
+    }
+
+    # Teacher quality
+    all_cvi_scores = [_mgr_stats.mean(scores) for scores in teacher_cvi_map.values()]
+    avg_cvi = _mgr_stats.mean(all_cvi_scores) if all_cvi_scores else 0.0
+    excellent_teachers = sum(1 for c in all_cvi_scores if c >= 85)
+    underperforming_teachers = sum(1 for c in all_cvi_scores if c < 60)
+    total_teachers = len(all_cvi_scores)
+    excellent_pct = excellent_teachers / max(total_teachers, 1) * 100
+    underperforming_pct = underperforming_teachers / max(total_teachers, 1) * 100
+    teacher_variance = _mgr_stats.stdev(all_cvi_scores) if len(all_cvi_scores) > 1 else 0.0
+
+    spi = _mgr_calc_spi(
+        school_avg_shs=avg_shs,
+        school_avg_cvi=avg_cvi,
+        top_performers_pct=top_pct,
+        at_risk_pct=at_risk_pct,
+        excellent_teachers_pct=excellent_pct,
+        underperforming_teachers_pct=underperforming_pct,
+        avg_attendance_rate=avg_att,
+        homework_submission_rate=avg_hw,
+        mom_improvement=0,
+    )
+    rating = _get_school_rating(spi)
 
     return {
         "period": period,
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
-        "spi": dict(spi_row) if spi_row else {"spi_score": 0, "avg_shs": 0, "avg_cvi": 0, "rating": "No data"},
-        "risk_distribution": dict(risk_row) if risk_row else {},
-        "classes": [dict(r) for r in class_cvi],
+        "spi": {
+            "spi_score": round(spi, 2),
+            "avg_shs": round(avg_shs, 2),
+            "avg_cvi": round(avg_cvi, 2),
+            "at_risk_percentage": round(at_risk_pct, 2),
+            "top_performers_percentage": round(top_pct, 2),
+            "rating": rating,
+        },
+        "components": {
+            "academic_excellence": {
+                "score": round(avg_shs * 0.5 + top_pct * 0.3 + (100 - at_risk_pct) * 0.2, 2),
+                "avg_shs": round(avg_shs, 2),
+                "top_performers_pct": round(top_pct, 2),
+                "at_risk_pct": round(at_risk_pct, 2),
+                "total_students": total_students,
+            },
+            "teacher_quality": {
+                "score": round(avg_cvi * 0.5 + excellent_pct * 0.3 + (100 - underperforming_pct) * 0.2, 2),
+                "avg_cvi": round(avg_cvi, 2),
+                "total_teachers": total_teachers,
+                "excellent_count": excellent_teachers,
+                "underperforming_count": underperforming_teachers,
+                "teacher_variance": round(teacher_variance, 2),
+            },
+            "operational_efficiency": {
+                "score": round(avg_att * 0.6 + avg_hw * 0.4, 2),
+                "avg_attendance": round(avg_att, 2),
+                "avg_homework": round(avg_hw, 2),
+            },
+            "growth_trajectory": {
+                "score": 50.0,
+                "note": "Historical trend data accumulates over time",
+            },
+        },
+        "risk_distribution": risk_dist,
+        "classes": sorted(class_analytics, key=lambda x: x["avg_cvi"], reverse=True),
     }
 
 
@@ -2301,39 +2443,65 @@ async def get_manager_teacher_analytics(
     end: Optional[str] = None,
     current_user: dict = Depends(require_manager),
 ):
-    """Teacher-wise CVI ranking sorted by performance."""
+    """Teacher CVI ranking — live computation from student data."""
     school_id = str(current_user.get("school_id") or "")
-    date_from, date_to = _get_date_range(period, start, end)
 
-    teachers = await execute_query(
+    # Teachers with classes in this school (via TCSA assignments)
+    teacher_rows = await execute_query(
         """
-        SELECT
-            u.id AS teacher_id,
-            u.full_name AS teacher_name,
-            u.email,
-            COUNT(DISTINCT c.id) AS class_count,
-            COALESCE(AVG(cvi.cvi_score), 0) AS avg_cvi,
-            COALESCE(AVG(cvi.avg_shs), 0) AS avg_shs,
-            SUM(cvi.struggling_count) AS struggling_students,
-            SUM(cvi.excelling_count) AS excelling_students,
-            MAX(cvi.teacher_grade) AS teacher_grade
+        SELECT DISTINCT u.id AS teacher_id, u.full_name AS teacher_name, u.email
         FROM users u
-        JOIN classes c ON c.teacher_id = u.id
+        JOIN teacher_class_subject_assignments tcsa ON tcsa.teacher_id = u.id
+        JOIN classes c ON c.id = tcsa.class_id
         JOIN branches b ON b.id = c.branch_id
-        LEFT JOIN class_vitality_index cvi ON cvi.class_id = c.id AND cvi.date BETWEEN $2 AND $3
         WHERE b.school_id = $1::uuid AND u.role = 'teacher'
-        GROUP BY u.id, u.full_name, u.email
-        ORDER BY avg_cvi DESC NULLS LAST
+        ORDER BY u.full_name
         """,
-        school_id, date_from, date_to,
+        school_id,
     )
 
-    return {
-        "period": period,
-        "date_from": date_from.isoformat(),
-        "date_to": date_to.isoformat(),
-        "teachers": [dict(t) for t in teachers],
-    }
+    results = []
+    for t in teacher_rows:
+        tid = str(t["teacher_id"])
+        # Get all classes this teacher is assigned to in this school
+        t_classes = await execute_query(
+            """SELECT DISTINCT c.id FROM classes c
+               JOIN teacher_class_subject_assignments tcsa ON tcsa.class_id = c.id
+               JOIN branches b ON b.id = c.branch_id
+               WHERE tcsa.teacher_id = $1::uuid AND b.school_id = $2::uuid""",
+            tid, school_id,
+        )
+        all_shs, all_hw = [], []
+        for cls in t_classes:
+            rows = await execute_query(_MGR_SHS_SQL, str(cls["id"]), "00000000-0000-0000-0000-000000000000")
+            all_shs.extend(float(r["shs_score"] or 0) for r in rows)
+            all_hw.extend(float(r["homework_rate"] or 0) for r in rows)
+
+        if all_shs:
+            avg_shs = _mgr_stats.mean(all_shs)
+            variance = _mgr_stats.stdev(all_shs) if len(all_shs) > 1 else 0.0
+            hw_eff = _mgr_stats.mean(all_hw) if all_hw else 0.0
+            cvi = _mgr_calc_cvi(avg_shs, 50.0, variance, hw_eff)
+            grade = _mgr_teacher_grade(cvi)
+            struggling = sum(1 for v in all_shs if v < 50)
+            excelling = sum(1 for v in all_shs if v >= 80)
+        else:
+            avg_shs = cvi = 0.0; grade = "No data"; struggling = excelling = 0
+
+        results.append({
+            "teacher_id": tid,
+            "teacher_name": t["teacher_name"],
+            "email": t["email"],
+            "class_count": len(t_classes),
+            "avg_cvi": round(cvi, 2),
+            "avg_shs": round(avg_shs, 2),
+            "struggling_students": struggling,
+            "excelling_students": excelling,
+            "teacher_grade": grade,
+        })
+
+    results.sort(key=lambda x: x["avg_cvi"], reverse=True)
+    return {"teachers": results}
 
 
 @router.get("/analytics/classes")
@@ -2343,43 +2511,52 @@ async def get_manager_class_analytics(
     end: Optional[str] = None,
     current_user: dict = Depends(require_manager),
 ):
-    """Class-wise CVI ranking for manager's school."""
+    """Class CVI ranking — live computation."""
     school_id = str(current_user.get("school_id") or "")
-    date_from, date_to = _get_date_range(period, start, end)
 
-    classes = await execute_query(
-        """
-        SELECT
-            c.id AS class_id,
-            c.name AS class_name,
-            c.grade_level,
-            c.section,
-            b.name AS branch_name,
-            u.full_name AS teacher_name,
-            COALESCE(AVG(cvi.cvi_score), 0) AS avg_cvi,
-            COALESCE(AVG(cvi.avg_shs), 0) AS avg_shs,
-            COALESCE(SUM(cvi.total_students), 0) AS total_students,
-            COALESCE(SUM(cvi.struggling_count), 0) AS struggling_count,
-            COALESCE(SUM(cvi.excelling_count), 0) AS excelling_count,
-            MAX(cvi.teacher_grade) AS teacher_grade,
-            MAX(cvi.alert_message) AS alert_message
-        FROM classes c
-        JOIN branches b ON b.id = c.branch_id
-        LEFT JOIN users u ON u.id = c.teacher_id
-        LEFT JOIN class_vitality_index cvi ON cvi.class_id = c.id AND cvi.date BETWEEN $2 AND $3
-        WHERE b.school_id = $1::uuid
-        GROUP BY c.id, c.name, c.grade_level, c.section, b.name, u.full_name
-        ORDER BY avg_cvi DESC NULLS LAST
-        """,
-        school_id, date_from, date_to,
+    class_rows = await execute_query(
+        """SELECT c.id, c.name AS class_name, c.grade_level, c.section,
+                  b.name AS branch_name, u.full_name AS teacher_name
+           FROM classes c
+           JOIN branches b ON b.id = c.branch_id
+           LEFT JOIN users u ON u.id = c.teacher_id
+           WHERE b.school_id = $1::uuid ORDER BY c.name""",
+        school_id,
     )
 
-    return {
-        "period": period,
-        "date_from": date_from.isoformat(),
-        "date_to": date_to.isoformat(),
-        "classes": [dict(c) for c in classes],
-    }
+    results = []
+    for cls in class_rows:
+        cid = str(cls["id"])
+        rows = await execute_query(_MGR_SHS_SQL, cid, "00000000-0000-0000-0000-000000000000")
+        shs_vals = [float(r["shs_score"] or 0) for r in rows]
+        hw_vals = [float(r["homework_rate"] or 0) for r in rows]
+
+        if shs_vals:
+            avg_shs = _mgr_stats.mean(shs_vals)
+            variance = _mgr_stats.stdev(shs_vals) if len(shs_vals) > 1 else 0.0
+            hw_eff = _mgr_stats.mean(hw_vals) if hw_vals else 0.0
+            cvi = _mgr_calc_cvi(avg_shs, 50.0, variance, hw_eff)
+            grade = _mgr_teacher_grade(cvi)
+            struggling = sum(1 for v in shs_vals if v < 50)
+            excelling = sum(1 for v in shs_vals if v >= 80)
+        else:
+            avg_shs = cvi = 0.0; grade = "No data"; struggling = excelling = 0
+
+        results.append({
+            "class_id": cid,
+            "class_name": cls["class_name"],
+            "branch_name": cls["branch_name"],
+            "teacher_name": cls["teacher_name"],
+            "avg_shs": round(avg_shs, 2),
+            "avg_cvi": round(cvi, 2),
+            "total_students": len(shs_vals),
+            "struggling_count": struggling,
+            "excelling_count": excelling,
+            "teacher_grade": grade,
+        })
+
+    results.sort(key=lambda x: x["avg_cvi"], reverse=True)
+    return {"classes": results}
 
 
 @router.get("/analytics/student/{student_id}")

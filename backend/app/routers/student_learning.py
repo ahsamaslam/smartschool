@@ -12,6 +12,7 @@ from app.utils.database import execute_query, execute_one, execute_write
 from app.utils.student_access import student_can_access_library_topic, student_can_access_exam
 from app.routers.library import ensure_library_tables
 from app.routers.exams import _build_library_exam_tree, _fetch_exam_with_questions
+from app.utils.score_calculator import calculate_live_shs
 
 router = APIRouter()
 
@@ -43,6 +44,7 @@ class ProgressUpdate(BaseModel):
     slides_completed: Optional[bool] = None
     slides_viewed_count: Optional[int] = None
     slides_total: Optional[int] = None
+    focus_metrics: Optional[Dict[str, Any]] = None
 
 
 def _strip_correct_answers(exam: Dict[str, Any]) -> Dict[str, Any]:
@@ -280,6 +282,40 @@ async def upsert_learning_progress(req: ProgressUpdate, current_user: dict = Dep
         lecture_completed,
         topic_completed,
     )
+    # Store focus metrics if provided
+    if req.focus_metrics:
+        metrics = req.focus_metrics
+        # Calculate focus score: 100 - (pauses + rewinds) / max(1, total_watch_seconds) * 10
+        pause_count = int(metrics.get("pauseCount", 0))
+        rewind_count = int(metrics.get("rewindCount", 0))
+        drops_count = int(metrics.get("dropsCount", 0))
+        total_watch_seconds = int(metrics.get("totalWatchSeconds", 0))
+        avg_watch_speed = float(metrics.get("avgWatchSpeed", 1.0)) if metrics.get("avgWatchSpeed") else 1.0
+
+        # Focus score: fewer interruptions = higher score
+        # Base: 100, -5 per pause, -10 per rewind, -20 per drop, +5 if watched at faster speed
+        focus_score = 100 - (pause_count * 5) - (rewind_count * 10) - (drops_count * 20) + (max(0, (avg_watch_speed - 1.0) * 5))
+        focus_score = max(0, min(100, focus_score))  # Clamp to 0-100
+
+        await execute_write(
+            """
+            INSERT INTO video_focus_metrics
+            (student_id, topic_id, date, pause_count, rewind_count, drops_count,
+             avg_watch_speed, total_watch_seconds, focus_score)
+            VALUES ($1::uuid, $2::uuid, CURRENT_DATE, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (student_id, topic_id, date) DO UPDATE SET
+                pause_count = EXCLUDED.pause_count,
+                rewind_count = EXCLUDED.rewind_count,
+                drops_count = EXCLUDED.drops_count,
+                avg_watch_speed = EXCLUDED.avg_watch_speed,
+                total_watch_seconds = EXCLUDED.total_watch_seconds,
+                focus_score = EXCLUDED.focus_score,
+                updated_at = NOW()
+            """,
+            student_id, req.topic_id, pause_count, rewind_count, drops_count,
+            avg_watch_speed, total_watch_seconds, focus_score
+        )
+
     row = await execute_one(
         "SELECT * FROM student_topic_progress WHERE student_id = $1::uuid AND topic_id = $2::uuid",
         student_id,
@@ -574,3 +610,284 @@ async def learning_dashboard_summary(current_user: dict = Depends(require_studen
         "exams_completed": len(grouped["completed"]),
         "exams_missed": len(grouped["missed"]),
     }
+
+
+@router.get("/learning/shs")
+async def get_student_shs(current_user: dict = Depends(require_student)):
+    """
+    Return SHS breakdown per enrolled class for the logged-in student.
+    Video % is aggregated across ALL teachers/books assigned to the class,
+    so a student with multiple books gets a fair complete picture.
+    """
+    student_id = current_user["user_id"]
+
+    enrollments = await execute_query(
+        """
+        SELECT e.class_id, c.name AS class_name, c.section
+        FROM enrollments e
+        JOIN classes c ON c.id = e.class_id
+        WHERE e.student_id = $1::uuid AND e.is_active = true
+        ORDER BY c.name
+        """,
+        student_id,
+    )
+
+    results = []
+    for enr in enrollments:
+        class_id = str(enr["class_id"])
+
+        # ── Core SHS components ──────────────────────────────────────────────
+        # Video %: ALL teachers' lectures for this class (not just one teacher)
+        row = await execute_one(
+            """
+            SELECT
+                -- VIDEO: all teachers' lectures for this class
+                COALESCE((
+                    SELECT CASE WHEN COUNT(tt.topic_id) = 0 THEN 0 ELSE
+                        ROUND(100.0 *
+                            COUNT(CASE WHEN COALESCE(stp.lecture_watch_percent,0) >= 75 THEN 1 END)
+                            / COUNT(tt.topic_id), 2)
+                        END
+                    FROM (
+                        SELECT DISTINCT lt.id AS topic_id
+                        FROM teacher_topic_content ttc
+                        JOIN library_topics lt ON lt.id = ttc.library_topic_id
+                        JOIN library_chapters ch ON ch.id = lt.chapter_id
+                        JOIN library_books b ON b.id = ch.book_id
+                        JOIN teacher_class_subject_assignments tcsa
+                            ON tcsa.teacher_id = ttc.teacher_id
+                            AND tcsa.library_book_id = b.id
+                            AND tcsa.class_id = $1::uuid
+                        WHERE ttc.lecture_video_url IS NOT NULL
+                          AND trim(ttc.lecture_video_url) != ''
+                    ) tt
+                    LEFT JOIN student_topic_progress stp
+                        ON stp.topic_id = tt.topic_id AND stp.student_id = $2::uuid
+                ), 0) AS video_rate,
+
+                -- total lectures across all teachers
+                COALESCE((
+                    SELECT COUNT(DISTINCT lt.id)
+                    FROM teacher_topic_content ttc
+                    JOIN library_topics lt ON lt.id = ttc.library_topic_id
+                    JOIN library_chapters ch ON ch.id = lt.chapter_id
+                    JOIN library_books b ON b.id = ch.book_id
+                    JOIN teacher_class_subject_assignments tcsa
+                        ON tcsa.teacher_id = ttc.teacher_id
+                        AND tcsa.library_book_id = b.id
+                        AND tcsa.class_id = $1::uuid
+                    WHERE ttc.lecture_video_url IS NOT NULL
+                      AND trim(ttc.lecture_video_url) != ''
+                ), 0) AS total_lectures,
+
+                -- watched lectures (>=75%)
+                COALESCE((
+                    SELECT COUNT(DISTINCT stp.topic_id)
+                    FROM student_topic_progress stp
+                    JOIN (
+                        SELECT DISTINCT lt.id AS topic_id
+                        FROM teacher_topic_content ttc
+                        JOIN library_topics lt ON lt.id = ttc.library_topic_id
+                        JOIN library_chapters ch ON ch.id = lt.chapter_id
+                        JOIN library_books b ON b.id = ch.book_id
+                        JOIN teacher_class_subject_assignments tcsa
+                            ON tcsa.teacher_id = ttc.teacher_id
+                            AND tcsa.library_book_id = b.id
+                            AND tcsa.class_id = $1::uuid
+                        WHERE ttc.lecture_video_url IS NOT NULL
+                          AND trim(ttc.lecture_video_url) != ''
+                    ) all_topics ON all_topics.topic_id = stp.topic_id
+                    WHERE stp.student_id = $2::uuid
+                      AND stp.lecture_watch_percent >= 75
+                ), 0) AS watched_lectures,
+
+                -- ATTENDANCE
+                COALESCE((
+                    SELECT ROUND(100.0 * SUM(CASE WHEN is_present THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2)
+                    FROM attendance WHERE student_id = $2::uuid AND class_id = $1::uuid
+                ), 0) AS attendance_rate,
+                COALESCE((SELECT COUNT(*) FROM attendance WHERE student_id = $2::uuid AND class_id = $1::uuid), 0) AS total_days,
+                COALESCE((SELECT SUM(CASE WHEN is_present THEN 1 ELSE 0 END) FROM attendance WHERE student_id = $2::uuid AND class_id = $1::uuid), 0) AS present_days,
+
+                -- HOMEWORK: grade-based (marks_awarded/total_marks * 100)
+                COALESCE((
+                    SELECT ROUND(COALESCE(AVG(CASE
+                        WHEN hs.marks_awarded IS NOT NULL AND h.total_marks > 0
+                            THEN (hs.marks_awarded / h.total_marks * 100)
+                        WHEN hs.submission_status IN ('submitted','late','in_progress')
+                            THEN 75
+                        ELSE 0
+                    END), 0), 2)
+                    FROM homeworks h
+                    LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = $2::uuid
+                    WHERE h.class_id = $1::uuid AND h.status = 'published'
+                ), 0) AS homework_rate,
+                (SELECT COUNT(DISTINCT h.id) FROM homeworks h WHERE h.class_id = $1::uuid AND h.status = 'published') AS total_homeworks,
+                COALESCE((
+                    SELECT COUNT(CASE WHEN hs.submission_status IN ('submitted','late','reviewed','returned') THEN 1 END)
+                    FROM homeworks h
+                    LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = $2::uuid
+                    WHERE h.class_id = $1::uuid AND h.status = 'published'
+                ), 0) AS submitted_homeworks,
+                COALESCE((
+                    SELECT SUM(hs.marks_awarded)
+                    FROM homeworks h
+                    JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = $2::uuid
+                    WHERE h.class_id = $1::uuid AND h.status = 'published' AND hs.marks_awarded IS NOT NULL
+                ), 0) AS marks_earned,
+                COALESCE((
+                    SELECT SUM(h.total_marks)
+                    FROM homeworks h
+                    JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = $2::uuid
+                    WHERE h.class_id = $1::uuid AND h.status = 'published'
+                      AND hs.marks_awarded IS NOT NULL AND h.total_marks > 0
+                ), 0) AS total_marks_available
+            """,
+            class_id, student_id,
+        )
+
+        # ── Per-book video breakdown ─────────────────────────────────────────
+        book_rows = await execute_query(
+            """
+            SELECT
+                b.id AS book_id,
+                b.title AS book_title,
+                ls.name AS subject_name,
+                u.full_name AS teacher_name,
+                COUNT(DISTINCT lt.id) AS total_lectures,
+                COUNT(DISTINCT CASE WHEN COALESCE(stp.lecture_watch_percent,0) >= 75 THEN lt.id END) AS watched_lectures
+            FROM teacher_class_subject_assignments tcsa
+            JOIN library_books b ON b.id = tcsa.library_book_id
+            JOIN library_subjects ls ON ls.id = b.subject_id
+            JOIN users u ON u.id = tcsa.teacher_id
+            LEFT JOIN teacher_topic_content ttc ON ttc.teacher_id = tcsa.teacher_id
+            LEFT JOIN library_topics lt ON lt.id = ttc.library_topic_id
+                AND lt.chapter_id IN (SELECT id FROM library_chapters WHERE book_id = b.id)
+                AND ttc.lecture_video_url IS NOT NULL
+                AND trim(ttc.lecture_video_url) != ''
+            LEFT JOIN student_topic_progress stp ON stp.topic_id = lt.id AND stp.student_id = $2::uuid
+            WHERE tcsa.class_id = $1::uuid
+            GROUP BY b.id, b.title, ls.name, u.full_name
+            ORDER BY ls.name
+            """,
+            class_id, student_id,
+        )
+
+        vr = float(row["video_rate"] or 0)
+        ar = float(row["attendance_rate"] or 0)
+        hr = float(row["homework_rate"] or 0)
+
+        # Get behavioral metrics for new SHS formula
+        submission_data = await execute_one(
+            """SELECT COALESCE(ROUND(100.0 * COUNT(CASE WHEN hs.submission_status IN ('submitted','late','reviewed','returned') THEN 1 END)
+               / NULLIF(COUNT(DISTINCT h.id), 0), 2), 0) AS submission_rate
+               FROM homeworks h
+               LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = $1::uuid
+               WHERE h.class_id = $2::uuid AND h.status = 'published'""",
+            student_id, class_id,
+        )
+        submission_rate = float(submission_data["submission_rate"] or 0)
+
+        retakes_data = await execute_one(
+            """SELECT COALESCE(AVG(attempt_count), 0) AS avg_attempts
+               FROM (SELECT COUNT(*) AS attempt_count FROM homework_submissions
+                     WHERE student_id = $1::uuid AND homework_id IN
+                     (SELECT h.id FROM homeworks h WHERE h.class_id = $2::uuid AND h.status = 'published')
+                     GROUP BY homework_id) sub""",
+            student_id, class_id,
+        )
+        homework_retakes_avg = float(retakes_data["avg_attempts"] or 0) - 1 if retakes_data and retakes_data["avg_attempts"] else 0
+
+        revisits_data = await execute_one(
+            """SELECT COALESCE(AVG(revisit_count), 0) AS avg_revisits FROM student_topic_progress
+               WHERE student_id = $1::uuid AND topic_id IN
+               (SELECT lt.id FROM library_topics lt
+                JOIN library_chapters ch ON ch.id = lt.chapter_id
+                JOIN library_books b ON b.id = ch.book_id
+                JOIN teacher_class_subject_assignments tcsa ON tcsa.library_book_id = b.id
+                WHERE tcsa.class_id = $2::uuid)""",
+            student_id, class_id,
+        )
+        topic_revisits_avg = float(revisits_data["avg_revisits"] or 0)
+
+        duration_data = await execute_one(
+            """SELECT COALESCE(SUM(duration_minutes), 0) AS total_minutes FROM student_session_logs
+               WHERE student_id = $1::uuid AND class_id = $2::uuid
+               AND login_at >= CURRENT_DATE - INTERVAL '30 days'""",
+            student_id, class_id,
+        )
+        study_duration_minutes = float(duration_data["total_minutes"] or 0)
+
+        # Calculate SHS using new formula (25-40-20-15)
+        shs, consistency_score, behavioral_score = calculate_live_shs(
+            video_rate=vr,
+            homework_rate=hr,
+            attendance_rate=ar,
+            homework_submission_rate=submission_rate,
+            homework_retakes_avg=homework_retakes_avg,
+            topic_revisits_avg=topic_revisits_avg,
+            study_duration_minutes=study_duration_minutes,
+        )
+
+        if shs < 40:
+            risk_level = "critical"
+        elif shs < 60:
+            risk_level = "at_risk"
+        elif shs < 80:
+            risk_level = "stable"
+        else:
+            risk_level = "excelling"
+
+        results.append({
+            "class_id": class_id,
+            "class_name": enr["class_name"],
+            "section": enr["section"],
+            "shs": shs,
+            "risk_level": risk_level,
+            "video": {
+                "rate": vr,
+                "total_lectures": int(row["total_lectures"] or 0),
+                "watched_count": int(row["watched_lectures"] or 0),
+            },
+            "attendance": {
+                "rate": ar,
+                "present_days": int(row["present_days"] or 0),
+                "total_days": int(row["total_days"] or 0),
+            },
+            "homework": {
+                "rate": hr,
+                "submitted_count": int(row["submitted_homeworks"] or 0),
+                "total_homeworks": int(row["total_homeworks"] or 0),
+                "marks_earned": float(row["marks_earned"] or 0),
+                "total_marks_available": float(row["total_marks_available"] or 0),
+            },
+            "consistency": {
+                "rate": consistency_score,
+                "attendance": ar,
+                "submission": submission_rate,
+            },
+            "behavioral": {
+                "rate": behavioral_score,
+                "homework_retakes_avg": round(homework_retakes_avg, 2),
+                "topic_revisits_avg": round(topic_revisits_avg, 2),
+                "study_duration_minutes": int(study_duration_minutes),
+            },
+            # per-book breakdown so the student can see which subject they're behind in
+            "books": [
+                {
+                    "book_title": br["book_title"],
+                    "subject_name": br["subject_name"],
+                    "teacher_name": br["teacher_name"],
+                    "total_lectures": int(br["total_lectures"] or 0),
+                    "watched_count": int(br["watched_lectures"] or 0),
+                    "video_rate": round(
+                        100.0 * int(br["watched_lectures"] or 0) / int(br["total_lectures"])
+                        if int(br["total_lectures"] or 0) > 0 else 0,
+                        1,
+                    ),
+                }
+                for br in book_rows
+            ],
+        })
+
+    return results

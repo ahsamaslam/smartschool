@@ -12,6 +12,7 @@ export const API_ROUTES = {
   ATTENDANCE: "/attendance",
   CLASSES: "/classes",
   EXAMS: "/exams",
+  METRICS: "/metrics",
 };
 
 // Exam module constants

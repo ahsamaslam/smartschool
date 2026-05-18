@@ -4286,7 +4286,13 @@ async def remove_teacher_class_assignment(teacher_id: str, class_id: str):
 # ADMIN ANALYTICS  (SPI / CVI / SHS — tenant scoped)
 # ============================================
 
-from app.utils.score_calculator import get_date_range as _get_date_range, get_school_rating as _get_school_rating
+import statistics as _a_statistics
+from app.utils.score_calculator import (
+    get_date_range as _get_date_range,
+    get_school_rating as _get_school_rating,
+    calculate_spi as _calculate_spi,
+    calculate_cvi as _a_calculate_cvi,
+)
 
 
 @router.get("/analytics/overview")
@@ -4296,41 +4302,145 @@ async def get_admin_analytics_overview(
     end: Optional[str] = None,
     current_user: dict = Depends(require_admin),
 ):
-    """
-    Admin overview: SPI per school in tenant, ranked.
-    period=last_month|last_year|custom
-    """
+    """Admin overview: live SPI per school, computed from actual student data."""
     tenant_id = current_user.get("tenant_id")
     date_from, date_to = _get_date_range(period, start, end)
 
+    # Ensure analytics tables exist
+    try:
+        await execute_write("""
+            CREATE TABLE IF NOT EXISTS school_performance_index (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                school_id uuid NOT NULL,
+                week_start date NOT NULL DEFAULT CURRENT_DATE,
+                spi_score numeric(6,2) DEFAULT 0,
+                avg_shs numeric(6,2) DEFAULT 0,
+                avg_cvi numeric(6,2) DEFAULT 0,
+                at_risk_percentage numeric(6,2) DEFAULT 0,
+                top_performers_percentage numeric(6,2) DEFAULT 0,
+                excellent_teachers_percentage numeric(6,2) DEFAULT 0,
+                rating text DEFAULT 'No data',
+                UNIQUE(school_id, week_start)
+            )
+        """)
+    except Exception:
+        pass
+
     schools = await execute_query(
-        """
-        SELECT
-            s.id AS school_id,
-            s.name AS school_name,
-            spi.spi_score,
-            spi.avg_shs,
-            spi.avg_cvi,
-            spi.at_risk_percentage,
-            spi.top_performers_percentage,
-            spi.rating
-        FROM schools s
-        LEFT JOIN LATERAL (
-            SELECT * FROM school_performance_index
-            WHERE school_id = s.id AND week_start <= $2
-            ORDER BY week_start DESC LIMIT 1
-        ) spi ON true
-        WHERE s.tenant_id = $1::uuid AND s.is_active = true
-        ORDER BY spi.spi_score DESC NULLS LAST
-        """,
-        tenant_id, date_to,
+        "SELECT id, name FROM schools WHERE tenant_id = $1::uuid ORDER BY name",
+        tenant_id,
     )
+
+    result = []
+    for school in schools:
+        school_id = str(school["id"])
+
+        # Aggregate per-student SHS in this school (simplified: attendance + homework + video watch)
+        metrics = await execute_one(
+            """
+            SELECT
+                COUNT(DISTINCT e.student_id) AS total_students,
+                COALESCE(AVG(
+                    (COALESCE(att.attendance_rate, 0) * 0.35) +
+                    (COALESCE(hw.homework_rate, 0) * 0.40) +
+                    (COALESCE(vid.video_rate, 0) * 0.25)
+                ), 0) AS avg_shs,
+                COALESCE(AVG(COALESCE(att.attendance_rate, 0)), 0) AS avg_attendance,
+                COALESCE(AVG(COALESCE(hw.homework_rate, 0)), 0) AS avg_homework,
+                COUNT(CASE WHEN (
+                    COALESCE(att.attendance_rate,0)*0.35 + COALESCE(hw.homework_rate,0)*0.40 + COALESCE(vid.video_rate,0)*0.25
+                ) >= 80 THEN 1 END)::float AS top_count,
+                COUNT(CASE WHEN (
+                    COALESCE(att.attendance_rate,0)*0.35 + COALESCE(hw.homework_rate,0)*0.40 + COALESCE(vid.video_rate,0)*0.25
+                ) < 50 THEN 1 END)::float AS at_risk_count
+            FROM enrollments e
+            JOIN classes c ON c.id = e.class_id
+            JOIN branches b ON b.id = c.branch_id
+            LEFT JOIN (
+                SELECT student_id, class_id,
+                    ROUND(100.0 * SUM(CASE WHEN is_present THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS attendance_rate
+                FROM attendance GROUP BY student_id, class_id
+            ) att ON att.student_id = e.student_id AND att.class_id = e.class_id
+            LEFT JOIN (
+                SELECT e2.student_id, e2.class_id,
+                    ROUND(100.0 * COUNT(CASE WHEN hs.submission_status IN ('submitted','late','reviewed','returned') THEN 1 END)
+                    / NULLIF(COUNT(DISTINCT h.id), 0), 2) AS homework_rate
+                FROM enrollments e2
+                JOIN homeworks h ON h.class_id = e2.class_id AND h.status = 'published'
+                LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = e2.student_id
+                WHERE e2.is_active = true
+                GROUP BY e2.student_id, e2.class_id
+            ) hw ON hw.student_id = e.student_id AND hw.class_id = e.class_id
+            LEFT JOIN (
+                SELECT stp.student_id, tcsa.class_id,
+                    ROUND(100.0 * COUNT(CASE WHEN stp.lecture_watch_percent >= 75 THEN 1 END)
+                    / NULLIF(COUNT(DISTINCT stp.topic_id), 0), 2) AS video_rate
+                FROM student_topic_progress stp
+                JOIN teacher_topic_content ttc ON ttc.library_topic_id = stp.topic_id
+                JOIN library_topics lt ON lt.id = stp.topic_id
+                JOIN library_chapters ch ON ch.id = lt.chapter_id
+                JOIN teacher_class_subject_assignments tcsa
+                    ON tcsa.teacher_id = ttc.teacher_id AND tcsa.library_book_id = ch.book_id
+                WHERE ttc.lecture_video_url IS NOT NULL AND trim(ttc.lecture_video_url) != ''
+                GROUP BY stp.student_id, tcsa.class_id
+            ) vid ON vid.student_id = e.student_id AND vid.class_id = e.class_id
+            WHERE b.school_id = $1::uuid AND e.is_active = true
+            """,
+            school_id,
+        )
+
+        if not metrics or not int(metrics["total_students"] or 0):
+            result.append({
+                "school_id": school_id,
+                "school_name": school["name"],
+                "spi_score": 0,
+                "avg_shs": 0,
+                "avg_cvi": 0,
+                "at_risk_percentage": 0,
+                "top_performers_percentage": 0,
+                "rating": "No data",
+            })
+            continue
+
+        total = int(metrics["total_students"])
+        avg_shs = float(metrics["avg_shs"] or 0)
+        avg_attendance = float(metrics["avg_attendance"] or 0)
+        avg_homework = float(metrics["avg_homework"] or 0)
+        top_pct = float(metrics["top_count"] or 0) / total * 100
+        at_risk_pct = float(metrics["at_risk_count"] or 0) / total * 100
+
+        avg_cvi = _a_calculate_cvi(avg_shs, 50.0, 15.0, avg_homework)
+        spi = _calculate_spi(
+            school_avg_shs=avg_shs,
+            school_avg_cvi=avg_cvi,
+            top_performers_pct=top_pct,
+            at_risk_pct=at_risk_pct,
+            excellent_teachers_pct=0,
+            underperforming_teachers_pct=0,
+            avg_attendance_rate=avg_attendance,
+            homework_submission_rate=avg_homework,
+            mom_improvement=0,
+        )
+        rating = _get_school_rating(spi)
+
+        result.append({
+            "school_id": school_id,
+            "school_name": school["name"],
+            "spi_score": round(spi, 2),
+            "avg_shs": round(avg_shs, 2),
+            "avg_cvi": round(avg_cvi, 2),
+            "at_risk_percentage": round(at_risk_pct, 2),
+            "top_performers_percentage": round(top_pct, 2),
+            "rating": rating,
+        })
+
+    result.sort(key=lambda x: x["spi_score"], reverse=True)
 
     return {
         "period": period,
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
-        "schools": [dict(s) for s in schools],
+        "schools": result,
     }
 
 

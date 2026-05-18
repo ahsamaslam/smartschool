@@ -30,6 +30,8 @@ const learningService = {
     api.post(`${BASE}/learning/exams/${examId}/submit`),
 
   getDashboardSummary: () => api.get(`${BASE}/learning/summary`),
+
+  getSHS: () => api.get(`${BASE}/learning/shs`),
 };
 
 export default learningService;

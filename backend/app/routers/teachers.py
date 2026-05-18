@@ -13,6 +13,7 @@ from app.routers.auth import get_user_from_token
 from app.routers.homework import ensure_homework_schema, teacher_can_manage_class
 from app.utils.claude_ai import generate_teacher_exam
 from app.utils.database import execute_one, execute_query, execute_write
+from app.utils.score_calculator import calculate_live_shs
 
 router = APIRouter()
 
@@ -359,123 +360,334 @@ async def add_student_to_class(class_id: str, student_data: AddStudentRequest):
 
 
 @router.get("/classes/{class_id}/students")
-async def get_class_students(class_id: str):
+async def get_class_students(class_id: str, teacher_id: Optional[str] = None):
     """
-    Get all students in a class with performance metrics and class info
+    Get all students in a class with SHS-based performance metrics.
+    teacher_id: when provided, Video % is based on that teacher's uploaded lectures only.
     """
     await ensure_attendance_schema()
     query = """
-        SELECT
-            u.id,
-            u.email,
-            u.full_name,
-            u.profile_picture_url,
-            c.name AS class_name,
-            c.section,
-            e.enrolled_at,
-            sp.video_completion_rate,
-            COALESCE(att.attendance_rate, sp.attendance_rate, 0) AS attendance_rate,
-            sp.average_quiz_score,
-            sp.highest_quiz_score,
-            sp.overall_score,
-            sp.ranking,
-            hw.homework_avg_pct AS homework_avg
-        FROM enrollments e
-        JOIN users u ON e.student_id = u.id
-        JOIN classes c ON e.class_id = c.id
-        LEFT JOIN student_performance sp ON (
-            u.id = sp.student_id
-            AND e.class_id = sp.class_id
-            AND sp.date = CURRENT_DATE
+        WITH base AS (
+            SELECT
+                u.id,
+                u.email,
+                u.full_name,
+                u.profile_picture_url,
+                c.name AS class_name,
+                c.section,
+                e.enrolled_at,
+
+                -- VIDEO %: % of this teacher's lectures watched >=75% by this student
+                COALESCE((
+                    SELECT
+                        CASE WHEN COUNT(tt.topic_id) = 0 THEN 0 ELSE
+                            ROUND(
+                                100.0 * COUNT(CASE WHEN COALESCE(stp.lecture_watch_percent, 0) >= 75 THEN 1 END)
+                                / COUNT(tt.topic_id),
+                            2)
+                        END
+                    FROM (
+                        SELECT lt.id AS topic_id
+                        FROM teacher_topic_content ttc
+                        JOIN library_topics lt ON lt.id = ttc.library_topic_id
+                        JOIN library_chapters ch ON ch.id = lt.chapter_id
+                        JOIN library_books b ON b.id = ch.book_id
+                        JOIN teacher_class_subject_assignments tcsa
+                            ON tcsa.teacher_id = ttc.teacher_id
+                            AND tcsa.library_book_id = b.id
+                            AND tcsa.class_id = $1::uuid
+                        WHERE ttc.teacher_id = $2::uuid
+                          AND ttc.lecture_video_url IS NOT NULL
+                          AND trim(ttc.lecture_video_url) != ''
+                    ) tt
+                    LEFT JOIN student_topic_progress stp
+                        ON stp.topic_id = tt.topic_id AND stp.student_id = u.id
+                ), 0) AS video_completion_rate,
+
+                -- ATTENDANCE %
+                COALESCE(att.attendance_rate, 0) AS attendance_rate,
+
+                -- HOMEWORK %: submitted / total published homeworks for this class
+                COALESCE(hw.homework_submission_pct, 0) AS homework_avg
+
+            FROM enrollments e
+            JOIN users u ON e.student_id = u.id
+            JOIN classes c ON e.class_id = c.id
+            LEFT JOIN (
+                SELECT
+                    student_id,
+                    class_id,
+                    ROUND(
+                        100.0 * SUM(CASE WHEN is_present THEN 1 ELSE 0 END)
+                        / NULLIF(COUNT(*), 0),
+                        2
+                    ) AS attendance_rate
+                FROM attendance
+                GROUP BY student_id, class_id
+            ) att ON att.student_id = u.id AND att.class_id = e.class_id
+            LEFT JOIN (
+                SELECT
+                    e2.student_id,
+                    ROUND(
+                        COALESCE(AVG(CASE
+                            WHEN hs.marks_awarded IS NOT NULL AND h.total_marks > 0
+                                THEN (hs.marks_awarded / h.total_marks * 100)
+                            WHEN hs.submission_status IN ('submitted','late','in_progress')
+                                THEN 75
+                            ELSE 0
+                        END), 0)
+                    , 2) AS homework_submission_pct
+                FROM enrollments e2
+                JOIN homeworks h ON h.class_id = e2.class_id AND h.status = 'published'
+                LEFT JOIN homework_submissions hs
+                    ON hs.homework_id = h.id AND hs.student_id = e2.student_id
+                WHERE e2.class_id = $1::uuid AND e2.is_active = true
+                GROUP BY e2.student_id
+            ) hw ON hw.student_id = u.id
+            WHERE e.class_id = $1 AND e.is_active = true
         )
-        LEFT JOIN (
-            SELECT
-                student_id,
-                class_id,
-                ROUND(
-                    100.0 * SUM(CASE WHEN is_present THEN 1 ELSE 0 END)
-                    / NULLIF(COUNT(*), 0),
-                    2
-                ) AS attendance_rate
-            FROM attendance
-            GROUP BY student_id, class_id
-        ) att ON att.student_id = u.id AND att.class_id = e.class_id
-        LEFT JOIN (
-            SELECT
-                hs.student_id,
-                AVG(
-                    CASE
-                        WHEN h.total_marks IS NOT NULL AND h.total_marks > 0 AND hs.marks_awarded IS NOT NULL
-                        THEN (hs.marks_awarded * 100.0 / h.total_marks)
-                        ELSE NULL
-                    END
-                ) AS homework_avg_pct
-            FROM homework_submissions hs
-            INNER JOIN homeworks h ON h.id = hs.homework_id AND h.class_id = $1::uuid
-            WHERE hs.submission_status IN ('reviewed', 'returned')
-            GROUP BY hs.student_id
-        ) hw ON hw.student_id = u.id
-        WHERE e.class_id = $1 AND e.is_active = true
-        ORDER BY sp.ranking NULLS LAST, u.full_name
+        SELECT
+            *,
+            ROUND(
+                (video_completion_rate * 0.25) +
+                (attendance_rate * 0.35) +
+                (homework_avg * 0.40),
+            2) AS overall_score,
+            RANK() OVER (
+                ORDER BY ROUND(
+                    (video_completion_rate * 0.25) +
+                    (attendance_rate * 0.35) +
+                    (homework_avg * 0.40),
+                2) DESC
+            ) AS ranking
+        FROM base
+        ORDER BY overall_score DESC, full_name
     """
 
-    students = await execute_query(query, class_id)
+    students = await execute_query(query, class_id, teacher_id)
     return [dict(student) for student in students]
 
 
 @router.get("/students/{student_id}/performance")
-async def get_student_detail(student_id: str, class_id: str):
-    """
-    Get detailed performance breakdown for a student
-    """
-    
-    # Topic-wise performance
-    topic_query = """
-        SELECT 
-            t.title as topic_name,
-            s.name as subject_name,
-            vws.completion_percentage as video_completion,
-            AVG(qa.score) as average_quiz_score,
-            MAX(qa.score) as highest_quiz_score,
-            COUNT(qa.id) as quiz_attempts,
-            pv.published_date
-        FROM topics t
-        JOIN subjects s ON t.subject_id = s.id
-        JOIN video_templates vt ON t.id = vt.topic_id
-        JOIN published_videos pv ON vt.id = pv.video_template_id
-        LEFT JOIN video_watch_sessions vws ON (
-            pv.id = vws.published_video_id 
-            AND vws.student_id = $1
-        )
-        LEFT JOIN quiz_instances qi ON pv.id = qi.published_video_id
-        LEFT JOIN quiz_attempts qa ON (
-            qi.id = qa.quiz_instance_id 
-            AND qa.student_id = $1
-            AND qa.is_completed = true
-        )
-        JOIN class_subjects cs ON s.id = cs.subject_id
-        WHERE cs.class_id = $2
-        GROUP BY t.id, t.title, s.name, vws.completion_percentage, pv.published_date
-        ORDER BY pv.published_date DESC
-    """
-    
-    topic_performance = await execute_query(topic_query, student_id, class_id)
-    
-    # Attendance summary
-    attendance_query = """
-        SELECT 
-            COUNT(*) as total_days,
-            SUM(CASE WHEN is_present THEN 1 ELSE 0 END) as present_days
-        FROM attendance
-        WHERE student_id = $1 AND class_id = $2
-    """
-    
-    attendance = await execute_one(attendance_query, student_id, class_id)
-    
+async def get_student_detail(student_id: str, class_id: str, teacher_id: Optional[str] = None):
+    """SHS-based student performance breakdown."""
+    student = await execute_one(
+        "SELECT full_name, email, profile_picture_url FROM users WHERE id = $1::uuid",
+        student_id,
+    )
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    tid = teacher_id or "00000000-0000-0000-0000-000000000000"
+
+    # SHS components for this specific student
+    shs_row = await execute_one(
+        """
+        SELECT
+            COALESCE((
+                SELECT CASE WHEN COUNT(tt.topic_id) = 0 THEN 0 ELSE
+                    ROUND(100.0 * COUNT(CASE WHEN COALESCE(stp.lecture_watch_percent,0) >= 75 THEN 1 END)
+                    / COUNT(tt.topic_id), 2) END
+                FROM (
+                    SELECT lt.id AS topic_id
+                    FROM teacher_topic_content ttc
+                    JOIN library_topics lt ON lt.id = ttc.library_topic_id
+                    JOIN library_chapters ch ON ch.id = lt.chapter_id
+                    JOIN library_books b ON b.id = ch.book_id
+                    JOIN teacher_class_subject_assignments tcsa
+                        ON tcsa.teacher_id = ttc.teacher_id
+                        AND tcsa.library_book_id = b.id
+                        AND tcsa.class_id = $1::uuid
+                    WHERE ttc.teacher_id = $2::uuid
+                      AND ttc.lecture_video_url IS NOT NULL
+                      AND trim(ttc.lecture_video_url) != ''
+                ) tt
+                LEFT JOIN student_topic_progress stp
+                    ON stp.topic_id = tt.topic_id AND stp.student_id = $3::uuid
+            ), 0) AS video_rate,
+            COALESCE((
+                SELECT ROUND(100.0 * SUM(CASE WHEN is_present THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2)
+                FROM attendance WHERE student_id = $3::uuid AND class_id = $1::uuid
+            ), 0) AS attendance_rate,
+            COALESCE((
+                SELECT ROUND(COALESCE(AVG(CASE
+                    WHEN hs.marks_awarded IS NOT NULL AND h.total_marks > 0
+                        THEN (hs.marks_awarded / h.total_marks * 100)
+                    WHEN hs.submission_status IN ('submitted','late','in_progress')
+                        THEN 75
+                    ELSE 0
+                END), 0), 2)
+                FROM homeworks h
+                LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = $3::uuid
+                WHERE h.class_id = $1::uuid AND h.status = 'published'
+            ), 0) AS homework_rate
+        """,
+        class_id, tid, student_id,
+    )
+
+    video_rate = float(shs_row["video_rate"] or 0)
+    attendance_rate = float(shs_row["attendance_rate"] or 0)
+    homework_rate = float(shs_row["homework_rate"] or 0)
+
+    # Behavioral metrics for new SHS formula
+    homework_submission_rate = await execute_one(
+        """SELECT COALESCE(ROUND(100.0 * COUNT(CASE WHEN hs.submission_status IN ('submitted','late','reviewed','returned') THEN 1 END)
+           / NULLIF(COUNT(DISTINCT h.id), 0), 2), 0) AS submission_rate
+           FROM homeworks h
+           LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = $1::uuid
+           WHERE h.class_id = $2::uuid AND h.status = 'published'""",
+        student_id, class_id,
+    )
+    submission_rate = float(homework_submission_rate["submission_rate"] or 0)
+
+    # Homework retakes average (avg attempts per homework)
+    retakes_data = await execute_one(
+        """SELECT COALESCE(AVG(attempt_count), 0) AS avg_attempts
+           FROM (SELECT COUNT(*) AS attempt_count FROM homework_submissions
+                 WHERE student_id = $1::uuid AND homework_id IN
+                 (SELECT h.id FROM homeworks h WHERE h.class_id = $2::uuid AND h.status = 'published')
+                 GROUP BY homework_id) sub""",
+        student_id, class_id,
+    )
+    homework_retakes_avg = float(retakes_data["avg_attempts"] or 0) - 1 if retakes_data and retakes_data["avg_attempts"] else 0
+
+    # Topic revisits (avg revisit count per topic)
+    revisits_data = await execute_one(
+        """SELECT COALESCE(AVG(revisit_count), 0) AS avg_revisits
+           FROM student_topic_progress
+           WHERE student_id = $1::uuid AND topic_id IN
+           (SELECT lt.id FROM library_topics lt
+            JOIN library_chapters ch ON ch.id = lt.chapter_id
+            JOIN library_books b ON b.id = ch.book_id
+            JOIN teacher_class_subject_assignments tcsa ON tcsa.library_book_id = b.id
+            WHERE tcsa.class_id = $2::uuid)""",
+        student_id, class_id,
+    )
+    topic_revisits_avg = float(revisits_data["avg_revisits"] or 0)
+
+    # Study duration in minutes (from session logs)
+    duration_data = await execute_one(
+        """SELECT COALESCE(SUM(duration_minutes), 0) AS total_minutes FROM student_session_logs
+           WHERE student_id = $1::uuid AND class_id = $2::uuid
+           AND login_at >= CURRENT_DATE - INTERVAL '30 days'""",
+        student_id, class_id,
+    )
+    study_duration_minutes = float(duration_data["total_minutes"] or 0)
+
+    # Calculate SHS using new formula (25-40-20-15)
+    shs_score, consistency_score, behavioral_score = calculate_live_shs(
+        video_rate=video_rate,
+        homework_rate=homework_rate,
+        attendance_rate=attendance_rate,
+        homework_submission_rate=submission_rate,
+        homework_retakes_avg=homework_retakes_avg,
+        topic_revisits_avg=topic_revisits_avg,
+        study_duration_minutes=study_duration_minutes,
+    )
+    risk_level = _get_risk_level(shs_score)
+
+    # Class rank: run full class query, sort, find position
+    class_rows = await execute_query(
+        _LIVE_SHS_SQL + "\nORDER BY shs_score DESC, full_name",
+        class_id, tid,
+    )
+    total_students = len(class_rows)
+    rank = next(
+        (i + 1 for i, r in enumerate(class_rows) if str(r["student_id"]) == str(student_id)),
+        total_students,
+    )
+
+    # Lecture detail counts
+    lecture_counts = await execute_one(
+        """
+        SELECT
+            COUNT(tt.topic_id) AS total_lectures,
+            COUNT(CASE WHEN COALESCE(stp.lecture_watch_percent,0) >= 75 THEN 1 END) AS watched_count
+        FROM (
+            SELECT lt.id AS topic_id
+            FROM teacher_topic_content ttc
+            JOIN library_topics lt ON lt.id = ttc.library_topic_id
+            JOIN library_chapters ch ON ch.id = lt.chapter_id
+            JOIN library_books b ON b.id = ch.book_id
+            JOIN teacher_class_subject_assignments tcsa
+                ON tcsa.teacher_id = ttc.teacher_id
+                AND tcsa.library_book_id = b.id
+                AND tcsa.class_id = $1::uuid
+            WHERE ttc.teacher_id = $2::uuid
+              AND ttc.lecture_video_url IS NOT NULL
+              AND trim(ttc.lecture_video_url) != ''
+        ) tt
+        LEFT JOIN student_topic_progress stp
+            ON stp.topic_id = tt.topic_id AND stp.student_id = $3::uuid
+        """,
+        class_id, tid, student_id,
+    )
+
+    # Attendance detail counts
+    att_counts = await execute_one(
+        """
+        SELECT COUNT(*) AS total_days, SUM(CASE WHEN is_present THEN 1 ELSE 0 END) AS present_days
+        FROM attendance WHERE student_id = $1::uuid AND class_id = $2::uuid
+        """,
+        student_id, class_id,
+    )
+
+    # Homework detail counts + grade data
+    hw_counts = await execute_one(
+        """
+        SELECT
+            COUNT(DISTINCT h.id) AS total_homeworks,
+            COUNT(CASE WHEN hs.submission_status IN ('submitted','late','reviewed','returned') THEN 1 END) AS submitted_count,
+            COALESCE(SUM(CASE WHEN hs.marks_awarded IS NOT NULL THEN hs.marks_awarded END), 0) AS marks_earned,
+            COALESCE(SUM(CASE WHEN hs.marks_awarded IS NOT NULL AND h.total_marks > 0 THEN h.total_marks END), 0) AS total_marks_available,
+            COUNT(CASE WHEN hs.marks_awarded IS NOT NULL THEN 1 END) AS graded_count
+        FROM homeworks h
+        LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = $1::uuid
+        WHERE h.class_id = $2::uuid AND h.status = 'published'
+        """,
+        student_id, class_id,
+    )
+
+    # Alerts
+    alerts = []
+    if video_rate < 40 and int(lecture_counts["total_lectures"] or 0) > 0:
+        alerts.append({"type": "video", "message": f"Only {int(lecture_counts['watched_count'] or 0)} of {int(lecture_counts['total_lectures'])} lectures watched (≥75%). Encourage watching missed lectures."})
+    if attendance_rate < 75:
+        alerts.append({"type": "attendance", "message": f"Attendance is {attendance_rate:.0f}% — below the 75% minimum threshold."})
+    graded = int(hw_counts["graded_count"] or 0)
+    marks_earned = float(hw_counts["marks_earned"] or 0)
+    total_marks_avail = float(hw_counts["total_marks_available"] or 0)
+    if homework_rate < 60:
+        if graded > 0 and total_marks_avail > 0:
+            alerts.append({"type": "homework", "message": f"Homework grade: {marks_earned:.0f}/{total_marks_avail:.0f} marks across {graded} graded assignments ({homework_rate:.0f}%). Needs improvement."})
+        else:
+            alerts.append({"type": "homework", "message": f"Only {int(hw_counts['submitted_count'] or 0)} of {int(hw_counts['total_homeworks'] or 0)} homeworks submitted ({homework_rate:.0f}%)."})
+
     return {
-        "student_id": student_id,
-        "topic_performance": [dict(tp) for tp in topic_performance],
-        "attendance": dict(attendance)
+        "student": {"full_name": student["full_name"], "email": student["email"], "profile_picture_url": student.get("profile_picture_url")},
+        "shs": shs_score,
+        "risk_level": risk_level,
+        "rank": rank,
+        "total_students": total_students,
+        "shs_formula": "Video×0.25 + Homework×0.40 + Consistency×0.20 + Behavioral×0.15",
+        "video": {"rate": video_rate, "total_lectures": int(lecture_counts["total_lectures"] or 0), "watched_count": int(lecture_counts["watched_count"] or 0)},
+        "attendance": {"rate": attendance_rate, "present_days": int(att_counts["present_days"] or 0), "total_days": int(att_counts["total_days"] or 0)},
+        "homework": {
+            "rate": homework_rate,
+            "submitted_count": int(hw_counts["submitted_count"] or 0),
+            "total_homeworks": int(hw_counts["total_homeworks"] or 0),
+            "marks_earned": marks_earned,
+            "total_marks_available": total_marks_avail,
+            "graded_count": graded,
+        },
+        "consistency": {"rate": consistency_score, "attendance": attendance_rate, "submission": submission_rate},
+        "behavioral": {
+            "rate": behavioral_score,
+            "homework_retakes_avg": round(homework_retakes_avg, 2),
+            "topic_revisits_avg": round(topic_revisits_avg, 2),
+            "study_duration_minutes": int(study_duration_minutes),
+        },
+        "alerts": alerts,
     }
 
 
@@ -1444,6 +1656,41 @@ async def list_my_lectures(
             lc.name             AS library_class_name,
             s.id                AS subject_id,
             s.name              AS subject_name,
+            (
+                SELECT string_agg(DISTINCT sch.name, ' · ' ORDER BY sch.name)
+                FROM teacher_class_subject_assignments tcsa
+                JOIN classes cl2 ON cl2.id = tcsa.class_id
+                JOIN branches br2 ON br2.id = cl2.branch_id
+                JOIN schools sch ON sch.id = br2.school_id
+                WHERE tcsa.teacher_id = ttc.teacher_id
+                  AND tcsa.library_book_id = b.id
+            ) AS schools_catalog,
+            (
+                SELECT string_agg(DISTINCT br2.name, ' · ' ORDER BY br2.name)
+                FROM teacher_class_subject_assignments tcsa
+                JOIN classes cl2 ON cl2.id = tcsa.class_id
+                JOIN branches br2 ON br2.id = cl2.branch_id
+                WHERE tcsa.teacher_id = ttc.teacher_id
+                  AND tcsa.library_book_id = b.id
+            ) AS branches_catalog,
+            (
+                SELECT string_agg(DISTINCT cl2.grade_level::text, ' · ' ORDER BY cl2.grade_level::text)
+                FROM teacher_class_subject_assignments tcsa
+                JOIN classes cl2 ON cl2.id = tcsa.class_id
+                WHERE tcsa.teacher_id = ttc.teacher_id
+                  AND tcsa.library_book_id = b.id
+            ) AS classes_catalog,
+            (
+                SELECT string_agg(
+                    DISTINCT cl2.grade_level::text || ' - ' || cl2.section,
+                    ' · '
+                    ORDER BY cl2.grade_level::text || ' - ' || cl2.section
+                )
+                FROM teacher_class_subject_assignments tcsa
+                JOIN classes cl2 ON cl2.id = tcsa.class_id
+                WHERE tcsa.teacher_id = ttc.teacher_id
+                  AND tcsa.library_book_id = b.id
+            ) AS sections_catalog,
             COUNT(*) OVER()     AS total_count
         FROM teacher_topic_content ttc
         JOIN library_topics lt   ON lt.id = ttc.library_topic_id
@@ -1502,13 +1749,29 @@ async def delete_my_topic_slides(
     topic_id: str,
     current_user: dict = Depends(get_user_from_token),
 ):
-    """Clear this user's slides for a topic (lecture stays untouched)."""
+    """Clear this user's slides for a topic — also removes the associated lecture."""
     await _ensure_teacher_content_table()
     user_id = current_user["user_id"]
+
+    # Also delete the lecture video file if one exists
+    row = await execute_one(
+        "SELECT lecture_video_url FROM teacher_topic_content WHERE teacher_id = $1::uuid AND library_topic_id = $2::uuid",
+        user_id, topic_id,
+    )
+    if row and row.get("lecture_video_url"):
+        from app.routers.library import _remove_local_static_file
+        _remove_local_static_file(row["lecture_video_url"])
+
     await execute_write(
         """
         UPDATE teacher_topic_content
-        SET slides_json = NULL, slide_theme = NULL, updated_at = NOW()
+        SET slides_json              = NULL,
+            slide_theme              = NULL,
+            lecture_video_url        = NULL,
+            lecture_metadata_json    = NULL,
+            lecture_saved_at         = NULL,
+            lecture_duration_seconds = NULL,
+            updated_at               = NOW()
         WHERE teacher_id = $1::uuid AND library_topic_id = $2::uuid
         """,
         user_id, topic_id,
@@ -1517,10 +1780,181 @@ async def delete_my_topic_slides(
 
 
 # ============================================
-# TEACHER ANALYTICS  (SHS / CVI)
+# TEACHER ANALYTICS  (SHS / CVI) — live computation
 # ============================================
 
-from app.utils.score_calculator import get_date_range as _get_date_range
+import statistics as _statistics
+from app.utils.score_calculator import (
+    get_date_range as _get_date_range,
+    calculate_cvi as _calculate_cvi,
+    get_teacher_grade as _get_teacher_grade,
+    get_risk_level as _get_risk_level,
+)
+
+# Reusable SHS query: $1=class_id, $2=teacher_id
+_LIVE_SHS_SQL = """
+WITH base AS (
+    SELECT
+        u.id AS student_id,
+        u.full_name,
+        COALESCE((
+            SELECT CASE WHEN COUNT(tt.topic_id) = 0 THEN 0 ELSE
+                ROUND(100.0 * COUNT(CASE WHEN COALESCE(stp.lecture_watch_percent,0) >= 75 THEN 1 END)
+                / COUNT(tt.topic_id), 2) END
+            FROM (
+                SELECT lt.id AS topic_id
+                FROM teacher_topic_content ttc
+                JOIN library_topics lt ON lt.id = ttc.library_topic_id
+                JOIN library_chapters ch ON ch.id = lt.chapter_id
+                JOIN library_books b ON b.id = ch.book_id
+                JOIN teacher_class_subject_assignments tcsa
+                    ON tcsa.teacher_id = ttc.teacher_id
+                    AND tcsa.library_book_id = b.id
+                    AND tcsa.class_id = $1::uuid
+                WHERE ttc.teacher_id = $2::uuid
+                  AND ttc.lecture_video_url IS NOT NULL
+                  AND trim(ttc.lecture_video_url) != ''
+            ) tt
+            LEFT JOIN student_topic_progress stp
+                ON stp.topic_id = tt.topic_id AND stp.student_id = u.id
+        ), 0) AS video_rate,
+        COALESCE(att.attendance_rate, 0) AS attendance_rate,
+        COALESCE(hw.homework_rate, 0) AS homework_rate
+    FROM enrollments e
+    JOIN users u ON e.student_id = u.id
+    LEFT JOIN (
+        SELECT student_id, class_id,
+            ROUND(100.0 * SUM(CASE WHEN is_present THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS attendance_rate
+        FROM attendance GROUP BY student_id, class_id
+    ) att ON att.student_id = u.id AND att.class_id = e.class_id
+    LEFT JOIN (
+        SELECT e2.student_id,
+            ROUND(COALESCE(AVG(CASE
+                WHEN hs.marks_awarded IS NOT NULL AND h.total_marks > 0
+                    THEN (hs.marks_awarded / h.total_marks * 100)
+                WHEN hs.submission_status IN ('submitted','late','in_progress')
+                    THEN 75
+                ELSE 0
+            END), 0), 2) AS homework_rate
+        FROM enrollments e2
+        JOIN homeworks h ON h.class_id = e2.class_id AND h.status = 'published'
+        LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = e2.student_id
+        WHERE e2.class_id = $1::uuid AND e2.is_active = true
+        GROUP BY e2.student_id
+    ) hw ON hw.student_id = u.id
+    WHERE e.class_id = $1 AND e.is_active = true
+)
+SELECT *, ROUND((video_rate * 0.25 + attendance_rate * 0.35 + homework_rate * 0.40), 2) AS shs_score
+FROM base
+"""
+
+
+async def ensure_analytics_schema():
+    """Create analytics tables if they don't exist."""
+    await execute_write("""
+        CREATE TABLE IF NOT EXISTS daily_student_metrics (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            student_id uuid NOT NULL,
+            class_id uuid NOT NULL,
+            date date NOT NULL DEFAULT CURRENT_DATE,
+            daily_shs numeric(6,2) DEFAULT 0,
+            video_completion_rate numeric(6,2) DEFAULT 0,
+            focus_score numeric(6,2) DEFAULT 0,
+            video_drops int DEFAULT 0,
+            quiz_score numeric(6,2) DEFAULT 0,
+            first_attempt_score numeric(6,2) DEFAULT 0,
+            attendance boolean DEFAULT false,
+            study_duration_minutes int DEFAULT 0,
+            homework_submitted boolean DEFAULT false,
+            questions_asked int DEFAULT 0,
+            topic_revisits int DEFAULT 0,
+            test_retakes int DEFAULT 0,
+            UNIQUE(student_id, class_id, date)
+        );
+        CREATE TABLE IF NOT EXISTS student_health_scores (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            student_id uuid NOT NULL,
+            class_id uuid NOT NULL,
+            current_shs numeric(6,2) DEFAULT 0,
+            weekly_shs numeric(6,2) DEFAULT 0,
+            monthly_shs numeric(6,2) DEFAULT 0,
+            momentum numeric(6,2) DEFAULT 0,
+            risk_level text DEFAULT 'stable',
+            last_updated timestamp DEFAULT now(),
+            UNIQUE(student_id, class_id)
+        );
+        CREATE TABLE IF NOT EXISTS class_vitality_index (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            class_id uuid NOT NULL,
+            teacher_id uuid,
+            date date NOT NULL DEFAULT CURRENT_DATE,
+            cvi_score numeric(6,2) DEFAULT 0,
+            avg_shs numeric(6,2) DEFAULT 0,
+            engagement_variance numeric(6,2) DEFAULT 0,
+            struggling_count int DEFAULT 0,
+            excelling_count int DEFAULT 0,
+            total_students int DEFAULT 0,
+            teacher_grade text DEFAULT 'No data',
+            alert_message text,
+            UNIQUE(class_id, date)
+        );
+        CREATE TABLE IF NOT EXISTS performance_alerts (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            student_id uuid,
+            class_id uuid NOT NULL,
+            teacher_id uuid,
+            alert_type text,
+            severity text DEFAULT 'medium',
+            message text,
+            action_required text,
+            is_resolved boolean DEFAULT false,
+            created_at timestamp DEFAULT now(),
+            resolved_at timestamp
+        );
+        CREATE TABLE IF NOT EXISTS school_performance_index (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            school_id uuid NOT NULL,
+            week_start date NOT NULL DEFAULT CURRENT_DATE,
+            spi_score numeric(6,2) DEFAULT 0,
+            avg_shs numeric(6,2) DEFAULT 0,
+            avg_cvi numeric(6,2) DEFAULT 0,
+            at_risk_percentage numeric(6,2) DEFAULT 0,
+            top_performers_percentage numeric(6,2) DEFAULT 0,
+            excellent_teachers_percentage numeric(6,2) DEFAULT 0,
+            rating text DEFAULT 'No data',
+            UNIQUE(school_id, week_start)
+        );
+    """)
+
+
+def _compute_class_cvi_metrics(shs_values: list, hw_rates: list) -> dict:
+    """Compute CVI and related metrics from lists of student scores."""
+    if not shs_values:
+        return {
+            "avg_shs": 0.0, "cvi_score": 0.0, "variance": 0.0,
+            "struggling": 0, "excelling": 0, "total": 0,
+            "teacher_grade": "No data", "alert_message": None,
+        }
+    avg_shs = _statistics.mean(shs_values)
+    variance = _statistics.stdev(shs_values) if len(shs_values) > 1 else 0.0
+    content_eff = _statistics.mean(hw_rates) if hw_rates else 0.0
+    cvi = _calculate_cvi(avg_shs, 50.0, variance, content_eff)
+    grade = _get_teacher_grade(cvi)
+    struggling = sum(1 for v in shs_values if v < 50)
+    excelling = sum(1 for v in shs_values if v >= 80)
+    alert_msg = None
+    if len(shs_values) > 0 and struggling >= max(1, len(shs_values) * 0.3):
+        alert_msg = f"{struggling} student(s) below SHS 50 — immediate attention needed"
+    return {
+        "avg_shs": round(avg_shs, 2),
+        "cvi_score": round(cvi, 2),
+        "variance": round(variance, 2),
+        "struggling": struggling,
+        "excelling": excelling,
+        "total": len(shs_values),
+        "teacher_grade": grade,
+        "alert_message": alert_msg,
+    }
 
 
 @router.get("/analytics/overview")
@@ -1530,14 +1964,10 @@ async def get_teacher_analytics_overview(
     end: Optional[str] = None,
     current_user: dict = Depends(get_user_from_token),
 ):
-    """
-    Teacher's performance overview: CVI per class, overall grade, active alerts.
-    Supports period=last_month|last_year|custom  (+ start/end for custom).
-    """
+    """Teacher CVI per class + overall grade, computed live from actual student data."""
     teacher_id = current_user.get("user_id")
-    date_from, date_to = _get_date_range(period, start, end)
+    await ensure_analytics_schema()
 
-    # Classes assigned to teacher
     classes = await execute_query(
         """
         SELECT DISTINCT c.id, c.name, c.grade_level, c.section
@@ -1552,59 +1982,47 @@ async def get_teacher_analytics_overview(
     class_analytics = []
     for cls in classes:
         cid = str(cls["id"])
-        cvi_row = await execute_one(
-            """
-            SELECT
-                COALESCE(AVG(cvi_score), 0) AS avg_cvi,
-                COALESCE(AVG(avg_shs), 0) AS avg_shs,
-                SUM(struggling_count) AS struggling,
-                SUM(excelling_count) AS excelling,
-                SUM(total_students) AS total,
-                MAX(teacher_grade) AS teacher_grade,
-                MAX(alert_message) AS alert_message
-            FROM class_vitality_index
-            WHERE class_id = $1::uuid AND date BETWEEN $2 AND $3
-            """,
-            cid, date_from, date_to,
-        )
-        avg_cvi = float(cvi_row["avg_cvi"] or 0)
+        students = await execute_query(_LIVE_SHS_SQL, cid, teacher_id)
+        shs_vals = [float(s["shs_score"] or 0) for s in students]
+        hw_vals = [float(s["homework_rate"] or 0) for s in students]
+        m = _compute_class_cvi_metrics(shs_vals, hw_vals)
         class_analytics.append({
             "class_id": cid,
             "class_name": cls["name"],
-            "grade_level": cls["grade_level"],
-            "section": cls["section"],
-            "avg_cvi": avg_cvi,
-            "avg_shs": float(cvi_row["avg_shs"] or 0),
-            "struggling_count": int(cvi_row["struggling"] or 0),
-            "excelling_count": int(cvi_row["excelling"] or 0),
-            "total_students": int(cvi_row["total"] or 0),
-            "teacher_grade": cvi_row["teacher_grade"] or "No data",
-            "alert_message": cvi_row["alert_message"],
+            "grade_level": cls.get("grade_level", ""),
+            "section": cls.get("section", ""),
+            "cvi_score": m["cvi_score"],
+            "avg_cvi": m["cvi_score"],
+            "avg_shs": m["avg_shs"],
+            "struggling_count": m["struggling"],
+            "excelling_count": m["excelling"],
+            "total_students": m["total"],
+            "teacher_grade": m["teacher_grade"],
+            "alert_message": m["alert_message"],
         })
 
-    # Overall teacher grade based on average CVI across classes
-    overall_cvi = (sum(c["avg_cvi"] for c in class_analytics) / len(class_analytics)) if class_analytics else 0
-    from app.utils.score_calculator import get_teacher_grade as _get_teacher_grade
+    cvi_scores = [c["cvi_score"] for c in class_analytics]
+    overall_cvi = (_statistics.mean(cvi_scores) if cvi_scores else 0.0)
     overall_grade = _get_teacher_grade(overall_cvi)
 
-    # Active alerts for teacher's students
     class_ids = [str(cls["id"]) for cls in classes]
     alert_count = 0
     if class_ids:
-        placeholders = ", ".join(f"${i+1}::uuid" for i in range(len(class_ids)))
-        alert_row = await execute_one(
-            f"SELECT COUNT(*) AS cnt FROM performance_alerts WHERE class_id IN ({placeholders}) AND is_resolved = false",
-            *class_ids,
-        )
-        alert_count = int(alert_row["cnt"] or 0)
+        try:
+            placeholders = ", ".join(f"${i+1}::uuid" for i in range(len(class_ids)))
+            alert_row = await execute_one(
+                f"SELECT COUNT(*) AS cnt FROM performance_alerts WHERE class_id IN ({placeholders}) AND is_resolved = false",
+                *class_ids,
+            )
+            alert_count = int(alert_row["cnt"] or 0)
+        except Exception:
+            alert_count = 0
 
     return {
         "period": period,
-        "date_from": date_from.isoformat(),
-        "date_to": date_to.isoformat(),
         "overall_cvi": round(overall_cvi, 2),
         "overall_grade": overall_grade,
-        "active_alerts": alert_count,
+        "active_alert_count": alert_count,
         "classes": class_analytics,
     }
 
@@ -1617,82 +2035,60 @@ async def get_teacher_class_analytics(
     end: Optional[str] = None,
     current_user: dict = Depends(get_user_from_token),
 ):
-    """
-    Detailed class analytics: CVI trend, per-student SHS, risk distribution.
-    """
+    """Detailed class analytics: live CVI, per-student SHS, risk distribution."""
+    teacher_id = current_user.get("user_id")
+    await ensure_analytics_schema()
     date_from, date_to = _get_date_range(period, start, end)
 
-    # CVI summary for period
-    cvi_row = await execute_one(
-        """
-        SELECT
-            COALESCE(AVG(cvi_score), 0) AS avg_cvi,
-            COALESCE(AVG(avg_shs), 0) AS avg_shs,
-            COALESCE(AVG(engagement_variance), 0) AS avg_variance,
-            SUM(struggling_count) AS struggling,
-            SUM(excelling_count) AS excelling,
-            SUM(total_students) AS total,
-            MAX(teacher_grade) AS teacher_grade
-        FROM class_vitality_index
-        WHERE class_id = $1::uuid AND date BETWEEN $2 AND $3
-        """,
-        class_id, date_from, date_to,
-    )
+    students = await execute_query(_LIVE_SHS_SQL, class_id, teacher_id)
+    shs_vals = [float(s["shs_score"] or 0) for s in students]
+    hw_vals = [float(s["homework_rate"] or 0) for s in students]
+    m = _compute_class_cvi_metrics(shs_vals, hw_vals)
 
-    # CVI daily trend
-    cvi_trend = await execute_query(
-        "SELECT date, cvi_score, avg_shs, struggling_count, excelling_count FROM class_vitality_index WHERE class_id = $1::uuid AND date BETWEEN $2 AND $3 ORDER BY date",
-        class_id, date_from, date_to,
-    )
-
-    # Per-student SHS averages over period
-    students = await execute_query(
-        """
-        SELECT
-            dsm.student_id,
-            u.full_name,
-            COALESCE(AVG(dsm.daily_shs), 0) AS avg_shs,
-            COALESCE(AVG(dsm.quiz_score), 0) AS avg_quiz,
-            COALESCE(AVG(dsm.video_completion_rate), 0) AS avg_video,
-            COUNT(dsm.id) FILTER (WHERE dsm.attendance = true) AS present_days,
-            COUNT(dsm.id) AS total_days,
-            shs.risk_level,
-            shs.momentum
-        FROM daily_student_metrics dsm
-        JOIN users u ON u.id = dsm.student_id
-        LEFT JOIN student_health_scores shs ON shs.student_id = dsm.student_id AND shs.class_id = dsm.class_id
-        WHERE dsm.class_id = $1::uuid AND dsm.date BETWEEN $2 AND $3
-        GROUP BY dsm.student_id, u.full_name, shs.risk_level, shs.momentum
-        ORDER BY avg_shs DESC
-        """,
-        class_id, date_from, date_to,
-    )
-
-    # Risk distribution
-    total = int(cvi_row["total"] or 0) or 1
-    student_list = [dict(s) for s in students]
     risk_dist = {
-        "critical": sum(1 for s in student_list if s["risk_level"] == "critical"),
-        "at_risk": sum(1 for s in student_list if s["risk_level"] == "at_risk"),
-        "stable": sum(1 for s in student_list if s["risk_level"] == "stable"),
-        "excelling": sum(1 for s in student_list if s["risk_level"] == "excelling"),
+        "critical": sum(1 for v in shs_vals if v < 40),
+        "at_risk": sum(1 for v in shs_vals if 40 <= v < 60),
+        "stable": sum(1 for v in shs_vals if 60 <= v < 80),
+        "excelling": sum(1 for v in shs_vals if v >= 80),
     }
+
+    cvi_trend = []
+    try:
+        rows = await execute_query(
+            "SELECT date, cvi_score, avg_shs, struggling_count, excelling_count FROM class_vitality_index WHERE class_id = $1::uuid AND date BETWEEN $2 AND $3 ORDER BY date",
+            class_id, date_from, date_to,
+        )
+        cvi_trend = [dict(r) for r in rows]
+    except Exception:
+        cvi_trend = []
 
     return {
         "period": period,
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
         "summary": {
-            "avg_cvi": round(float(cvi_row["avg_cvi"] or 0), 2),
-            "avg_shs": round(float(cvi_row["avg_shs"] or 0), 2),
-            "engagement_variance": round(float(cvi_row["avg_variance"] or 0), 2),
-            "struggling_count": int(cvi_row["struggling"] or 0),
-            "excelling_count": int(cvi_row["excelling"] or 0),
-            "teacher_grade": cvi_row["teacher_grade"] or "No data",
+            "avg_cvi": m["cvi_score"],
+            "avg_shs": m["avg_shs"],
+            "engagement_variance": m["variance"],
+            "struggling_count": m["struggling"],
+            "excelling_count": m["excelling"],
+            "teacher_grade": m["teacher_grade"],
         },
         "risk_distribution": risk_dist,
-        "cvi_trend": [dict(r) for r in cvi_trend],
-        "students": student_list,
+        "cvi_trend": cvi_trend,
+        "students": [
+            {
+                "student_id": str(s["student_id"]),
+                "full_name": s["full_name"],
+                "avg_shs": float(s["shs_score"] or 0),
+                "avg_video": float(s["video_rate"] or 0),
+                "attendance_rate": float(s["attendance_rate"] or 0),
+                "homework_rate": float(s["homework_rate"] or 0),
+                "risk_level": _get_risk_level(float(s["shs_score"] or 0)),
+                "momentum": 0,
+            }
+            for s in students
+        ],
     }
 
 
@@ -1705,53 +2101,78 @@ async def get_teacher_student_analytics(
     end: Optional[str] = None,
     current_user: dict = Depends(get_user_from_token),
 ):
-    """
-    Detailed SHS analytics for a single student in a class.
-    """
+    """Detailed SHS analytics for a single student — live snapshot + historical if available."""
+    teacher_id = current_user.get("user_id")
+    await ensure_analytics_schema()
     date_from, date_to = _get_date_range(period, start, end)
 
-    # Daily SHS trend
-    daily = await execute_query(
-        """
-        SELECT date, daily_shs, quiz_score, video_completion_rate, attendance,
+    daily = []
+    avg_data = {"avg_shs": 0.0, "avg_quiz": 0.0, "avg_video": 0.0, "present_days": 0, "total_days": 1, "hw_submitted": 0}
+    try:
+        rows = await execute_query(
+            """SELECT date, daily_shs, quiz_score, video_completion_rate, attendance,
                study_duration_minutes, homework_submitted, questions_asked, topic_revisits
-        FROM daily_student_metrics
-        WHERE student_id = $1::uuid AND class_id = $2::uuid AND date BETWEEN $3 AND $4
-        ORDER BY date
-        """,
-        student_id, class_id, date_from, date_to,
-    )
+               FROM daily_student_metrics
+               WHERE student_id = $1::uuid AND class_id = $2::uuid AND date BETWEEN $3 AND $4
+               ORDER BY date""",
+            student_id, class_id, date_from, date_to,
+        )
+        daily = [dict(r) for r in rows]
+        avg_r = await execute_one(
+            """SELECT COALESCE(AVG(daily_shs),0) AS avg_shs, COALESCE(AVG(quiz_score),0) AS avg_quiz,
+               COALESCE(AVG(video_completion_rate),0) AS avg_video,
+               COUNT(*) FILTER (WHERE attendance=true) AS present_days,
+               COUNT(*) AS total_days,
+               COUNT(*) FILTER (WHERE homework_submitted=true) AS hw_submitted
+               FROM daily_student_metrics
+               WHERE student_id=$1::uuid AND class_id=$2::uuid AND date BETWEEN $3 AND $4""",
+            student_id, class_id, date_from, date_to,
+        )
+        if avg_r:
+            avg_data = {
+                "avg_shs": float(avg_r["avg_shs"] or 0),
+                "avg_quiz": float(avg_r["avg_quiz"] or 0),
+                "avg_video": float(avg_r["avg_video"] or 0),
+                "present_days": int(avg_r["present_days"] or 0),
+                "total_days": max(int(avg_r["total_days"] or 1), 1),
+                "hw_submitted": int(avg_r["hw_submitted"] or 0),
+            }
+    except Exception:
+        pass
 
-    # Rolling SHS scores
-    shs_row = await execute_one(
-        "SELECT current_shs, weekly_shs, monthly_shs, momentum, risk_level, last_updated FROM student_health_scores WHERE student_id = $1::uuid AND class_id = $2::uuid",
-        student_id, class_id,
-    )
+    # Rolling scores — use live snapshot if no stored history
+    rolling = {}
+    try:
+        shs_row = await execute_one(
+            "SELECT current_shs, weekly_shs, monthly_shs, momentum, risk_level, last_updated FROM student_health_scores WHERE student_id=$1::uuid AND class_id=$2::uuid",
+            student_id, class_id,
+        )
+        if shs_row:
+            rolling = dict(shs_row)
+    except Exception:
+        shs_row = None
 
-    # Student name
-    user_row = await execute_one("SELECT full_name FROM users WHERE id = $1::uuid", student_id)
+    if not rolling:
+        live_rows = await execute_query(_LIVE_SHS_SQL, class_id, teacher_id)
+        match = next((s for s in live_rows if str(s["student_id"]) == student_id), None)
+        if match:
+            live_shs = float(match["shs_score"] or 0)
+            rolling = {
+                "current_shs": live_shs, "weekly_shs": live_shs, "monthly_shs": live_shs,
+                "momentum": 0, "risk_level": _get_risk_level(live_shs), "last_updated": None,
+            }
 
-    # Active alerts for this student
-    alerts = await execute_query(
-        "SELECT alert_type, severity, message, action_required, created_at FROM performance_alerts WHERE student_id = $1::uuid AND class_id = $2::uuid AND is_resolved = false ORDER BY created_at DESC LIMIT 5",
-        student_id, class_id,
-    )
+    user_row = await execute_one("SELECT full_name FROM users WHERE id=$1::uuid", student_id)
 
-    # Period averages
-    avg_row = await execute_one(
-        """
-        SELECT
-            COALESCE(AVG(daily_shs), 0) AS avg_shs,
-            COALESCE(AVG(quiz_score), 0) AS avg_quiz,
-            COALESCE(AVG(video_completion_rate), 0) AS avg_video,
-            COUNT(*) FILTER (WHERE attendance = true) AS present_days,
-            COUNT(*) AS total_days,
-            COUNT(*) FILTER (WHERE homework_submitted = true) AS hw_submitted
-        FROM daily_student_metrics
-        WHERE student_id = $1::uuid AND class_id = $2::uuid AND date BETWEEN $3 AND $4
-        """,
-        student_id, class_id, date_from, date_to,
-    )
+    alerts = []
+    try:
+        alert_rows = await execute_query(
+            "SELECT alert_type, severity, message, action_required, created_at FROM performance_alerts WHERE student_id=$1::uuid AND class_id=$2::uuid AND is_resolved=false ORDER BY created_at DESC LIMIT 5",
+            student_id, class_id,
+        )
+        alerts = [dict(r) for r in alert_rows]
+    except Exception:
+        alerts = []
 
     return {
         "student_id": student_id,
@@ -1759,15 +2180,15 @@ async def get_teacher_student_analytics(
         "period": period,
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
-        "rolling_scores": dict(shs_row) if shs_row else {},
+        "rolling_scores": rolling,
         "period_averages": {
-            "avg_shs": round(float(avg_row["avg_shs"] or 0), 2),
-            "avg_quiz": round(float(avg_row["avg_quiz"] or 0), 2),
-            "avg_video": round(float(avg_row["avg_video"] or 0), 2),
-            "attendance_rate": round(int(avg_row["present_days"] or 0) / max(int(avg_row["total_days"] or 1), 1) * 100, 2),
-            "homework_rate": round(int(avg_row["hw_submitted"] or 0) / max(int(avg_row["total_days"] or 1), 1) * 100, 2),
+            "avg_shs": round(avg_data["avg_shs"], 2),
+            "avg_quiz": round(avg_data["avg_quiz"], 2),
+            "avg_video": round(avg_data["avg_video"], 2),
+            "attendance_rate": round(avg_data["present_days"] / avg_data["total_days"] * 100, 2),
+            "homework_rate": round(avg_data["hw_submitted"] / avg_data["total_days"] * 100, 2),
         },
-        "daily_trend": [dict(r) for r in daily],
-        "active_alerts": [dict(r) for r in alerts],
+        "daily_trend": daily,
+        "active_alerts": alerts,
     }
 

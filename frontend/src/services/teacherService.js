@@ -22,16 +22,18 @@ const teacherService = {
       params: { teacher_id: teacherId },
     }),
 
-  getClassStudents: (classId) =>
-    api.get(`${API_ROUTES.TEACHERS}/classes/${classId}/students`),
+  getClassStudents: (classId, teacherId) =>
+    api.get(`${API_ROUTES.TEACHERS}/classes/${classId}/students`, {
+      params: teacherId ? { teacher_id: teacherId } : {},
+    }),
 
   addStudentToClass: (classId, data) =>
     api.post(`${API_ROUTES.TEACHERS}/classes/${classId}/students`, data),
 
   // Student detail
-  getStudentPerformance: (studentId, classId) =>
+  getStudentPerformance: (studentId, classId, teacherId) =>
     api.get(`${API_ROUTES.TEACHERS}/students/${studentId}/performance`, {
-      params: { class_id: classId },
+      params: { class_id: classId, ...(teacherId ? { teacher_id: teacherId } : {}) },
     }),
 
   sendPasswordReset: (studentId) =>
@@ -139,6 +141,26 @@ const teacherService = {
         ...(start && { start }),
         ...(end && { end }),
       },
+    }),
+
+  // Historical Metrics & Alerts
+  getStudentHistoricalMetrics: (studentId, classId, days = 30) =>
+    api.get(`${API_ROUTES.METRICS}/student/${studentId}/historical`, {
+      params: { class_id: classId, days },
+    }),
+
+  getClassAlerts: (classId, params = {}) =>
+    api.get(`${API_ROUTES.METRICS}/class/${classId}/alerts`, { params }),
+
+  getClassRiskSummary: (classId) =>
+    api.get(`${API_ROUTES.METRICS}/class/${classId}/risk-summary`),
+
+  resolveAlert: (alertId) =>
+    api.post(`${API_ROUTES.METRICS}/alert/${alertId}/resolve`),
+
+  getStudentAIPrediction: (studentId, classId) =>
+    api.get(`${API_ROUTES.METRICS}/student/${studentId}/ai-prediction`, {
+      params: { class_id: classId },
     }),
 };
 
