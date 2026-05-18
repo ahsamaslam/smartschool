@@ -320,3 +320,90 @@ async def delete_user_session(user_id: str):
     """Delete user session"""
     session_key = f"session:{user_id}"
     await cache_delete(session_key)
+
+
+# ============================================
+# ANALYTICS CACHE HELPERS
+# Cache strategy:
+#   live metrics    → 1 hour  (3600s)
+#   daily scores    → 24 hrs  (86400s)
+#   weekly reports  → 7 days  (604800s)
+#   ai insights     → 30 days (2592000s)
+# ============================================
+
+_TTL_LIVE = 3600
+_TTL_DAILY = 86400
+_TTL_WEEKLY = 604800
+_TTL_AI = 2592000
+
+
+async def cache_analytics(key_parts: list, data: Any, ttl: int = _TTL_DAILY):
+    """Cache an analytics result under a namespaced key."""
+    key = "analytics:" + ":".join(str(p) for p in key_parts)
+    await cache_set(key, data, expire=ttl)
+
+
+async def get_cached_analytics(key_parts: list) -> Optional[Any]:
+    """Retrieve a cached analytics result."""
+    key = "analytics:" + ":".join(str(p) for p in key_parts)
+    return await cache_get(key)
+
+
+async def invalidate_analytics(key_parts: list):
+    """Delete a cached analytics result (e.g. after recalculation)."""
+    key = "analytics:" + ":".join(str(p) for p in key_parts)
+    await cache_delete(key)
+
+
+async def cache_student_shs(student_id: str, class_id: str, data: Any):
+    """Cache student SHS data for 24 hours."""
+    await cache_analytics(["shs", student_id, class_id], data, ttl=_TTL_DAILY)
+
+
+async def get_cached_student_shs(student_id: str, class_id: str) -> Optional[Any]:
+    return await get_cached_analytics(["shs", student_id, class_id])
+
+
+async def cache_class_cvi(class_id: str, period: str, data: Any):
+    """Cache class CVI analytics for 24 hours."""
+    await cache_analytics(["cvi", class_id, period], data, ttl=_TTL_DAILY)
+
+
+async def get_cached_class_cvi(class_id: str, period: str) -> Optional[Any]:
+    return await get_cached_analytics(["cvi", class_id, period])
+
+
+async def cache_teacher_overview(teacher_id: str, period: str, data: Any):
+    """Cache teacher analytics overview for 1 hour (frequently viewed)."""
+    await cache_analytics(["teacher_overview", teacher_id, period], data, ttl=_TTL_LIVE)
+
+
+async def get_cached_teacher_overview(teacher_id: str, period: str) -> Optional[Any]:
+    return await get_cached_analytics(["teacher_overview", teacher_id, period])
+
+
+async def cache_manager_overview(school_id: str, period: str, data: Any):
+    """Cache manager analytics overview for 1 hour."""
+    await cache_analytics(["manager_overview", school_id, period], data, ttl=_TTL_LIVE)
+
+
+async def get_cached_manager_overview(school_id: str, period: str) -> Optional[Any]:
+    return await get_cached_analytics(["manager_overview", school_id, period])
+
+
+async def cache_school_spi(school_id: str, period: str, data: Any):
+    """Cache school SPI data for 7 days (recalculated weekly)."""
+    await cache_analytics(["spi", school_id, period], data, ttl=_TTL_WEEKLY)
+
+
+async def get_cached_school_spi(school_id: str, period: str) -> Optional[Any]:
+    return await get_cached_analytics(["spi", school_id, period])
+
+
+async def cache_ai_insights(entity_type: str, entity_id: str, data: Any):
+    """Cache AI insights for 30 days (expensive to regenerate)."""
+    await cache_analytics(["ai", entity_type, entity_id], data, ttl=_TTL_AI)
+
+
+async def get_cached_ai_insights(entity_type: str, entity_id: str) -> Optional[Any]:
+    return await get_cached_analytics(["ai", entity_type, entity_id])

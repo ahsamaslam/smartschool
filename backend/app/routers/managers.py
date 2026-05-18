@@ -2219,6 +2219,257 @@ async def get_teacher_wise_report(
 
 
 # ============================================
+# MANAGER ANALYTICS  (SPI / CVI / SHS)
+# ============================================
+
+from app.utils.score_calculator import get_date_range as _get_date_range, get_school_rating as _get_school_rating
+
+
+@router.get("/analytics/overview")
+async def get_manager_analytics_overview(
+    period: str = "last_month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: dict = Depends(require_manager),
+):
+    """
+    Manager overview: SPI, teacher CVI ranking, class CVI ranking, risk summary.
+    period=last_month|last_year|custom (+ start/end for custom)
+    """
+    school_id = str(current_user.get("school_id") or "")
+    date_from, date_to = _get_date_range(period, start, end)
+
+    # Latest SPI for the school in period
+    spi_row = await execute_one(
+        "SELECT spi_score, avg_shs, avg_cvi, at_risk_percentage, top_performers_percentage, rating FROM school_performance_index WHERE school_id = $1::uuid AND week_start <= $2 ORDER BY week_start DESC LIMIT 1",
+        school_id, date_to,
+    )
+
+    # Class CVI summary for school
+    class_cvi = await execute_query(
+        """
+        SELECT
+            c.id AS class_id, c.name AS class_name,
+            u.full_name AS teacher_name,
+            COALESCE(AVG(cvi.cvi_score), 0) AS avg_cvi,
+            COALESCE(AVG(cvi.avg_shs), 0) AS avg_shs,
+            SUM(cvi.struggling_count) AS struggling,
+            SUM(cvi.excelling_count) AS excelling,
+            MAX(cvi.teacher_grade) AS teacher_grade
+        FROM classes c
+        JOIN branches b ON b.id = c.branch_id
+        LEFT JOIN users u ON u.id = c.teacher_id
+        LEFT JOIN class_vitality_index cvi ON cvi.class_id = c.id AND cvi.date BETWEEN $2 AND $3
+        WHERE b.school_id = $1::uuid
+        GROUP BY c.id, c.name, u.full_name
+        ORDER BY avg_cvi DESC NULLS LAST
+        """,
+        school_id, date_from, date_to,
+    )
+
+    # At-risk student count
+    risk_row = await execute_one(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE shs.risk_level = 'critical') AS critical,
+            COUNT(*) FILTER (WHERE shs.risk_level = 'at_risk') AS at_risk,
+            COUNT(*) FILTER (WHERE shs.risk_level = 'stable') AS stable,
+            COUNT(*) FILTER (WHERE shs.risk_level = 'excelling') AS excelling
+        FROM student_health_scores shs
+        JOIN enrollments e ON e.student_id = shs.student_id AND e.class_id = shs.class_id AND e.is_active = true
+        JOIN classes c ON c.id = e.class_id
+        JOIN branches b ON b.id = c.branch_id
+        WHERE b.school_id = $1::uuid
+        """,
+        school_id,
+    )
+
+    return {
+        "period": period,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "spi": dict(spi_row) if spi_row else {"spi_score": 0, "avg_shs": 0, "avg_cvi": 0, "rating": "No data"},
+        "risk_distribution": dict(risk_row) if risk_row else {},
+        "classes": [dict(r) for r in class_cvi],
+    }
+
+
+@router.get("/analytics/teachers")
+async def get_manager_teacher_analytics(
+    period: str = "last_month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: dict = Depends(require_manager),
+):
+    """Teacher-wise CVI ranking sorted by performance."""
+    school_id = str(current_user.get("school_id") or "")
+    date_from, date_to = _get_date_range(period, start, end)
+
+    teachers = await execute_query(
+        """
+        SELECT
+            u.id AS teacher_id,
+            u.full_name AS teacher_name,
+            u.email,
+            COUNT(DISTINCT c.id) AS class_count,
+            COALESCE(AVG(cvi.cvi_score), 0) AS avg_cvi,
+            COALESCE(AVG(cvi.avg_shs), 0) AS avg_shs,
+            SUM(cvi.struggling_count) AS struggling_students,
+            SUM(cvi.excelling_count) AS excelling_students,
+            MAX(cvi.teacher_grade) AS teacher_grade
+        FROM users u
+        JOIN classes c ON c.teacher_id = u.id
+        JOIN branches b ON b.id = c.branch_id
+        LEFT JOIN class_vitality_index cvi ON cvi.class_id = c.id AND cvi.date BETWEEN $2 AND $3
+        WHERE b.school_id = $1::uuid AND u.role = 'teacher'
+        GROUP BY u.id, u.full_name, u.email
+        ORDER BY avg_cvi DESC NULLS LAST
+        """,
+        school_id, date_from, date_to,
+    )
+
+    return {
+        "period": period,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "teachers": [dict(t) for t in teachers],
+    }
+
+
+@router.get("/analytics/classes")
+async def get_manager_class_analytics(
+    period: str = "last_month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: dict = Depends(require_manager),
+):
+    """Class-wise CVI ranking for manager's school."""
+    school_id = str(current_user.get("school_id") or "")
+    date_from, date_to = _get_date_range(period, start, end)
+
+    classes = await execute_query(
+        """
+        SELECT
+            c.id AS class_id,
+            c.name AS class_name,
+            c.grade_level,
+            c.section,
+            b.name AS branch_name,
+            u.full_name AS teacher_name,
+            COALESCE(AVG(cvi.cvi_score), 0) AS avg_cvi,
+            COALESCE(AVG(cvi.avg_shs), 0) AS avg_shs,
+            COALESCE(SUM(cvi.total_students), 0) AS total_students,
+            COALESCE(SUM(cvi.struggling_count), 0) AS struggling_count,
+            COALESCE(SUM(cvi.excelling_count), 0) AS excelling_count,
+            MAX(cvi.teacher_grade) AS teacher_grade,
+            MAX(cvi.alert_message) AS alert_message
+        FROM classes c
+        JOIN branches b ON b.id = c.branch_id
+        LEFT JOIN users u ON u.id = c.teacher_id
+        LEFT JOIN class_vitality_index cvi ON cvi.class_id = c.id AND cvi.date BETWEEN $2 AND $3
+        WHERE b.school_id = $1::uuid
+        GROUP BY c.id, c.name, c.grade_level, c.section, b.name, u.full_name
+        ORDER BY avg_cvi DESC NULLS LAST
+        """,
+        school_id, date_from, date_to,
+    )
+
+    return {
+        "period": period,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "classes": [dict(c) for c in classes],
+    }
+
+
+@router.get("/analytics/student/{student_id}")
+async def get_manager_student_analytics(
+    student_id: str,
+    period: str = "last_month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: dict = Depends(require_manager),
+):
+    """Full SHS detail for a student in manager's school."""
+    school_id = str(current_user.get("school_id") or "")
+    date_from, date_to = _get_date_range(period, start, end)
+
+    # Verify student belongs to manager's school
+    student_check = await execute_one(
+        """
+        SELECT u.full_name FROM users u
+        JOIN enrollments e ON e.student_id = u.id
+        JOIN classes c ON c.id = e.class_id
+        JOIN branches b ON b.id = c.branch_id
+        WHERE u.id = $1::uuid AND b.school_id = $2::uuid AND e.is_active = true
+        LIMIT 1
+        """,
+        student_id, school_id,
+    )
+    if not student_check:
+        raise HTTPException(status_code=404, detail="Student not found in your school")
+
+    # Daily SHS trend (all classes)
+    daily = await execute_query(
+        """
+        SELECT dsm.date, dsm.class_id, c.name AS class_name,
+               dsm.daily_shs, dsm.quiz_score, dsm.video_completion_rate,
+               dsm.attendance, dsm.homework_submitted
+        FROM daily_student_metrics dsm
+        JOIN classes c ON c.id = dsm.class_id
+        WHERE dsm.student_id = $1::uuid AND dsm.date BETWEEN $2 AND $3
+        ORDER BY dsm.date
+        """,
+        student_id, date_from, date_to,
+    )
+
+    # Rolling SHS
+    shs_rows = await execute_query(
+        "SELECT * FROM student_health_scores WHERE student_id = $1::uuid",
+        student_id,
+    )
+
+    # Active alerts
+    alerts = await execute_query(
+        "SELECT alert_type, severity, message, action_required, created_at FROM performance_alerts WHERE student_id = $1::uuid AND is_resolved = false ORDER BY created_at DESC LIMIT 5",
+        student_id,
+    )
+
+    # Period averages
+    avg_row = await execute_one(
+        """
+        SELECT
+            COALESCE(AVG(daily_shs), 0) AS avg_shs,
+            COALESCE(AVG(quiz_score), 0) AS avg_quiz,
+            COALESCE(AVG(video_completion_rate), 0) AS avg_video,
+            COUNT(*) FILTER (WHERE attendance = true) AS present_days,
+            COUNT(*) AS total_days,
+            COUNT(*) FILTER (WHERE homework_submitted = true) AS hw_submitted
+        FROM daily_student_metrics
+        WHERE student_id = $1::uuid AND date BETWEEN $2 AND $3
+        """,
+        student_id, date_from, date_to,
+    )
+
+    return {
+        "student_id": student_id,
+        "student_name": student_check["full_name"],
+        "period": period,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "rolling_scores": [dict(r) for r in shs_rows],
+        "period_averages": {
+            "avg_shs": round(float(avg_row["avg_shs"] or 0), 2),
+            "avg_quiz": round(float(avg_row["avg_quiz"] or 0), 2),
+            "avg_video": round(float(avg_row["avg_video"] or 0), 2),
+            "attendance_rate": round(int(avg_row["present_days"] or 0) / max(int(avg_row["total_days"] or 1), 1) * 100, 2),
+            "homework_rate": round(int(avg_row["hw_submitted"] or 0) / max(int(avg_row["total_days"] or 1), 1) * 100, 2),
+        },
+        "daily_trend": [dict(r) for r in daily],
+        "active_alerts": [dict(r) for r in alerts],
+    }
+
+# ============================================
 # GRAPHICAL ANALYTICS DATA
 # ============================================
 

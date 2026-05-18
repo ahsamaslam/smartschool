@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
 import teacherService from "../../services/teacherService";
 import { PageSpinner } from "../../components/common/Spinner";
+import PeriodFilter from "../../components/analytics/PeriodFilter";
+import CVICard from "../../components/analytics/CVICard";
+import ScoreBadge from "../../components/analytics/ScoreBadge";
 import {
   AcademicCapIcon,
   UsersIcon,
@@ -13,12 +16,20 @@ import {
   ChevronRightIcon,
   CalendarDaysIcon,
   PencilSquareIcon,
+  BellAlertIcon,
 } from "@heroicons/react/24/outline";
 
 export default function TeacherDashboard() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // Analytics state
+  const [analyticsFilter, setAnalyticsFilter] = useState({
+    period: "last_month",
+  });
+  const [analytics, setAnalytics] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -28,6 +39,20 @@ export default function TeacherDashboard() {
       .catch(() => setData(null))
       .finally(() => setLoading(false));
   }, [user?.id]);
+
+  const loadAnalytics = useCallback(() => {
+    const { period, start, end } = analyticsFilter;
+    setAnalyticsLoading(true);
+    teacherService
+      .getAnalyticsOverview(period, start, end)
+      .then((res) => setAnalytics(res.data))
+      .catch(() => setAnalytics(null))
+      .finally(() => setAnalyticsLoading(false));
+  }, [analyticsFilter]);
+
+  useEffect(() => {
+    loadAnalytics();
+  }, [loadAnalytics]);
 
   if (loading) return <PageSpinner />;
 
@@ -187,6 +212,81 @@ export default function TeacherDashboard() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* ── Performance Analytics ────────────────────────── */}
+      <div className="mt-10">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <h2 className="text-sm font-semibold text-gray-700">
+            Performance Analytics
+          </h2>
+          <PeriodFilter
+            period={analyticsFilter.period}
+            start={analyticsFilter.start}
+            end={analyticsFilter.end}
+            onChange={setAnalyticsFilter}
+          />
+        </div>
+
+        {analyticsLoading ? (
+          <div className="py-10 text-center text-sm text-gray-400">
+            Loading analytics…
+          </div>
+        ) : !analytics ? (
+          <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-6 text-center text-sm text-gray-400">
+            Analytics data not available yet. Scores are calculated nightly.
+          </div>
+        ) : (
+          <>
+            {/* Teacher summary bar */}
+            <div className="flex flex-wrap items-center gap-4 mb-5 rounded-2xl border border-gray-200 bg-white p-4">
+              <div>
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide">
+                  Overall Grade
+                </p>
+                {analytics.overall_grade ? (
+                  <span className="inline-block mt-0.5 text-sm font-bold text-gray-800">
+                    {analytics.overall_grade}
+                  </span>
+                ) : (
+                  <span className="text-sm text-gray-400">—</span>
+                )}
+              </div>
+              <div className="w-px h-8 bg-gray-200" />
+              <div>
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide">
+                  Active Alerts
+                </p>
+                <span
+                  className={`text-sm font-bold ${(analytics.active_alert_count || 0) > 0 ? "text-red-600" : "text-gray-700"}`}
+                >
+                  {analytics.active_alert_count ?? 0}
+                </span>
+              </div>
+              {(analytics.active_alert_count || 0) > 0 && (
+                <BellAlertIcon className="h-4 w-4 text-red-500 ml-1" />
+              )}
+            </div>
+
+            {/* CVI per class */}
+            {(analytics.classes || []).length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-6 text-center text-sm text-gray-400">
+                No class analytics for this period.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {analytics.classes.map((cls) => (
+                  <Link
+                    key={cls.class_id}
+                    to={`/teacher/classes/${cls.class_id}`}
+                  >
+                    <CVICard data={cls} />
+                  </Link>
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

@@ -4282,5 +4282,294 @@ async def remove_teacher_class_assignment(teacher_id: str, class_id: str):
     return {"ok": True}
 
 
+# ============================================
+# ADMIN ANALYTICS  (SPI / CVI / SHS — tenant scoped)
+# ============================================
+
+from app.utils.score_calculator import get_date_range as _get_date_range, get_school_rating as _get_school_rating
+
+
+@router.get("/analytics/overview")
+async def get_admin_analytics_overview(
+    period: str = "last_month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: dict = Depends(require_admin),
+):
+    """
+    Admin overview: SPI per school in tenant, ranked.
+    period=last_month|last_year|custom
+    """
+    tenant_id = current_user.get("tenant_id")
+    date_from, date_to = _get_date_range(period, start, end)
+
+    schools = await execute_query(
+        """
+        SELECT
+            s.id AS school_id,
+            s.name AS school_name,
+            spi.spi_score,
+            spi.avg_shs,
+            spi.avg_cvi,
+            spi.at_risk_percentage,
+            spi.top_performers_percentage,
+            spi.rating
+        FROM schools s
+        LEFT JOIN LATERAL (
+            SELECT * FROM school_performance_index
+            WHERE school_id = s.id AND week_start <= $2
+            ORDER BY week_start DESC LIMIT 1
+        ) spi ON true
+        WHERE s.tenant_id = $1::uuid AND s.is_active = true
+        ORDER BY spi.spi_score DESC NULLS LAST
+        """,
+        tenant_id, date_to,
+    )
+
+    return {
+        "period": period,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "schools": [dict(s) for s in schools],
+    }
+
+
+@router.get("/analytics/school/{school_id}")
+async def get_admin_school_analytics(
+    school_id: str,
+    period: str = "last_month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: dict = Depends(require_admin),
+):
+    """School SPI detail with branch breakdown (avg SHS per branch)."""
+    tenant_id = current_user.get("tenant_id")
+    date_from, date_to = _get_date_range(period, start, end)
+
+    # Verify school belongs to this admin's tenant
+    school = await execute_one(
+        "SELECT name, tenant_id FROM schools WHERE id = $1::uuid",
+        school_id,
+    )
+    if not school or str(school["tenant_id"]) != str(tenant_id):
+        raise HTTPException(status_code=404, detail="School not found in your tenant")
+
+    # Latest SPI
+    spi_row = await execute_one(
+        "SELECT * FROM school_performance_index WHERE school_id = $1::uuid AND week_start <= $2 ORDER BY week_start DESC LIMIT 1",
+        school_id, date_to,
+    )
+
+    # SPI trend
+    spi_trend = await execute_query(
+        "SELECT week_start, spi_score, avg_shs, avg_cvi, at_risk_percentage, top_performers_percentage FROM school_performance_index WHERE school_id = $1::uuid AND week_start BETWEEN $2 AND $3 ORDER BY week_start",
+        school_id, date_from, date_to,
+    )
+
+    # Branch breakdown: avg SHS per branch
+    branches = await execute_query(
+        """
+        SELECT
+            b.id AS branch_id,
+            b.name AS branch_name,
+            COALESCE(AVG(dsm.daily_shs), 0) AS avg_shs,
+            COUNT(DISTINCT dsm.student_id) AS student_count
+        FROM branches b
+        JOIN classes c ON c.branch_id = b.id
+        LEFT JOIN daily_student_metrics dsm ON dsm.class_id = c.id AND dsm.date BETWEEN $2 AND $3
+        WHERE b.school_id = $1::uuid
+        GROUP BY b.id, b.name
+        ORDER BY avg_shs DESC NULLS LAST
+        """,
+        school_id, date_from, date_to,
+    )
+
+    return {
+        "school_id": school_id,
+        "school_name": school["name"],
+        "period": period,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "spi": dict(spi_row) if spi_row else {"spi_score": 0, "avg_shs": 0, "avg_cvi": 0, "rating": "No data"},
+        "spi_trend": [dict(r) for r in spi_trend],
+        "branches": [dict(b) for b in branches],
+    }
+
+
+@router.get("/analytics/school/{school_id}/teachers")
+async def get_admin_school_teachers_analytics(
+    school_id: str,
+    period: str = "last_month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: dict = Depends(require_admin),
+):
+    """Teacher CVI list within a school."""
+    tenant_id = current_user.get("tenant_id")
+    date_from, date_to = _get_date_range(period, start, end)
+
+    school = await execute_one("SELECT tenant_id FROM schools WHERE id = $1::uuid", school_id)
+    if not school or str(school["tenant_id"]) != str(tenant_id):
+        raise HTTPException(status_code=404, detail="School not found in your tenant")
+
+    teachers = await execute_query(
+        """
+        SELECT
+            u.id AS teacher_id,
+            u.full_name AS teacher_name,
+            u.email,
+            COUNT(DISTINCT c.id) AS class_count,
+            COALESCE(AVG(cvi.cvi_score), 0) AS avg_cvi,
+            COALESCE(AVG(cvi.avg_shs), 0) AS avg_shs,
+            COALESCE(SUM(cvi.struggling_count), 0) AS struggling_students,
+            COALESCE(SUM(cvi.excelling_count), 0) AS excelling_students,
+            MAX(cvi.teacher_grade) AS teacher_grade
+        FROM users u
+        JOIN classes c ON c.teacher_id = u.id
+        JOIN branches b ON b.id = c.branch_id
+        LEFT JOIN class_vitality_index cvi ON cvi.class_id = c.id AND cvi.date BETWEEN $2 AND $3
+        WHERE b.school_id = $1::uuid AND u.role = 'teacher'
+        GROUP BY u.id, u.full_name, u.email
+        ORDER BY avg_cvi DESC NULLS LAST
+        """,
+        school_id, date_from, date_to,
+    )
+
+    return {
+        "school_id": school_id,
+        "period": period,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "teachers": [dict(t) for t in teachers],
+    }
+
+
+@router.get("/analytics/school/{school_id}/classes")
+async def get_admin_school_classes_analytics(
+    school_id: str,
+    period: str = "last_month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: dict = Depends(require_admin),
+):
+    """Class CVI list within a school."""
+    tenant_id = current_user.get("tenant_id")
+    date_from, date_to = _get_date_range(period, start, end)
+
+    school = await execute_one("SELECT tenant_id FROM schools WHERE id = $1::uuid", school_id)
+    if not school or str(school["tenant_id"]) != str(tenant_id):
+        raise HTTPException(status_code=404, detail="School not found in your tenant")
+
+    classes = await execute_query(
+        """
+        SELECT
+            c.id AS class_id,
+            c.name AS class_name,
+            c.grade_level,
+            c.section,
+            b.name AS branch_name,
+            u.full_name AS teacher_name,
+            COALESCE(AVG(cvi.cvi_score), 0) AS avg_cvi,
+            COALESCE(AVG(cvi.avg_shs), 0) AS avg_shs,
+            COALESCE(SUM(cvi.total_students), 0) AS total_students,
+            COALESCE(SUM(cvi.struggling_count), 0) AS struggling_count,
+            COALESCE(SUM(cvi.excelling_count), 0) AS excelling_count,
+            MAX(cvi.teacher_grade) AS teacher_grade
+        FROM classes c
+        JOIN branches b ON b.id = c.branch_id
+        LEFT JOIN users u ON u.id = c.teacher_id
+        LEFT JOIN class_vitality_index cvi ON cvi.class_id = c.id AND cvi.date BETWEEN $2 AND $3
+        WHERE b.school_id = $1::uuid
+        GROUP BY c.id, c.name, c.grade_level, c.section, b.name, u.full_name
+        ORDER BY avg_cvi DESC NULLS LAST
+        """,
+        school_id, date_from, date_to,
+    )
+
+    return {
+        "school_id": school_id,
+        "period": period,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "classes": [dict(c) for c in classes],
+    }
+
+
+@router.get("/analytics/student/{student_id}")
+async def get_admin_student_analytics(
+    student_id: str,
+    period: str = "last_month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: dict = Depends(require_admin),
+):
+    """Full SHS detail for any student in this admin's tenant."""
+    tenant_id = current_user.get("tenant_id")
+    date_from, date_to = _get_date_range(period, start, end)
+
+    student = await execute_one(
+        "SELECT full_name, tenant_id FROM users WHERE id = $1::uuid AND role = 'student'",
+        student_id,
+    )
+    if not student or str(student["tenant_id"]) != str(tenant_id):
+        raise HTTPException(status_code=404, detail="Student not found in your tenant")
+
+    daily = await execute_query(
+        """
+        SELECT dsm.date, dsm.class_id, c.name AS class_name,
+               dsm.daily_shs, dsm.quiz_score, dsm.video_completion_rate,
+               dsm.attendance, dsm.homework_submitted
+        FROM daily_student_metrics dsm
+        JOIN classes c ON c.id = dsm.class_id
+        WHERE dsm.student_id = $1::uuid AND dsm.date BETWEEN $2 AND $3
+        ORDER BY dsm.date
+        """,
+        student_id, date_from, date_to,
+    )
+
+    shs_rows = await execute_query(
+        "SELECT * FROM student_health_scores WHERE student_id = $1::uuid",
+        student_id,
+    )
+
+    alerts = await execute_query(
+        "SELECT alert_type, severity, message, action_required, created_at FROM performance_alerts WHERE student_id = $1::uuid AND is_resolved = false ORDER BY created_at DESC LIMIT 5",
+        student_id,
+    )
+
+    avg_row = await execute_one(
+        """
+        SELECT
+            COALESCE(AVG(daily_shs), 0) AS avg_shs,
+            COALESCE(AVG(quiz_score), 0) AS avg_quiz,
+            COALESCE(AVG(video_completion_rate), 0) AS avg_video,
+            COUNT(*) FILTER (WHERE attendance = true) AS present_days,
+            COUNT(*) AS total_days,
+            COUNT(*) FILTER (WHERE homework_submitted = true) AS hw_submitted
+        FROM daily_student_metrics
+        WHERE student_id = $1::uuid AND date BETWEEN $2 AND $3
+        """,
+        student_id, date_from, date_to,
+    )
+
+    return {
+        "student_id": student_id,
+        "student_name": student["full_name"],
+        "period": period,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "rolling_scores": [dict(r) for r in shs_rows],
+        "period_averages": {
+            "avg_shs": round(float(avg_row["avg_shs"] or 0), 2),
+            "avg_quiz": round(float(avg_row["avg_quiz"] or 0), 2),
+            "avg_video": round(float(avg_row["avg_video"] or 0), 2),
+            "attendance_rate": round(int(avg_row["present_days"] or 0) / max(int(avg_row["total_days"] or 1), 1) * 100, 2),
+            "homework_rate": round(int(avg_row["hw_submitted"] or 0) / max(int(avg_row["total_days"] or 1), 1) * 100, 2),
+        },
+        "daily_trend": [dict(r) for r in daily],
+        "active_alerts": [dict(r) for r in alerts],
+    }
+
+
 # Admin has access to all teacher and manager routes
 # The frontend should include those menu items for admin role

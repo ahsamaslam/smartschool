@@ -248,6 +248,36 @@ const adminService = {
 
   // Train Model (pushes curriculum context to Claude)
   trainModel: (scope) => api.post(`${API_ROUTES.ADMINS}/ai/train`, scope),
+
+  // Analytics (SPI / CVI / SHS — tenant scoped)
+  getAnalyticsOverview: (period = "last_month", start, end) =>
+    api.get(`${API_ROUTES.ADMINS}/analytics/overview`, {
+      params: { period, ...(start && { start }), ...(end && { end }) },
+    }),
+
+  getSchoolAnalytics: (schoolId, period = "last_month", start, end) =>
+    api.get(`${API_ROUTES.ADMINS}/analytics/school/${schoolId}`, {
+      params: { period, ...(start && { start }), ...(end && { end }) },
+    }),
+
+  getSchoolTeacherAnalytics: (schoolId, period = "last_month", start, end) =>
+    api.get(`${API_ROUTES.ADMINS}/analytics/school/${schoolId}/teachers`, {
+      params: { period, ...(start && { start }), ...(end && { end }) },
+    }),
+
+  getSchoolClassAnalytics: (schoolId, period = "last_month", start, end) =>
+    api.get(`${API_ROUTES.ADMINS}/analytics/school/${schoolId}/classes`, {
+      params: { period, ...(start && { start }), ...(end && { end }) },
+    }),
+
+  getStudentAnalytics: (studentId, period = "last_month", start, end) =>
+    api.get(`${API_ROUTES.ADMINS}/analytics/student/${studentId}`, {
+      params: { period, ...(start && { start }), ...(end && { end }) },
+    }),
+
+  // AI Predictions
+  getAIPredictions: (entityType, entityId) =>
+    api.get(`/analytics/insights/${entityType}/${entityId}`),
 };
 
 export default adminService;

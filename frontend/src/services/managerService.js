@@ -44,7 +44,10 @@ const managerService = {
   getTeacherAssignments: (teacherId) =>
     api.get(`${API_ROUTES.MANAGERS}/teachers/${teacherId}/assignments`),
   saveTeacherAssignments: (teacherId, data) =>
-    api.post(`${API_ROUTES.MANAGERS}/teachers/${teacherId}/save-assignments`, data),
+    api.post(
+      `${API_ROUTES.MANAGERS}/teachers/${teacherId}/save-assignments`,
+      data,
+    ),
 
   // Students
   getStudents: (params) =>
@@ -61,13 +64,21 @@ const managerService = {
   repeatStudent: (studentId, data) =>
     api.post(`${API_ROUTES.MANAGERS}/students/${studentId}/repeat`, data),
   changeStudentSection: (studentId, data) =>
-    api.post(`${API_ROUTES.MANAGERS}/students/${studentId}/change-section`, data),
+    api.post(
+      `${API_ROUTES.MANAGERS}/students/${studentId}/change-section`,
+      data,
+    ),
   getStudentSectionOptions: (studentId) =>
     api.get(`${API_ROUTES.MANAGERS}/students/${studentId}/section-options`),
   setCurrentEnrollment: (studentId, data) =>
-    api.post(`${API_ROUTES.MANAGERS}/students/${studentId}/set-current-enrollment`, data),
+    api.post(
+      `${API_ROUTES.MANAGERS}/students/${studentId}/set-current-enrollment`,
+      data,
+    ),
   setStudentPassword: (studentId, password) =>
-    api.post(`${API_ROUTES.MANAGERS}/users/${studentId}/set-password`, { password }),
+    api.post(`${API_ROUTES.MANAGERS}/users/${studentId}/set-password`, {
+      password,
+    }),
   importStudents: (file) => {
     const formData = new FormData();
     formData.append("file", file);
@@ -91,6 +102,31 @@ const managerService = {
     api.get(`${API_ROUTES.MANAGERS}/reports/classes`, { params: filters }),
   getTeacherReports: (filters) =>
     api.get(`${API_ROUTES.MANAGERS}/reports/teachers`, { params: filters }),
+
+  // Analytics (SPI / CVI / SHS)
+  getAnalyticsOverview: (period = "last_month", start, end) =>
+    api.get(`${API_ROUTES.MANAGERS}/analytics/overview`, {
+      params: { period, ...(start && { start }), ...(end && { end }) },
+    }),
+
+  getTeacherAnalytics: (period = "last_month", start, end) =>
+    api.get(`${API_ROUTES.MANAGERS}/analytics/teachers`, {
+      params: { period, ...(start && { start }), ...(end && { end }) },
+    }),
+
+  getClassAnalytics: (period = "last_month", start, end) =>
+    api.get(`${API_ROUTES.MANAGERS}/analytics/classes`, {
+      params: { period, ...(start && { start }), ...(end && { end }) },
+    }),
+
+  getStudentAnalytics: (studentId, period = "last_month", start, end) =>
+    api.get(`${API_ROUTES.MANAGERS}/analytics/student/${studentId}`, {
+      params: { period, ...(start && { start }), ...(end && { end }) },
+    }),
+
+  // AI Predictions
+  getAIPredictions: (entityType, entityId) =>
+    api.get(`/analytics/insights/${entityType}/${entityId}`),
 };
 
 export default managerService;

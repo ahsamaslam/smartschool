@@ -380,6 +380,112 @@ CREATE TABLE student_performance (
     UNIQUE(student_id, class_id, date)
 );
 
+-- Daily raw metric snapshot per student (feeds SHS calculation)
+CREATE TABLE daily_student_metrics (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    student_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    class_id UUID REFERENCES classes(id) ON DELETE CASCADE,
+    date DATE NOT NULL DEFAULT CURRENT_DATE,
+    video_completion_rate DECIMAL(5,2) DEFAULT 0,
+    focus_score DECIMAL(5,2) DEFAULT 0,
+    video_drops INT DEFAULT 0,
+    quiz_score DECIMAL(5,2) DEFAULT 0,
+    first_attempt_score DECIMAL(5,2) DEFAULT 0,
+    questions_asked INT DEFAULT 0,
+    attendance BOOLEAN DEFAULT false,
+    study_duration_minutes INT DEFAULT 0,
+    homework_submitted BOOLEAN DEFAULT false,
+    topic_revisits INT DEFAULT 0,
+    test_retakes INT DEFAULT 0,
+    daily_shs DECIMAL(5,2) DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(student_id, class_id, date)
+);
+
+-- Rolling Student Health Scores
+CREATE TABLE student_health_scores (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    student_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    class_id UUID REFERENCES classes(id) ON DELETE CASCADE,
+    current_shs DECIMAL(5,2) DEFAULT 0,
+    weekly_shs DECIMAL(5,2) DEFAULT 0,
+    monthly_shs DECIMAL(5,2) DEFAULT 0,
+    momentum DECIMAL(6,2) DEFAULT 0,
+    risk_level VARCHAR(20) DEFAULT 'stable',
+    last_updated TIMESTAMP DEFAULT NOW(),
+    UNIQUE(student_id, class_id)
+);
+
+-- Class Vitality Index per class per day
+CREATE TABLE class_vitality_index (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    class_id UUID REFERENCES classes(id) ON DELETE CASCADE,
+    date DATE NOT NULL DEFAULT CURRENT_DATE,
+    avg_shs DECIMAL(5,2) DEFAULT 0,
+    cvi_score DECIMAL(5,2) DEFAULT 0,
+    struggling_count INT DEFAULT 0,
+    excelling_count INT DEFAULT 0,
+    total_students INT DEFAULT 0,
+    engagement_variance DECIMAL(5,2) DEFAULT 0,
+    learning_velocity DECIMAL(6,2) DEFAULT 0,
+    content_effectiveness DECIMAL(5,2) DEFAULT 0,
+    teacher_grade VARCHAR(50) DEFAULT 'Satisfactory',
+    alert_message TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(class_id, date)
+);
+
+-- School Performance Index per school per week
+CREATE TABLE school_performance_index (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    school_id UUID REFERENCES schools(id) ON DELETE CASCADE,
+    week_start DATE NOT NULL,
+    spi_score DECIMAL(5,2) DEFAULT 0,
+    avg_shs DECIMAL(5,2) DEFAULT 0,
+    avg_cvi DECIMAL(5,2) DEFAULT 0,
+    at_risk_percentage DECIMAL(5,2) DEFAULT 0,
+    top_performers_percentage DECIMAL(5,2) DEFAULT 0,
+    excellent_teachers_count INT DEFAULT 0,
+    underperforming_teachers_count INT DEFAULT 0,
+    avg_attendance_rate DECIMAL(5,2) DEFAULT 0,
+    homework_submission_rate DECIMAL(5,2) DEFAULT 0,
+    rating VARCHAR(50) DEFAULT 'Satisfactory',
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(school_id, week_start)
+);
+
+-- Performance Alerts queue
+CREATE TABLE performance_alerts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    alert_type VARCHAR(50) NOT NULL,
+    severity VARCHAR(20) NOT NULL,
+    student_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    class_id UUID REFERENCES classes(id) ON DELETE SET NULL,
+    teacher_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    message TEXT NOT NULL,
+    action_required TEXT,
+    is_resolved BOOLEAN DEFAULT false,
+    created_at TIMESTAMP DEFAULT NOW(),
+    resolved_at TIMESTAMP
+);
+
+-- AI Performance Insights (Claude analysis cache)
+CREATE TABLE ai_performance_insights (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_type VARCHAR(20) NOT NULL,
+    entity_id UUID NOT NULL,
+    analysis_date DATE NOT NULL,
+    exam_readiness_score DECIMAL(5,2),
+    dropout_risk VARCHAR(20),
+    topics_needing_reinforcement JSONB DEFAULT '[]',
+    learning_style_patterns JSONB DEFAULT '{}',
+    recommended_interventions JSONB DEFAULT '[]',
+    predictions JSONB DEFAULT '{}',
+    confidence_score DECIMAL(5,2),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(entity_type, entity_id, analysis_date)
+);
+
 -- ============================================
 -- INDEXES FOR PERFORMANCE
 -- ============================================
@@ -416,6 +522,17 @@ CREATE INDEX idx_attendance_class_date ON attendance(class_id, date);
 -- Performance indexes
 CREATE INDEX idx_performance_student ON student_performance(student_id);
 CREATE INDEX idx_performance_class_date ON student_performance(class_id, date);
+CREATE INDEX idx_daily_metrics_student_date ON daily_student_metrics(student_id, date);
+CREATE INDEX idx_daily_metrics_class_date ON daily_student_metrics(class_id, date);
+CREATE INDEX idx_shs_student ON student_health_scores(student_id);
+CREATE INDEX idx_cvi_class_date ON class_vitality_index(class_id, date);
+CREATE INDEX idx_spi_school_week ON school_performance_index(school_id, week_start);
+CREATE INDEX idx_alerts_student ON performance_alerts(student_id);
+CREATE INDEX idx_alerts_class ON performance_alerts(class_id);
+CREATE INDEX idx_alerts_resolved ON performance_alerts(is_resolved);
+
+-- AI insights index
+CREATE INDEX idx_ai_insights_entity ON ai_performance_insights(entity_type, entity_id, analysis_date);
 
 -- ============================================
 -- TRIGGERS

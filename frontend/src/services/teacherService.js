@@ -86,7 +86,9 @@ const teacherService = {
 
   // AI Slide generation (no admin permission required)
   generateAISlides: (data) =>
-    api.post(`${API_ROUTES.TEACHERS}/generate-slides`, data, { timeout: 120000 }),
+    api.post(`${API_ROUTES.TEACHERS}/generate-slides`, data, {
+      timeout: 120000,
+    }),
 
   // Teacher-specific topic content (slides + lectures — isolated per teacher)
   getMyTopicContent: (topicId) =>
@@ -111,6 +113,33 @@ const teacherService = {
 
   getMyContentStatusForBook: (bookId) =>
     api.get(`${API_ROUTES.TEACHERS}/my-content-status/book/${bookId}`),
+
+  // Analytics (SHS / CVI)
+  getAnalyticsOverview: (period = "last_month", start, end) =>
+    api.get(`${API_ROUTES.TEACHERS}/analytics/overview`, {
+      params: { period, ...(start && { start }), ...(end && { end }) },
+    }),
+
+  getClassAnalytics: (classId, period = "last_month", start, end) =>
+    api.get(`${API_ROUTES.TEACHERS}/analytics/class/${classId}`, {
+      params: { period, ...(start && { start }), ...(end && { end }) },
+    }),
+
+  getStudentAnalytics: (
+    studentId,
+    classId,
+    period = "last_month",
+    start,
+    end,
+  ) =>
+    api.get(`${API_ROUTES.TEACHERS}/analytics/student/${studentId}`, {
+      params: {
+        class_id: classId,
+        period,
+        ...(start && { start }),
+        ...(end && { end }),
+      },
+    }),
 };
 
 export default teacherService;

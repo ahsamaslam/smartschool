@@ -1514,3 +1514,260 @@ async def delete_my_topic_slides(
         user_id, topic_id,
     )
     return {"ok": True}
+
+
+# ============================================
+# TEACHER ANALYTICS  (SHS / CVI)
+# ============================================
+
+from app.utils.score_calculator import get_date_range as _get_date_range
+
+
+@router.get("/analytics/overview")
+async def get_teacher_analytics_overview(
+    period: str = "last_month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """
+    Teacher's performance overview: CVI per class, overall grade, active alerts.
+    Supports period=last_month|last_year|custom  (+ start/end for custom).
+    """
+    teacher_id = current_user.get("user_id")
+    date_from, date_to = _get_date_range(period, start, end)
+
+    # Classes assigned to teacher
+    classes = await execute_query(
+        """
+        SELECT DISTINCT c.id, c.name, c.grade_level, c.section
+        FROM classes c
+        WHERE c.teacher_id = $1::uuid
+           OR EXISTS (SELECT 1 FROM teacher_class_assignments tca WHERE tca.class_id = c.id AND tca.teacher_id = $1::uuid)
+           OR EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.class_id = c.id AND tcsa.teacher_id = $1::uuid)
+        """,
+        teacher_id,
+    )
+
+    class_analytics = []
+    for cls in classes:
+        cid = str(cls["id"])
+        cvi_row = await execute_one(
+            """
+            SELECT
+                COALESCE(AVG(cvi_score), 0) AS avg_cvi,
+                COALESCE(AVG(avg_shs), 0) AS avg_shs,
+                SUM(struggling_count) AS struggling,
+                SUM(excelling_count) AS excelling,
+                SUM(total_students) AS total,
+                MAX(teacher_grade) AS teacher_grade,
+                MAX(alert_message) AS alert_message
+            FROM class_vitality_index
+            WHERE class_id = $1::uuid AND date BETWEEN $2 AND $3
+            """,
+            cid, date_from, date_to,
+        )
+        avg_cvi = float(cvi_row["avg_cvi"] or 0)
+        class_analytics.append({
+            "class_id": cid,
+            "class_name": cls["name"],
+            "grade_level": cls["grade_level"],
+            "section": cls["section"],
+            "avg_cvi": avg_cvi,
+            "avg_shs": float(cvi_row["avg_shs"] or 0),
+            "struggling_count": int(cvi_row["struggling"] or 0),
+            "excelling_count": int(cvi_row["excelling"] or 0),
+            "total_students": int(cvi_row["total"] or 0),
+            "teacher_grade": cvi_row["teacher_grade"] or "No data",
+            "alert_message": cvi_row["alert_message"],
+        })
+
+    # Overall teacher grade based on average CVI across classes
+    overall_cvi = (sum(c["avg_cvi"] for c in class_analytics) / len(class_analytics)) if class_analytics else 0
+    from app.utils.score_calculator import get_teacher_grade as _get_teacher_grade
+    overall_grade = _get_teacher_grade(overall_cvi)
+
+    # Active alerts for teacher's students
+    class_ids = [str(cls["id"]) for cls in classes]
+    alert_count = 0
+    if class_ids:
+        placeholders = ", ".join(f"${i+1}::uuid" for i in range(len(class_ids)))
+        alert_row = await execute_one(
+            f"SELECT COUNT(*) AS cnt FROM performance_alerts WHERE class_id IN ({placeholders}) AND is_resolved = false",
+            *class_ids,
+        )
+        alert_count = int(alert_row["cnt"] or 0)
+
+    return {
+        "period": period,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "overall_cvi": round(overall_cvi, 2),
+        "overall_grade": overall_grade,
+        "active_alerts": alert_count,
+        "classes": class_analytics,
+    }
+
+
+@router.get("/analytics/class/{class_id}")
+async def get_teacher_class_analytics(
+    class_id: str,
+    period: str = "last_month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """
+    Detailed class analytics: CVI trend, per-student SHS, risk distribution.
+    """
+    date_from, date_to = _get_date_range(period, start, end)
+
+    # CVI summary for period
+    cvi_row = await execute_one(
+        """
+        SELECT
+            COALESCE(AVG(cvi_score), 0) AS avg_cvi,
+            COALESCE(AVG(avg_shs), 0) AS avg_shs,
+            COALESCE(AVG(engagement_variance), 0) AS avg_variance,
+            SUM(struggling_count) AS struggling,
+            SUM(excelling_count) AS excelling,
+            SUM(total_students) AS total,
+            MAX(teacher_grade) AS teacher_grade
+        FROM class_vitality_index
+        WHERE class_id = $1::uuid AND date BETWEEN $2 AND $3
+        """,
+        class_id, date_from, date_to,
+    )
+
+    # CVI daily trend
+    cvi_trend = await execute_query(
+        "SELECT date, cvi_score, avg_shs, struggling_count, excelling_count FROM class_vitality_index WHERE class_id = $1::uuid AND date BETWEEN $2 AND $3 ORDER BY date",
+        class_id, date_from, date_to,
+    )
+
+    # Per-student SHS averages over period
+    students = await execute_query(
+        """
+        SELECT
+            dsm.student_id,
+            u.full_name,
+            COALESCE(AVG(dsm.daily_shs), 0) AS avg_shs,
+            COALESCE(AVG(dsm.quiz_score), 0) AS avg_quiz,
+            COALESCE(AVG(dsm.video_completion_rate), 0) AS avg_video,
+            COUNT(dsm.id) FILTER (WHERE dsm.attendance = true) AS present_days,
+            COUNT(dsm.id) AS total_days,
+            shs.risk_level,
+            shs.momentum
+        FROM daily_student_metrics dsm
+        JOIN users u ON u.id = dsm.student_id
+        LEFT JOIN student_health_scores shs ON shs.student_id = dsm.student_id AND shs.class_id = dsm.class_id
+        WHERE dsm.class_id = $1::uuid AND dsm.date BETWEEN $2 AND $3
+        GROUP BY dsm.student_id, u.full_name, shs.risk_level, shs.momentum
+        ORDER BY avg_shs DESC
+        """,
+        class_id, date_from, date_to,
+    )
+
+    # Risk distribution
+    total = int(cvi_row["total"] or 0) or 1
+    student_list = [dict(s) for s in students]
+    risk_dist = {
+        "critical": sum(1 for s in student_list if s["risk_level"] == "critical"),
+        "at_risk": sum(1 for s in student_list if s["risk_level"] == "at_risk"),
+        "stable": sum(1 for s in student_list if s["risk_level"] == "stable"),
+        "excelling": sum(1 for s in student_list if s["risk_level"] == "excelling"),
+    }
+
+    return {
+        "period": period,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "summary": {
+            "avg_cvi": round(float(cvi_row["avg_cvi"] or 0), 2),
+            "avg_shs": round(float(cvi_row["avg_shs"] or 0), 2),
+            "engagement_variance": round(float(cvi_row["avg_variance"] or 0), 2),
+            "struggling_count": int(cvi_row["struggling"] or 0),
+            "excelling_count": int(cvi_row["excelling"] or 0),
+            "teacher_grade": cvi_row["teacher_grade"] or "No data",
+        },
+        "risk_distribution": risk_dist,
+        "cvi_trend": [dict(r) for r in cvi_trend],
+        "students": student_list,
+    }
+
+
+@router.get("/analytics/student/{student_id}")
+async def get_teacher_student_analytics(
+    student_id: str,
+    class_id: str,
+    period: str = "last_month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """
+    Detailed SHS analytics for a single student in a class.
+    """
+    date_from, date_to = _get_date_range(period, start, end)
+
+    # Daily SHS trend
+    daily = await execute_query(
+        """
+        SELECT date, daily_shs, quiz_score, video_completion_rate, attendance,
+               study_duration_minutes, homework_submitted, questions_asked, topic_revisits
+        FROM daily_student_metrics
+        WHERE student_id = $1::uuid AND class_id = $2::uuid AND date BETWEEN $3 AND $4
+        ORDER BY date
+        """,
+        student_id, class_id, date_from, date_to,
+    )
+
+    # Rolling SHS scores
+    shs_row = await execute_one(
+        "SELECT current_shs, weekly_shs, monthly_shs, momentum, risk_level, last_updated FROM student_health_scores WHERE student_id = $1::uuid AND class_id = $2::uuid",
+        student_id, class_id,
+    )
+
+    # Student name
+    user_row = await execute_one("SELECT full_name FROM users WHERE id = $1::uuid", student_id)
+
+    # Active alerts for this student
+    alerts = await execute_query(
+        "SELECT alert_type, severity, message, action_required, created_at FROM performance_alerts WHERE student_id = $1::uuid AND class_id = $2::uuid AND is_resolved = false ORDER BY created_at DESC LIMIT 5",
+        student_id, class_id,
+    )
+
+    # Period averages
+    avg_row = await execute_one(
+        """
+        SELECT
+            COALESCE(AVG(daily_shs), 0) AS avg_shs,
+            COALESCE(AVG(quiz_score), 0) AS avg_quiz,
+            COALESCE(AVG(video_completion_rate), 0) AS avg_video,
+            COUNT(*) FILTER (WHERE attendance = true) AS present_days,
+            COUNT(*) AS total_days,
+            COUNT(*) FILTER (WHERE homework_submitted = true) AS hw_submitted
+        FROM daily_student_metrics
+        WHERE student_id = $1::uuid AND class_id = $2::uuid AND date BETWEEN $3 AND $4
+        """,
+        student_id, class_id, date_from, date_to,
+    )
+
+    return {
+        "student_id": student_id,
+        "student_name": user_row["full_name"] if user_row else "",
+        "period": period,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "rolling_scores": dict(shs_row) if shs_row else {},
+        "period_averages": {
+            "avg_shs": round(float(avg_row["avg_shs"] or 0), 2),
+            "avg_quiz": round(float(avg_row["avg_quiz"] or 0), 2),
+            "avg_video": round(float(avg_row["avg_video"] or 0), 2),
+            "attendance_rate": round(int(avg_row["present_days"] or 0) / max(int(avg_row["total_days"] or 1), 1) * 100, 2),
+            "homework_rate": round(int(avg_row["hw_submitted"] or 0) / max(int(avg_row["total_days"] or 1), 1) * 100, 2),
+        },
+        "daily_trend": [dict(r) for r in daily],
+        "active_alerts": [dict(r) for r in alerts],
+    }
+
