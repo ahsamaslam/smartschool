@@ -13,7 +13,8 @@ from app.routers.auth import get_user_from_token
 from app.routers.homework import ensure_homework_schema, teacher_can_manage_class
 from app.utils.claude_ai import generate_teacher_exam
 from app.utils.database import execute_one, execute_query, execute_write
-from app.utils.score_calculator import calculate_live_shs
+from app.utils.score_calculator import calculate_live_shs, calculate_cvi, get_teacher_grade
+import statistics
 
 router = APIRouter()
 
@@ -469,7 +470,7 @@ async def get_class_students(class_id: str, teacher_id: Optional[str] = None):
 
 
 @router.get("/students/{student_id}/performance")
-async def get_student_detail(student_id: str, class_id: str, teacher_id: Optional[str] = None):
+async def get_student_detail(student_id: str, class_id: str, teacher_id: Optional[str] = None, current_user: dict = Depends(get_user_from_token)):
     """SHS-based student performance breakdown."""
     student = await execute_one(
         "SELECT full_name, email, profile_picture_url FROM users WHERE id = $1::uuid",
@@ -478,7 +479,7 @@ async def get_student_detail(student_id: str, class_id: str, teacher_id: Optiona
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    tid = teacher_id or "00000000-0000-0000-0000-000000000000"
+    tid = teacher_id or str(current_user.get("user_id", "00000000-0000-0000-0000-000000000000"))
 
     # SHS components for this specific student
     shs_row = await execute_one(
@@ -529,60 +530,11 @@ async def get_student_detail(student_id: str, class_id: str, teacher_id: Optiona
     attendance_rate = float(shs_row["attendance_rate"] or 0)
     homework_rate = float(shs_row["homework_rate"] or 0)
 
-    # Behavioral metrics for new SHS formula
-    homework_submission_rate = await execute_one(
-        """SELECT COALESCE(ROUND(100.0 * COUNT(CASE WHEN hs.submission_status IN ('submitted','late','reviewed','returned') THEN 1 END)
-           / NULLIF(COUNT(DISTINCT h.id), 0), 2), 0) AS submission_rate
-           FROM homeworks h
-           LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = $1::uuid
-           WHERE h.class_id = $2::uuid AND h.status = 'published'""",
-        student_id, class_id,
-    )
-    submission_rate = float(homework_submission_rate["submission_rate"] or 0)
-
-    # Homework retakes average (avg attempts per homework)
-    retakes_data = await execute_one(
-        """SELECT COALESCE(AVG(attempt_count), 0) AS avg_attempts
-           FROM (SELECT COUNT(*) AS attempt_count FROM homework_submissions
-                 WHERE student_id = $1::uuid AND homework_id IN
-                 (SELECT h.id FROM homeworks h WHERE h.class_id = $2::uuid AND h.status = 'published')
-                 GROUP BY homework_id) sub""",
-        student_id, class_id,
-    )
-    homework_retakes_avg = float(retakes_data["avg_attempts"] or 0) - 1 if retakes_data and retakes_data["avg_attempts"] else 0
-
-    # Topic revisits (avg revisit count per topic)
-    revisits_data = await execute_one(
-        """SELECT COALESCE(AVG(revisit_count), 0) AS avg_revisits
-           FROM student_topic_progress
-           WHERE student_id = $1::uuid AND topic_id IN
-           (SELECT lt.id FROM library_topics lt
-            JOIN library_chapters ch ON ch.id = lt.chapter_id
-            JOIN library_books b ON b.id = ch.book_id
-            JOIN teacher_class_subject_assignments tcsa ON tcsa.library_book_id = b.id
-            WHERE tcsa.class_id = $2::uuid)""",
-        student_id, class_id,
-    )
-    topic_revisits_avg = float(revisits_data["avg_revisits"] or 0)
-
-    # Study duration in minutes (from session logs)
-    duration_data = await execute_one(
-        """SELECT COALESCE(SUM(duration_minutes), 0) AS total_minutes FROM student_session_logs
-           WHERE student_id = $1::uuid AND class_id = $2::uuid
-           AND login_at >= CURRENT_DATE - INTERVAL '30 days'""",
-        student_id, class_id,
-    )
-    study_duration_minutes = float(duration_data["total_minutes"] or 0)
-
-    # Calculate SHS using new formula (25-40-20-15)
-    shs_score, consistency_score, behavioral_score = calculate_live_shs(
+    # Calculate SHS using simplified formula (25-40-20-15)
+    shs_score = calculate_live_shs(
         video_rate=video_rate,
-        homework_rate=homework_rate,
+        homework_grade=homework_rate,
         attendance_rate=attendance_rate,
-        homework_submission_rate=submission_rate,
-        homework_retakes_avg=homework_retakes_avg,
-        topic_revisits_avg=topic_revisits_avg,
-        study_duration_minutes=study_duration_minutes,
     )
     risk_level = _get_risk_level(shs_score)
 
@@ -663,32 +615,55 @@ async def get_student_detail(student_id: str, class_id: str, teacher_id: Optiona
         else:
             alerts.append({"type": "homework", "message": f"Only {int(hw_counts['submitted_count'] or 0)} of {int(hw_counts['total_homeworks'] or 0)} homeworks submitted ({homework_rate:.0f}%)."})
 
-    return {
+    # Consistency: attendance rate + homework submission rate
+    total_hw = int(hw_counts["total_homeworks"] or 0)
+    submitted_hw = int(hw_counts["submitted_count"] or 0)
+    submission_rate = round(100.0 * submitted_hw / total_hw, 1) if total_hw > 0 else 0.0
+
+    # Behavioral: quiz retakes (attempts > 1 on same quiz instance)
+    retakes_row = await execute_one(
+        """
+        SELECT COUNT(*) AS retakes
+        FROM (
+            SELECT quiz_instance_id, COUNT(*) AS attempts
+            FROM quiz_attempts
+            WHERE student_id = $1::uuid
+            GROUP BY quiz_instance_id
+            HAVING COUNT(*) > 1
+        ) sub
+        """,
+        student_id,
+    )
+    retakes = int(retakes_row["retakes"] or 0) if retakes_row else 0
+
+    response = {
         "student": {"full_name": student["full_name"], "email": student["email"], "profile_picture_url": student.get("profile_picture_url")},
         "shs": shs_score,
         "risk_level": risk_level,
         "rank": rank,
         "total_students": total_students,
-        "shs_formula": "Video×0.25 + Homework×0.40 + Consistency×0.20 + Behavioral×0.15",
+        "shs_formula": "Video×0.25 + Homework×0.40 + Attendance×0.20 + Homework×0.15",
         "video": {"rate": video_rate, "total_lectures": int(lecture_counts["total_lectures"] or 0), "watched_count": int(lecture_counts["watched_count"] or 0)},
         "attendance": {"rate": attendance_rate, "present_days": int(att_counts["present_days"] or 0), "total_days": int(att_counts["total_days"] or 0)},
         "homework": {
             "rate": homework_rate,
-            "submitted_count": int(hw_counts["submitted_count"] or 0),
-            "total_homeworks": int(hw_counts["total_homeworks"] or 0),
+            "submitted_count": submitted_hw,
+            "total_homeworks": total_hw,
             "marks_earned": marks_earned,
             "total_marks_available": total_marks_avail,
             "graded_count": graded,
         },
-        "consistency": {"rate": consistency_score, "attendance": attendance_rate, "submission": submission_rate},
+        "consistency": {
+            "attendance_rate": attendance_rate,
+            "submission_rate": submission_rate,
+        },
         "behavioral": {
-            "rate": behavioral_score,
-            "homework_retakes_avg": round(homework_retakes_avg, 2),
-            "topic_revisits_avg": round(topic_revisits_avg, 2),
-            "study_duration_minutes": int(study_duration_minutes),
+            "retakes": retakes,
+            "revisits": 0,
         },
         "alerts": alerts,
     }
+    return response
 
 
 @router.post("/students/{student_id}/password-reset")
@@ -2192,3 +2167,113 @@ async def get_teacher_student_analytics(
         "active_alerts": alerts,
     }
 
+
+
+# ============================================
+# CLASS VITALITY INDEX (CVI) CALCULATION
+# ============================================
+
+@router.post("/calculate-cvi/{class_id}")
+async def calculate_class_vitality(class_id: str):
+    """Calculate and store CVI for a specific class."""
+    try:
+        # Get all active students in class
+        students = await execute_query(
+            """SELECT e.student_id FROM enrollments e
+               WHERE e.class_id = $1 AND e.is_active = true""",
+            class_id
+        )
+        
+        if not students:
+            # No students - set default CVI
+            await execute_write(
+                """INSERT INTO class_vitality_index (class_id, date, cvi_score, avg_shs, teacher_grade)
+                   VALUES ($1, CURRENT_DATE, 0, 0, 'No data')
+                   ON CONFLICT (class_id, date) DO UPDATE SET
+                   cvi_score = 0, avg_shs = 0, teacher_grade = 'No data'""",
+                class_id
+            )
+            return {"cvi_score": 0, "teacher_grade": "No data", "message": "No students enrolled"}
+        
+        # Get SHS scores for all students
+        shs_scores = []
+        student_ids = [str(s["student_id"]) for s in students]
+        
+        for sid in student_ids:
+            shs = await execute_one(
+                """SELECT current_shs FROM student_health_scores 
+                   WHERE student_id = $1::uuid AND class_id = $2::uuid
+                   ORDER BY last_updated DESC LIMIT 1""",
+                sid, class_id
+            )
+            if shs and shs["current_shs"] is not None:
+                shs_scores.append(float(shs["current_shs"]))
+        
+        # Calculate components
+        class_avg_shs = sum(shs_scores) / len(shs_scores) if shs_scores else 0
+        
+        # Learning velocity (simplified - improvement over last 7 days)
+        learning_velocity = 0
+        try:
+            prev_avg = await execute_one(
+                """SELECT AVG(CAST(current_shs AS FLOAT)) as avg_shs 
+                   FROM student_health_scores 
+                   WHERE class_id = $1::uuid 
+                   AND last_updated < CURRENT_DATE - INTERVAL '7 days'
+                   AND last_updated >= CURRENT_DATE - INTERVAL '14 days'""",
+                class_id
+            )
+            if prev_avg and prev_avg["avg_shs"]:
+                velocity = (class_avg_shs - float(prev_avg["avg_shs"])) / 7
+                learning_velocity = min(100, max(0, velocity * 10 + 50))
+        except:
+            learning_velocity = 50
+        
+        # Engagement variance
+        engagement_variance = 0
+        if len(shs_scores) > 1:
+            engagement_variance = statistics.stdev(shs_scores)
+        
+        # Content effectiveness (% students above 60 SHS)
+        content_effectiveness = (len([s for s in shs_scores if s >= 60]) / len(shs_scores) * 100) if shs_scores else 0
+        
+        # Calculate CVI
+        cvi_score = calculate_cvi(
+            class_avg_shs,
+            learning_velocity,
+            engagement_variance,
+            content_effectiveness
+        )
+        
+        teacher_grade = get_teacher_grade(cvi_score)
+        
+        # Store in database
+        await execute_write(
+            """INSERT INTO class_vitality_index (class_id, date, cvi_score, avg_shs, engagement_variance, 
+               excelling_count, struggling_count, total_students, teacher_grade)
+               VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (class_id, date) DO UPDATE SET
+               cvi_score = $2, avg_shs = $3, engagement_variance = $4,
+               excelling_count = $5, struggling_count = $6, total_students = $7, teacher_grade = $8""",
+            class_id,
+            cvi_score,
+            class_avg_shs,
+            engagement_variance,
+            len([s for s in shs_scores if s >= 80]),
+            len([s for s in shs_scores if s < 60]),
+            len(shs_scores),
+            teacher_grade
+        )
+        
+        return {
+            "class_id": class_id,
+            "cvi_score": cvi_score,
+            "avg_shs": round(class_avg_shs, 2),
+            "teacher_grade": teacher_grade,
+            "total_students": len(shs_scores),
+            "excelling": len([s for s in shs_scores if s >= 80]),
+            "struggling": len([s for s in shs_scores if s < 60])
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
