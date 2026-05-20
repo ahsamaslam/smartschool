@@ -2232,9 +2232,23 @@ from app.utils.score_calculator import (
     get_risk_level as _mgr_risk_level,
 )
 
-# Reusable live SHS SQL for manager scope — $1=class_id, $2=teacher_id (uuid or null-uuid)
+# Reusable live SHS SQL for manager scope — $1=class_id
+# Formula: video*0.25 + homework*0.40 + attendance*0.20 + behavioral*0.15
+# behavioral = topic_revisit_score*0.50 + homework_retake_score*0.50
 _MGR_SHS_SQL = """
-WITH base AS (
+WITH class_topics AS (
+    SELECT DISTINCT lt.id AS topic_id
+    FROM teacher_topic_content ttc
+    JOIN library_topics lt ON lt.id = ttc.library_topic_id
+    JOIN library_chapters ch ON ch.id = lt.chapter_id
+    JOIN library_books b ON b.id = ch.book_id
+    JOIN teacher_class_subject_assignments tcsa
+        ON tcsa.teacher_id = ttc.teacher_id
+        AND tcsa.library_book_id = b.id
+        AND tcsa.class_id = $1::uuid
+    WHERE ttc.lecture_video_url IS NOT NULL AND trim(ttc.lecture_video_url) != ''
+),
+base AS (
     SELECT
         u.id AS student_id,
         u.full_name,
@@ -2242,22 +2256,29 @@ WITH base AS (
             SELECT CASE WHEN COUNT(tt.topic_id) = 0 THEN 0 ELSE
                 ROUND(100.0 * COUNT(CASE WHEN COALESCE(stp.lecture_watch_percent,0) >= 75 THEN 1 END)
                 / COUNT(tt.topic_id), 2) END
-            FROM (
-                SELECT DISTINCT lt.id AS topic_id
-                FROM teacher_topic_content ttc
-                JOIN library_topics lt ON lt.id = ttc.library_topic_id
-                JOIN library_chapters ch ON ch.id = lt.chapter_id
-                JOIN library_books b ON b.id = ch.book_id
-                JOIN teacher_class_subject_assignments tcsa
-                    ON tcsa.teacher_id = ttc.teacher_id
-                    AND tcsa.library_book_id = b.id
-                    AND tcsa.class_id = $1::uuid
-                WHERE ttc.lecture_video_url IS NOT NULL AND trim(ttc.lecture_video_url) != ''
-            ) tt
+            FROM class_topics tt
             LEFT JOIN student_topic_progress stp ON stp.topic_id = tt.topic_id AND stp.student_id = u.id
         ), 0) AS video_rate,
         COALESCE(att.attendance_rate, 0) AS attendance_rate,
-        COALESCE(hw.homework_rate, 0) AS homework_rate
+        COALESCE(hw.homework_rate, 0) AS homework_rate,
+        LEAST(COALESCE((
+            SELECT COUNT(DISTINCT stp2.topic_id) / 5.0 * 100
+            FROM student_topic_progress stp2
+            JOIN class_topics ct ON ct.topic_id = stp2.topic_id
+            WHERE stp2.student_id = u.id
+              AND stp2.lecture_watch_percent > 0
+        ), 0), 100) AS topic_revisit_score,
+        LEAST(COALESCE((
+            SELECT COUNT(*) / 3.0 * 100
+            FROM (
+                SELECT hs2.homework_id
+                FROM homework_submissions hs2
+                JOIN homeworks h2 ON h2.id = hs2.homework_id
+                WHERE hs2.student_id = u.id AND h2.class_id = $1::uuid
+                GROUP BY hs2.homework_id
+                HAVING COUNT(*) > 1
+            ) retakes_q
+        ), 0), 100) AS hw_retake_score
     FROM enrollments e
     JOIN users u ON e.student_id = u.id
     LEFT JOIN (
@@ -2268,21 +2289,36 @@ WITH base AS (
     LEFT JOIN (
         SELECT e2.student_id,
             ROUND(COALESCE(AVG(CASE
-                WHEN hs.marks_awarded IS NOT NULL AND h.total_marks > 0
-                    THEN (hs.marks_awarded / h.total_marks * 100)
-                WHEN hs.submission_status IN ('submitted','late','in_progress')
+                WHEN best.marks_awarded IS NOT NULL AND h.total_marks > 0
+                    THEN (best.marks_awarded / h.total_marks * 100)
+                WHEN best.submission_status IN ('submitted','late','in_progress')
                     THEN 75
                 ELSE 0
             END), 0), 2) AS homework_rate
         FROM enrollments e2
         JOIN homeworks h ON h.class_id = e2.class_id AND h.status = 'published'
-        LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = e2.student_id
+        LEFT JOIN (
+            SELECT DISTINCT ON (homework_id, student_id)
+                homework_id, student_id, marks_awarded, submission_status
+            FROM homework_submissions
+            ORDER BY homework_id, student_id,
+                     marks_awarded DESC NULLS LAST, submitted_at DESC
+        ) best ON best.homework_id = h.id AND best.student_id = e2.student_id
         WHERE e2.class_id = $1::uuid AND e2.is_active = true
         GROUP BY e2.student_id
     ) hw ON hw.student_id = u.id
     WHERE e.class_id = $1 AND e.is_active = true
 )
-SELECT *, ROUND((video_rate * 0.25 + attendance_rate * 0.35 + homework_rate * 0.40), 2) AS shs_score
+SELECT *,
+    ROUND((topic_revisit_score * 0.50 + hw_retake_score * 0.50), 2) AS behavioral_rate,
+    ROUND((
+        video_rate * 0.25
+        + homework_rate * 0.40
+        + attendance_rate * 0.20
+        + (topic_revisit_score * 0.50 + hw_retake_score * 0.50) * 0.15
+    ), 2) AS shs_score,
+    -- Flag students with absolutely no activity (excluded from school averages)
+    (video_rate = 0 AND attendance_rate = 0 AND homework_rate = 0) AS is_inactive
 FROM base
 """
 
@@ -2301,10 +2337,16 @@ async def get_manager_analytics_overview(
     # All classes in this school
     classes = await execute_query(
         """SELECT c.id, c.name, c.grade_level, c.section, b.name AS branch_name,
-                  c.teacher_id, u.full_name AS teacher_name
+                  COALESCE(c.teacher_id, tcsa_t.teacher_id) AS teacher_id,
+                  u.full_name AS teacher_name
            FROM classes c
            JOIN branches b ON b.id = c.branch_id
-           LEFT JOIN users u ON u.id = c.teacher_id
+           LEFT JOIN (
+               SELECT DISTINCT ON (class_id) class_id, teacher_id
+               FROM teacher_class_subject_assignments
+               ORDER BY class_id
+           ) tcsa_t ON tcsa_t.class_id = c.id
+           LEFT JOIN users u ON u.id = COALESCE(c.teacher_id, tcsa_t.teacher_id)
            WHERE b.school_id = $1::uuid ORDER BY c.name""",
         school_id,
     )
@@ -2312,13 +2354,23 @@ async def get_manager_analytics_overview(
     # Per-class live SHS + CVI
     all_shs_vals, all_hw_vals, all_att_vals, class_analytics = [], [], [], []
     teacher_cvi_map: dict = {}  # teacher_id → list of CVI scores
+    total_enrolled_all = 0
+    total_inactive_all = 0
 
     for cls in classes:
         cid = str(cls["id"])
-        rows = await execute_query(_MGR_SHS_SQL, cid, "00000000-0000-0000-0000-000000000000")
-        shs_vals = [float(r["shs_score"] or 0) for r in rows]
-        hw_vals = [float(r["homework_rate"] or 0) for r in rows]
-        att_vals = [float(r["attendance_rate"] or 0) for r in rows]
+        rows = await execute_query(_MGR_SHS_SQL, cid)
+
+        # Split active (have any data) vs inactive (zero on all metrics)
+        active_rows = [r for r in rows if not r["is_inactive"]]
+        inactive_count = len(rows) - len(active_rows)
+        total_enrolled_all += len(rows)
+        total_inactive_all += inactive_count
+
+        shs_vals = [float(r["shs_score"] or 0) for r in active_rows]
+        hw_vals = [float(r["homework_rate"] or 0) for r in active_rows]
+        att_vals = [float(r["attendance_rate"] or 0) for r in active_rows]
+        vid_vals = [float(r["video_rate"] or 0) for r in active_rows]
 
         all_shs_vals.extend(shs_vals)
         all_hw_vals.extend(hw_vals)
@@ -2328,13 +2380,36 @@ async def get_manager_analytics_overview(
             avg_shs = _mgr_stats.mean(shs_vals)
             variance = _mgr_stats.stdev(shs_vals) if len(shs_vals) > 1 else 0.0
             hw_eff = _mgr_stats.mean(hw_vals) if hw_vals else 0.0
-            cvi = _mgr_calc_cvi(avg_shs, 50.0, variance, hw_eff)
+            avg_video = _mgr_stats.mean(vid_vals) if vid_vals else 0.0
+
+            # Real learning velocity from student_health_scores (weekly vs monthly avg)
+            vel_row = await execute_one(
+                "SELECT AVG(weekly_shs) AS avg_weekly, AVG(monthly_shs) AS avg_monthly FROM student_health_scores WHERE class_id = $1::uuid",
+                cid,
+            )
+            avg_monthly = float(vel_row["avg_monthly"] or 0) if vel_row else 0.0
+            if avg_monthly > 0:
+                raw_vel = float(vel_row["avg_weekly"] or 0) - avg_monthly
+                learning_velocity = min(max((raw_vel + 10) / 20.0 * 100, 0), 100)
+            else:
+                learning_velocity = 50.0
+
+            cvi = _mgr_calc_cvi(avg_shs, learning_velocity, variance, hw_eff)
             grade = _mgr_teacher_grade(cvi)
             struggling = sum(1 for v in shs_vals if v < 50)
             excelling = sum(1 for v in shs_vals if v >= 80)
+
+            # CVI teacher alerts (per schoolanalysis.md spec)
+            cvi_alert = None
+            if avg_video > 85 and hw_eff < 60:
+                cvi_alert = "High engagement but low comprehension — content may be too complex"
+            elif avg_video < 50 and hw_eff < 60:
+                cvi_alert = "Low engagement AND comprehension — teaching approach needs revision"
+            elif variance > 25:
+                cvi_alert = "Large performance gap — some students being left behind"
         else:
-            avg_shs = cvi = variance = hw_eff = 0.0
-            grade = "No data"; struggling = excelling = 0
+            avg_shs = cvi = variance = hw_eff = avg_video = learning_velocity = 0.0
+            grade = "No data"; struggling = excelling = 0; cvi_alert = None
 
         tid = str(cls["teacher_id"]) if cls["teacher_id"] else None
         if tid:
@@ -2348,10 +2423,14 @@ async def get_manager_analytics_overview(
             "avg_shs": round(avg_shs, 2),
             "avg_cvi": round(cvi, 2),
             "total_students": len(shs_vals),
+            "inactive_students": inactive_count,
             "struggling_count": struggling,
             "excelling_count": excelling,
             "teacher_grade": grade,
             "variance": round(variance, 2),
+            "avg_video": round(avg_video, 2),
+            "learning_velocity": round(learning_velocity, 2),
+            "cvi_alert": cvi_alert,
         })
 
     # School-level aggregates
@@ -2380,7 +2459,15 @@ async def get_manager_analytics_overview(
     underperforming_pct = underperforming_teachers / max(total_teachers, 1) * 100
     teacher_variance = _mgr_stats.stdev(all_cvi_scores) if len(all_cvi_scores) > 1 else 0.0
 
-    spi = _mgr_calc_spi(
+    # Real month-over-month SPI: fetch last stored SPI from school_performance_index
+    prev_spi_row = await execute_one(
+        "SELECT spi_score FROM school_performance_index WHERE school_id = $1::uuid ORDER BY week_start DESC LIMIT 1",
+        school_id,
+    )
+    prev_spi = float(prev_spi_row["spi_score"] or 0) if prev_spi_row else 0.0
+
+    # Compute SPI once with 0 mom to get baseline, then recompute with real growth
+    _spi_kwargs = dict(
         school_avg_shs=avg_shs,
         school_avg_cvi=avg_cvi,
         top_performers_pct=top_pct,
@@ -2389,8 +2476,10 @@ async def get_manager_analytics_overview(
         underperforming_teachers_pct=underperforming_pct,
         avg_attendance_rate=avg_att,
         homework_submission_rate=avg_hw,
-        mom_improvement=0,
     )
+    spi_base = _mgr_calc_spi(**_spi_kwargs, mom_improvement=0)
+    mom_improvement = round((spi_base - prev_spi) / prev_spi * 100, 2) if prev_spi > 0 else 0.0
+    spi = _mgr_calc_spi(**_spi_kwargs, mom_improvement=mom_improvement)
     rating = _get_school_rating(spi)
 
     return {
@@ -2404,6 +2493,9 @@ async def get_manager_analytics_overview(
             "at_risk_percentage": round(at_risk_pct, 2),
             "top_performers_percentage": round(top_pct, 2),
             "rating": rating,
+            "total_active_students": total_students,
+            "total_enrolled": total_enrolled_all,
+            "inactive_students": total_inactive_all,
         },
         "components": {
             "academic_excellence": {
@@ -2427,8 +2519,10 @@ async def get_manager_analytics_overview(
                 "avg_homework": round(avg_hw, 2),
             },
             "growth_trajectory": {
-                "score": 50.0,
-                "note": "Historical trend data accumulates over time",
+                "score": round(min(max((mom_improvement + 20) / 40.0 * 100, 0), 100), 2),
+                "mom_improvement": mom_improvement,
+                "prev_spi": round(prev_spi, 2),
+                "note": "Month-over-month SPI change" if prev_spi > 0 else "No prior SPI stored yet",
             },
         },
         "risk_distribution": risk_dist,
@@ -2473,7 +2567,7 @@ async def get_manager_teacher_analytics(
         )
         all_shs, all_hw = [], []
         for cls in t_classes:
-            rows = await execute_query(_MGR_SHS_SQL, str(cls["id"]), "00000000-0000-0000-0000-000000000000")
+            rows = await execute_query(_MGR_SHS_SQL, str(cls["id"]))
             all_shs.extend(float(r["shs_score"] or 0) for r in rows)
             all_hw.extend(float(r["homework_rate"] or 0) for r in rows)
 
@@ -2481,12 +2575,29 @@ async def get_manager_teacher_analytics(
             avg_shs = _mgr_stats.mean(all_shs)
             variance = _mgr_stats.stdev(all_shs) if len(all_shs) > 1 else 0.0
             hw_eff = _mgr_stats.mean(all_hw) if all_hw else 0.0
-            cvi = _mgr_calc_cvi(avg_shs, 50.0, variance, hw_eff)
+
+            # Real learning velocity averaged across all teacher's classes
+            if t_classes:
+                cids = [str(c["id"]) for c in t_classes]
+                vel_rows = await execute_query(
+                    f"SELECT AVG(weekly_shs) AS wk, AVG(monthly_shs) AS mo FROM student_health_scores WHERE class_id = ANY($1::uuid[])",
+                    cids,
+                )
+                if vel_rows:
+                    mo = float(vel_rows[0]["mo"] or 0)
+                    wk = float(vel_rows[0]["wk"] or 0)
+                    learning_velocity = min(max(((wk - mo) + 10) / 20.0 * 100, 0), 100) if mo > 0 else 50.0
+                else:
+                    learning_velocity = 50.0
+            else:
+                learning_velocity = 50.0
+
+            cvi = _mgr_calc_cvi(avg_shs, learning_velocity, variance, hw_eff)
             grade = _mgr_teacher_grade(cvi)
             struggling = sum(1 for v in all_shs if v < 50)
             excelling = sum(1 for v in all_shs if v >= 80)
         else:
-            avg_shs = cvi = 0.0; grade = "No data"; struggling = excelling = 0
+            avg_shs = cvi = learning_velocity = 0.0; grade = "No data"; struggling = excelling = 0
 
         results.append({
             "teacher_id": tid,
@@ -2498,6 +2609,7 @@ async def get_manager_teacher_analytics(
             "struggling_students": struggling,
             "excelling_students": excelling,
             "teacher_grade": grade,
+            "learning_velocity": round(learning_velocity, 2),
         })
 
     results.sort(key=lambda x: x["avg_cvi"], reverse=True)
@@ -2519,7 +2631,12 @@ async def get_manager_class_analytics(
                   b.name AS branch_name, u.full_name AS teacher_name
            FROM classes c
            JOIN branches b ON b.id = c.branch_id
-           LEFT JOIN users u ON u.id = c.teacher_id
+           LEFT JOIN (
+               SELECT DISTINCT ON (class_id) class_id, teacher_id
+               FROM teacher_class_subject_assignments
+               ORDER BY class_id
+           ) tcsa_t ON tcsa_t.class_id = c.id
+           LEFT JOIN users u ON u.id = COALESCE(c.teacher_id, tcsa_t.teacher_id)
            WHERE b.school_id = $1::uuid ORDER BY c.name""",
         school_id,
     )
@@ -2527,20 +2644,45 @@ async def get_manager_class_analytics(
     results = []
     for cls in class_rows:
         cid = str(cls["id"])
-        rows = await execute_query(_MGR_SHS_SQL, cid, "00000000-0000-0000-0000-000000000000")
-        shs_vals = [float(r["shs_score"] or 0) for r in rows]
-        hw_vals = [float(r["homework_rate"] or 0) for r in rows]
+        rows = await execute_query(_MGR_SHS_SQL, cid)
+        active_rows = [r for r in rows if not r["is_inactive"]]
+        inactive_count = len(rows) - len(active_rows)
+        shs_vals = [float(r["shs_score"] or 0) for r in active_rows]
+        hw_vals = [float(r["homework_rate"] or 0) for r in active_rows]
+        vid_vals = [float(r["video_rate"] or 0) for r in active_rows]
 
         if shs_vals:
             avg_shs = _mgr_stats.mean(shs_vals)
             variance = _mgr_stats.stdev(shs_vals) if len(shs_vals) > 1 else 0.0
             hw_eff = _mgr_stats.mean(hw_vals) if hw_vals else 0.0
-            cvi = _mgr_calc_cvi(avg_shs, 50.0, variance, hw_eff)
+            avg_video = _mgr_stats.mean(vid_vals) if vid_vals else 0.0
+
+            vel_row = await execute_one(
+                "SELECT AVG(weekly_shs) AS avg_weekly, AVG(monthly_shs) AS avg_monthly FROM student_health_scores WHERE class_id = $1::uuid",
+                cid,
+            )
+            avg_monthly = float(vel_row["avg_monthly"] or 0) if vel_row else 0.0
+            if avg_monthly > 0:
+                raw_vel = float(vel_row["avg_weekly"] or 0) - avg_monthly
+                learning_velocity = min(max((raw_vel + 10) / 20.0 * 100, 0), 100)
+            else:
+                learning_velocity = 50.0
+
+            cvi = _mgr_calc_cvi(avg_shs, learning_velocity, variance, hw_eff)
             grade = _mgr_teacher_grade(cvi)
             struggling = sum(1 for v in shs_vals if v < 50)
             excelling = sum(1 for v in shs_vals if v >= 80)
+
+            cvi_alert = None
+            if avg_video > 85 and hw_eff < 60:
+                cvi_alert = "High engagement but low comprehension — content may be too complex"
+            elif avg_video < 50 and hw_eff < 60:
+                cvi_alert = "Low engagement AND comprehension — teaching approach needs revision"
+            elif variance > 25:
+                cvi_alert = "Large performance gap — some students being left behind"
         else:
-            avg_shs = cvi = 0.0; grade = "No data"; struggling = excelling = 0
+            avg_shs = cvi = avg_video = learning_velocity = 0.0
+            grade = "No data"; struggling = excelling = 0; cvi_alert = None
 
         results.append({
             "class_id": cid,
@@ -2550,13 +2692,61 @@ async def get_manager_class_analytics(
             "avg_shs": round(avg_shs, 2),
             "avg_cvi": round(cvi, 2),
             "total_students": len(shs_vals),
+            "inactive_students": inactive_count,
             "struggling_count": struggling,
             "excelling_count": excelling,
             "teacher_grade": grade,
+            "avg_video": round(avg_video, 2),
+            "learning_velocity": round(learning_velocity, 2),
+            "cvi_alert": cvi_alert,
         })
 
     results.sort(key=lambda x: x["avg_cvi"], reverse=True)
     return {"classes": results}
+
+
+@router.get("/analytics/students")
+async def get_manager_students_analytics(
+    current_user: dict = Depends(require_manager),
+):
+    """All students in the manager's school with live SHS, class, and teacher info."""
+    school_id = str(current_user.get("school_id") or "")
+
+    class_rows = await execute_query(
+        """SELECT c.id, c.name AS class_name,
+                  b.name AS branch_name, u.full_name AS teacher_name
+           FROM classes c
+           JOIN branches b ON b.id = c.branch_id
+           LEFT JOIN (
+               SELECT DISTINCT ON (class_id) class_id, teacher_id
+               FROM teacher_class_subject_assignments
+               ORDER BY class_id
+           ) tcsa_t ON tcsa_t.class_id = c.id
+           LEFT JOIN users u ON u.id = COALESCE(c.teacher_id, tcsa_t.teacher_id)
+           WHERE b.school_id = $1::uuid ORDER BY c.name""",
+        school_id,
+    )
+
+    students = []
+    for cls in class_rows:
+        cid = str(cls["id"])
+        rows = await execute_query(_MGR_SHS_SQL, cid)
+        for r in rows:
+            students.append({
+                "student_id": str(r["student_id"]),
+                "full_name": r["full_name"],
+                "class_name": cls["class_name"],
+                "branch_name": cls["branch_name"],
+                "teacher_name": cls["teacher_name"] or "—",
+                "shs_score": round(float(r["shs_score"] or 0), 2),
+                "risk_level": _mgr_risk_level(float(r["shs_score"] or 0)),
+                "video_rate": round(float(r["video_rate"] or 0), 2),
+                "attendance_rate": round(float(r["attendance_rate"] or 0), 2),
+                "homework_rate": round(float(r["homework_rate"] or 0), 2),
+            })
+
+    students.sort(key=lambda x: x["shs_score"], reverse=True)
+    return {"students": students}
 
 
 @router.get("/analytics/student/{student_id}")

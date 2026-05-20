@@ -54,6 +54,10 @@ const studentService = {
   // Enrollment details
   getEnrollment: (studentId) =>
     api.get(`${API_ROUTES.STUDENTS}/enrollment/${studentId}`),
+
+  // Student Health Score
+  getSHS: () =>
+    api.get(`${API_ROUTES.STUDENTS}/learning/shs`),
 };
 
 export default studentService;

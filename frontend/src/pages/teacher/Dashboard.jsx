@@ -239,33 +239,58 @@ export default function TeacherDashboard() {
         ) : (
           <>
             {/* Teacher summary bar */}
-            <div className="flex flex-wrap items-center gap-4 mb-5 rounded-2xl border border-gray-200 bg-white p-4">
+            <div className="flex flex-wrap items-center gap-6 mb-5 rounded-2xl border border-gray-200 bg-white p-4">
+              {/* CVI Score */}
               <div>
                 <p className="text-[10px] text-gray-400 uppercase tracking-wide">
-                  Overall Grade
+                  My CVI Score
+                </p>
+                <p className="text-2xl font-bold tabular-nums text-indigo-700 mt-0.5">
+                  {typeof analytics.overall_cvi === "number"
+                    ? analytics.overall_cvi.toFixed(1)
+                    : "—"}
+                  <span className="text-sm font-normal text-gray-400"> / 100</span>
+                </p>
+              </div>
+              <div className="w-px h-10 bg-gray-200" />
+              {/* Grade */}
+              <div>
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide">
+                  Grade
                 </p>
                 {analytics.overall_grade ? (
-                  <span className="inline-block mt-0.5 text-sm font-bold text-gray-800">
+                  <span className={`inline-block mt-0.5 text-sm font-bold px-2.5 py-1 rounded-full ${
+                    analytics.overall_grade === "Excellent" ? "bg-blue-100 text-blue-700"
+                    : analytics.overall_grade === "Good" ? "bg-green-100 text-green-700"
+                    : analytics.overall_grade === "Satisfactory" ? "bg-amber-100 text-amber-800"
+                    : "bg-red-100 text-red-700"
+                  }`}>
                     {analytics.overall_grade}
                   </span>
                 ) : (
                   <span className="text-sm text-gray-400">—</span>
                 )}
               </div>
-              <div className="w-px h-8 bg-gray-200" />
+              <div className="w-px h-10 bg-gray-200" />
+              {/* Active Alerts */}
               <div>
                 <p className="text-[10px] text-gray-400 uppercase tracking-wide">
                   Active Alerts
                 </p>
-                <span
-                  className={`text-sm font-bold ${(analytics.active_alert_count || 0) > 0 ? "text-red-600" : "text-gray-700"}`}
-                >
-                  {analytics.active_alert_count ?? 0}
-                </span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className={`text-xl font-bold ${(analytics.active_alert_count || 0) > 0 ? "text-red-600" : "text-gray-700"}`}>
+                    {analytics.active_alert_count ?? 0}
+                  </span>
+                  {(analytics.active_alert_count || 0) > 0 && (
+                    <BellAlertIcon className="h-4 w-4 text-red-500" />
+                  )}
+                </div>
               </div>
-              {(analytics.active_alert_count || 0) > 0 && (
-                <BellAlertIcon className="h-4 w-4 text-red-500 ml-1" />
-              )}
+              <div className="w-px h-10 bg-gray-200" />
+              {/* What CVI means */}
+              <div className="text-xs text-gray-400 max-w-xs">
+                CVI = Class Vitality Index. Measures your teaching effectiveness: avg student SHS (35%), improvement velocity (25%), class consistency (20%), homework success (20%).
+              </div>
             </div>
 
             {/* CVI per class */}

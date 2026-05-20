@@ -15,6 +15,7 @@ export default function StudentDashboard() {
   const [subjects, setSubjects] = useState([]);
   const [learnSummary, setLearnSummary] = useState(null);
   const [attendanceSummary, setAttendanceSummary] = useState(null);
+  const [shs, setSHS] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -25,11 +26,15 @@ export default function StudentDashboard() {
       studentService.getDashboard(user.id).catch(() => ({ data: {} })),
       learningService.getDashboardSummary().catch(() => null),
       studentService.getAttendanceSummary(user.id).catch(() => ({ data: null })),
+      studentService.getSHS().catch(() => ({ data: null })),
     ])
-      .then(([dash, summary, attendance]) => {
+      .then(([dash, summary, attendance, shsData]) => {
         setSubjects(dash.data?.subjects || []);
         setLearnSummary(summary?.data || null);
         setAttendanceSummary(attendance?.data || null);
+        // SHS endpoint returns an array; use the first class's SHS
+        const shsArray = shsData?.data || [];
+        setSHS(Array.isArray(shsArray) && shsArray.length > 0 ? { ...shsArray[0], current_shs: shsArray[0].shs } : null);
       })
       .catch(() => setError("Failed to load dashboard."))
       .finally(() => setLoading(false));
@@ -37,11 +42,12 @@ export default function StudentDashboard() {
 
   if (loading) return <PageSpinner />;
 
-  // Build chart data from subjects
+  // Build chart data from subjects — all 3 metrics
   const chartData = subjects.map((s) => ({
     topic: s.subject_name,
-    score: Math.round(s.highest_score || 0),
-    average: Math.round(s.average_score || 0),
+    best_score: parseFloat(s.highest_score || 0),
+    my_score: parseFloat(s.my_avg_score || 0),
+    class_avg: parseFloat(s.average_score || 0),
   }));
 
   return (
@@ -54,6 +60,64 @@ export default function StudentDashboard() {
       </p>
 
       {error && <Alert type="error" message={error} className="mb-6" />}
+
+      {shs && (
+        <div className={`rounded-2xl shadow-sm border-2 p-6 mb-8 ${
+          shs.risk_level === 'excelling' ? 'border-blue-200 bg-blue-50' :
+          shs.risk_level === 'stable' ? 'border-green-200 bg-green-50' :
+          shs.risk_level === 'at_risk' ? 'border-orange-200 bg-orange-50' :
+          'border-red-200 bg-red-50'
+        }`}>
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h2 className="font-bold text-lg text-gray-900">
+                Student Health Score
+              </h2>
+              <p className="text-sm text-gray-600 mt-1">Your overall performance</p>
+            </div>
+            <div className={`text-4xl font-bold ${
+              shs.risk_level === 'excelling' ? 'text-blue-700' :
+              shs.risk_level === 'stable' ? 'text-green-700' :
+              shs.risk_level === 'at_risk' ? 'text-orange-700' :
+              'text-red-700'
+            }`}>
+              {(shs.current_shs || 0).toFixed(2)}
+            </div>
+          </div>
+
+          <div className="mb-4 p-3 rounded-lg bg-white/50 backdrop-blur-sm">
+            <p className={`text-sm font-semibold capitalize ${
+              shs.risk_level === 'excelling' ? 'text-blue-700' :
+              shs.risk_level === 'stable' ? 'text-green-700' :
+              shs.risk_level === 'at_risk' ? 'text-orange-700' :
+              'text-red-700'
+            }`}>
+              Status: {shs.risk_level?.replace('_', ' ').toUpperCase()}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-white/60 rounded-lg p-3 text-center">
+              <p className="text-xs text-gray-600 font-medium">Video</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">
+                {(shs.components?.video || 0).toFixed(0)}%
+              </p>
+            </div>
+            <div className="bg-white/60 rounded-lg p-3 text-center">
+              <p className="text-xs text-gray-600 font-medium">Homework</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">
+                {(shs.components?.homework || 0).toFixed(1)}%
+              </p>
+            </div>
+            <div className="bg-white/60 rounded-lg p-3 text-center">
+              <p className="text-xs text-gray-600 font-medium">Attendance</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">
+                {(shs.components?.attendance || 0).toFixed(0)}%
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <Link
@@ -291,10 +355,7 @@ export default function StudentDashboard() {
 
       {/* Performance Chart */}
       {chartData.length > 0 && (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 mb-8">
-          <h2 className="font-semibold text-gray-700 mb-4 text-sm uppercase tracking-wide">
-            Performance Overview
-          </h2>
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8">
           <PerformanceChart data={chartData} />
         </div>
       )}

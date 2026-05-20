@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Test</title>
+</head>
+<body>
+    <h1>Testing API Response</h1>
+    <pre id="output">Loading...</pre>
+    <script>
+        const token = localStorage.getItem('smart_school_token');
+        const studentId = 'be329daf-4a33-4016-a3dd-3b019ec32182';
+        const classId = '2b5f3baf-efad-4c17-8d1f-fbfb49f00227';
+
+        fetch(`http://localhost:8000/api/teachers/students/${studentId}/performance?class_id=${classId}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        })
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('output').textContent = JSON.stringify({
+                consistency: data.consistency,
+                behavioral: data.behavioral,
+                attendance_rate: data?.consistency?.attendance_rate,
+                submission_rate: data?.consistency?.submission_rate,
+                retakes: data?.behavioral?.retakes,
+                revisits: data?.behavioral?.revisits
+            }, null, 2);
+        })
+        .catch(e => document.getElementById('output').textContent = 'Error: ' + e.message);
+    </script>
+</body>
+</html>

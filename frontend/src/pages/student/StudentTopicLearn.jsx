@@ -45,6 +45,9 @@ export default function StudentTopicLearn() {
   const [loading, setLoading] = useState(true);
   const [topic, setTopic] = useState(null);
   const [savedProgress, setSavedProgress] = useState(null);
+  const [liveVideoPct, setLiveVideoPct] = useState(0);
+  const [livePosition, setLivePosition] = useState(0); // currentTime in seconds, for display when duration unknown
+  const [slidesDone, setSlidesDone] = useState(false);
   const [nav, setNav] = useState({ previous_topic_id: null, next_topic_id: null });
   const [slidesOpen, setSlidesOpen] = useState(false);
   const [slideIdx, setSlideIdx] = useState(0);
@@ -55,6 +58,7 @@ export default function StudentTopicLearn() {
   const deckRef = useRef(null);
   const progressTimer = useRef(null);
   const resumedRef = useRef(false);
+  const topicRef = useRef(null);
 
   const loadTopic = useCallback(async () => {
     if (!topicId) return;
@@ -66,8 +70,12 @@ export default function StudentTopicLearn() {
       const row =
         rowRaw && typeof rowRaw === "object" && !Array.isArray(rowRaw) ? rowRaw : null;
       if (!row?.id) throw new Error("Topic not found");
+      topicRef.current = row;
       setTopic(row);
-      setSavedProgress(res.data?.progress ?? null);
+      const prog = res.data?.progress ?? null;
+      setSavedProgress(prog);
+      if (prog?.lecture_watch_percent) setLiveVideoPct(Number(prog.lecture_watch_percent));
+      if (prog?.slides_completed) setSlidesDone(true);
       const deck = parseLibraryTopicSlidesJson(row.slides_json);
       setSlides(deck);
       if (row.slide_theme) {
@@ -150,12 +158,12 @@ export default function StudentTopicLearn() {
     return () => clearTimeout(timer);
   }, [topic?.id, loading, slides.length, location.hash]);
 
-  const lecturePct = Math.min(
-    100,
-    Number(savedProgress?.lecture_watch_percent || 0),
+  const lecturePct = Math.max(
+    liveVideoPct,
+    Math.min(100, Number(savedProgress?.lecture_watch_percent || 0)),
   );
   const slidesPct =
-    slides.length > 0 && savedProgress?.slides_completed
+    slidesDone || (slides.length > 0 && savedProgress?.slides_completed)
       ? 100
       : slides.length > 0
         ? Math.min(
@@ -167,30 +175,122 @@ export default function StudentTopicLearn() {
         : 0;
 
   const sendVideoProgress = useCallback(() => {
-    if (!topic?.id || !videoRef.current || !videoRef.current.duration) return;
+    const t = topicRef.current;
+    if (!t?.id || !videoRef.current) return;
     const v = videoRef.current;
-    const pct = Math.min(100, (v.currentTime / v.duration) * 100);
+
+    // If the video has ended, mark as 100% regardless of duration metadata
+    if (v.ended) {
+      setLiveVideoPct(100);
+      setSavedProgress((prev) => ({
+        ...(prev || {}),
+        lecture_watch_percent: 100,
+        lecture_position_seconds: v.currentTime,
+      }));
+      learningService
+        .updateProgress({
+          topic_id: String(t.id),
+          lecture_watch_percent: 100,
+          lecture_position_seconds: v.currentTime,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    // Prefer real duration; fall back to seekable end (works for webm recordings)
+    let dur =
+      v.duration && isFinite(v.duration) && v.duration > 0
+        ? v.duration
+        : t.lecture_duration_seconds || 0;
+    if (!dur && v.seekable && v.seekable.length > 0) {
+      const se = v.seekable.end(v.seekable.length - 1);
+      if (se && isFinite(se) && se > 0) dur = se;
+    }
+
+    if (!dur) {
+      // Duration still unknown — save position so resume works
+      learningService
+        .updateProgress({
+          topic_id: String(t.id),
+          lecture_position_seconds: v.currentTime,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    const pct = Math.min(100, (v.currentTime / dur) * 100);
+    setSavedProgress((prev) => ({
+      ...(prev || {}),
+      lecture_watch_percent: pct,
+      lecture_position_seconds: v.currentTime,
+    }));
     learningService
       .updateProgress({
-        topic_id: String(topic.id),
+        topic_id: String(t.id),
         lecture_watch_percent: pct,
         lecture_position_seconds: v.currentTime,
       })
-      .catch(() => {});
-  }, [topic?.id]);
+      .catch((err) => {
+        console.error("Failed to update progress:", err);
+      });
+  }, []);
 
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !topic?.id) return;
     const onTime = () => {
+      const t = topicRef.current;
+      // If ended, force 100% immediately
+      if (v.ended) {
+        setLiveVideoPct(100);
+        setLivePosition(Math.floor(v.currentTime));
+        if (progressTimer.current) clearTimeout(progressTimer.current);
+        progressTimer.current = setTimeout(sendVideoProgress, 500);
+        return;
+      }
+      let dur =
+        v.duration && isFinite(v.duration) && v.duration > 0
+          ? v.duration
+          : t?.lecture_duration_seconds || 0;
+      // Seekable end works for webm recordings that lack duration metadata
+      if (!dur && v.seekable && v.seekable.length > 0) {
+        const se = v.seekable.end(v.seekable.length - 1);
+        if (se && isFinite(se) && se > 0) dur = se;
+      }
+      setLivePosition(Math.floor(v.currentTime));
+      if (dur > 0) {
+        const pct = Math.min(100, (v.currentTime / dur) * 100);
+        setLiveVideoPct(pct);
+      }
       if (progressTimer.current) clearTimeout(progressTimer.current);
       progressTimer.current = setTimeout(sendVideoProgress, 2000);
     };
+    const onEnded = () => {
+      const t = topicRef.current;
+      if (!t?.id) return;
+      setLiveVideoPct(100);
+      setSavedProgress((prev) => ({
+        ...(prev || {}),
+        lecture_watch_percent: 100,
+        lecture_position_seconds: v.currentTime,
+      }));
+      learningService
+        .updateProgress({
+          topic_id: String(t.id),
+          lecture_watch_percent: 100,
+          lecture_position_seconds: v.currentTime,
+        })
+        .then(() => toast.success("Lecture marked as completed!"))
+        .catch(() => toast.error("Could not save progress — try 'Mark as Watched' below."));
+    };
+
     v.addEventListener("timeupdate", onTime);
     v.addEventListener("pause", sendVideoProgress);
+    v.addEventListener("ended", onEnded);
     return () => {
       v.removeEventListener("timeupdate", onTime);
       v.removeEventListener("pause", sendVideoProgress);
+      v.removeEventListener("ended", onEnded);
       if (progressTimer.current) clearTimeout(progressTimer.current);
     };
   }, [topic?.id, sendVideoProgress]);
@@ -224,7 +324,35 @@ export default function StudentTopicLearn() {
         slides_viewed_count: slides.length,
         slides_total: slides.length,
       })
-      .catch(() => {});
+      .then(() => {
+        setSavedProgress((prev) => ({
+          ...(prev || {}),
+          slides_completed: true,
+          slides_viewed_count: slides.length,
+          slides_total: slides.length,
+        }));
+        setSlidesDone(true);
+      })
+      .catch((err) => {
+        console.error("Failed to mark slides done:", err);
+        setSlidesDone(true);
+      });
+  };
+
+  const markLectureWatched = () => {
+    if (!topic?.id) return;
+    learningService
+      .updateProgress({
+        topic_id: String(topic.id),
+        lecture_watch_percent: 100,
+        lecture_position_seconds: videoRef.current?.currentTime || 0,
+      })
+      .then(() => {
+        setLiveVideoPct(100);
+        setSavedProgress((prev) => ({ ...(prev || {}), lecture_watch_percent: 100 }));
+        toast.success("Lecture marked as completed!");
+      })
+      .catch(() => toast.error("Failed to save progress. Please try again."));
   };
 
   if (loading) return <PageSpinner />;
@@ -286,20 +414,40 @@ export default function StudentTopicLearn() {
               </div>
             </div>
           )}
-          {lectureUrl && (
-            <div>
-              <div className="flex justify-between text-xs text-gray-600 mb-1">
-                <span>Lecture</span>
-                <span>{Math.round(lecturePct)}%</span>
+          {lectureUrl && (() => {
+            const knownDur = topic?.lecture_duration_seconds || 0;
+            const durationUnknown = knownDur === 0 && lecturePct === 0 && livePosition > 0;
+            const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+            return (
+              <div>
+                <div className="flex justify-between text-xs text-gray-600 mb-1">
+                  <span>Lecture</span>
+                  <span>
+                    {lecturePct >= 100
+                      ? "Completed ✓"
+                      : durationUnknown
+                        ? `${fmt(livePosition)} watched`
+                        : `${Math.round(lecturePct)}%`}
+                  </span>
+                </div>
+                <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                  {durationUnknown ? (
+                    <div className="h-full bg-emerald-400 animate-pulse w-full" />
+                  ) : (
+                    <div
+                      className="h-full bg-emerald-500 transition-all"
+                      style={{ width: `${lecturePct}%` }}
+                    />
+                  )}
+                </div>
+                {durationUnknown && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    Duration unavailable — watch to end to mark as completed
+                  </p>
+                )}
               </div>
-              <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
-                <div
-                  className="h-full bg-emerald-500 transition-all"
-                  style={{ width: `${lecturePct}%` }}
-                />
-              </div>
-            </div>
-          )}
+            );
+          })()}
           {savedProgress?.topic_completed && (
             <p className="text-xs font-medium text-emerald-700">Topic completed</p>
           )}
@@ -390,6 +538,32 @@ export default function StudentTopicLearn() {
               Open lecture in full page →
             </Link>
           </p>
+
+          {/* Mark as Watched — always visible so students can confirm regardless of auto-tracking */}
+          <div className={`mt-4 flex items-center gap-3 p-3 rounded-xl border ${
+            lecturePct >= 100
+              ? "bg-emerald-50 border-emerald-200"
+              : "bg-amber-50 border-amber-200"
+          }`}>
+            <span className={`text-sm flex-1 ${lecturePct >= 100 ? "text-emerald-800" : "text-amber-800"}`}>
+              {lecturePct >= 100
+                ? "Lecture marked as completed."
+                : livePosition > 0
+                  ? `You've watched ${Math.floor(livePosition / 60)}m ${livePosition % 60}s. Finished watching?`
+                  : "Watched the full lecture? Mark it as completed."}
+            </span>
+            <button
+              type="button"
+              onClick={markLectureWatched}
+              className={`shrink-0 px-4 py-1.5 rounded-lg text-white text-sm font-semibold ${
+                lecturePct >= 100
+                  ? "bg-emerald-500 hover:bg-emerald-600"
+                  : "bg-emerald-600 hover:bg-emerald-700"
+              }`}
+            >
+              {lecturePct >= 100 ? "Re-submit" : "Mark as Watched"}
+            </button>
+          </div>
 
           {markers.length > 0 && (
             <div className="mt-5">

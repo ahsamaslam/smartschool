@@ -378,7 +378,7 @@ async def get_class_students(class_id: str, teacher_id: Optional[str] = None):
                 c.section,
                 e.enrolled_at,
 
-                -- VIDEO %: % of this teacher's lectures watched >=75% by this student
+                -- VIDEO %: teacher's lectures (all teachers if $2 is NULL)
                 COALESCE((
                     SELECT
                         CASE WHEN COUNT(tt.topic_id) = 0 THEN 0 ELSE
@@ -397,7 +397,7 @@ async def get_class_students(class_id: str, teacher_id: Optional[str] = None):
                             ON tcsa.teacher_id = ttc.teacher_id
                             AND tcsa.library_book_id = b.id
                             AND tcsa.class_id = $1::uuid
-                        WHERE ttc.teacher_id = $2::uuid
+                        WHERE ($2::uuid IS NULL OR ttc.teacher_id = $2::uuid)
                           AND ttc.lecture_video_url IS NOT NULL
                           AND trim(ttc.lecture_video_url) != ''
                     ) tt
@@ -408,40 +408,57 @@ async def get_class_students(class_id: str, teacher_id: Optional[str] = None):
                 -- ATTENDANCE %
                 COALESCE(att.attendance_rate, 0) AS attendance_rate,
 
-                -- HOMEWORK %: submitted / total published homeworks for this class
-                COALESCE(hw.homework_submission_pct, 0) AS homework_avg
+                -- HOMEWORK %: best submission per homework (retakes never lower grade)
+                COALESCE(hw.homework_avg, 0) AS homework_avg,
+
+                -- BEHAVIORAL: topic revisits (cap 5=100)*0.5 + hw retakes (cap 3=100)*0.5
+                LEAST(COALESCE((
+                    SELECT COUNT(DISTINCT stp2.topic_id) / 5.0 * 100
+                    FROM student_topic_progress stp2
+                    JOIN teacher_topic_content ttc2 ON ttc2.library_topic_id = stp2.topic_id
+                    JOIN teacher_class_subject_assignments tcsa2
+                        ON tcsa2.teacher_id = ttc2.teacher_id AND tcsa2.class_id = $1::uuid
+                    WHERE stp2.student_id = u.id AND stp2.lecture_watch_percent > 0
+                ), 0), 100) * 0.50
+                + LEAST(COALESCE((
+                    SELECT COUNT(*) / 3.0 * 100
+                    FROM (
+                        SELECT hs3.homework_id
+                        FROM homework_submissions hs3
+                        JOIN homeworks h3 ON h3.id = hs3.homework_id
+                        WHERE hs3.student_id = u.id AND h3.class_id = $1::uuid
+                        GROUP BY hs3.homework_id HAVING COUNT(*) > 1
+                    ) r
+                ), 0), 100) * 0.50 AS behavioral_rate
 
             FROM enrollments e
             JOIN users u ON e.student_id = u.id
             JOIN classes c ON e.class_id = c.id
             LEFT JOIN (
                 SELECT
-                    student_id,
-                    class_id,
-                    ROUND(
-                        100.0 * SUM(CASE WHEN is_present THEN 1 ELSE 0 END)
-                        / NULLIF(COUNT(*), 0),
-                        2
-                    ) AS attendance_rate
+                    student_id, class_id,
+                    ROUND(100.0 * SUM(CASE WHEN is_present THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS attendance_rate
                 FROM attendance
                 GROUP BY student_id, class_id
             ) att ON att.student_id = u.id AND att.class_id = e.class_id
             LEFT JOIN (
                 SELECT
                     e2.student_id,
-                    ROUND(
-                        COALESCE(AVG(CASE
-                            WHEN hs.marks_awarded IS NOT NULL AND h.total_marks > 0
-                                THEN (hs.marks_awarded / h.total_marks * 100)
-                            WHEN hs.submission_status IN ('submitted','late','in_progress')
-                                THEN 75
-                            ELSE 0
-                        END), 0)
-                    , 2) AS homework_submission_pct
+                    ROUND(COALESCE(AVG(CASE
+                        WHEN best.marks_awarded IS NOT NULL AND h.total_marks > 0
+                            THEN (best.marks_awarded / h.total_marks * 100)
+                        WHEN best.submission_status IN ('submitted','late','in_progress')
+                            THEN 75
+                        ELSE 0
+                    END), 0), 2) AS homework_avg
                 FROM enrollments e2
                 JOIN homeworks h ON h.class_id = e2.class_id AND h.status = 'published'
-                LEFT JOIN homework_submissions hs
-                    ON hs.homework_id = h.id AND hs.student_id = e2.student_id
+                LEFT JOIN (
+                    SELECT DISTINCT ON (homework_id, student_id)
+                        homework_id, student_id, marks_awarded, submission_status
+                    FROM homework_submissions
+                    ORDER BY homework_id, student_id, marks_awarded DESC NULLS LAST, submitted_at DESC
+                ) best ON best.homework_id = h.id AND best.student_id = e2.student_id
                 WHERE e2.class_id = $1::uuid AND e2.is_active = true
                 GROUP BY e2.student_id
             ) hw ON hw.student_id = u.id
@@ -449,20 +466,22 @@ async def get_class_students(class_id: str, teacher_id: Optional[str] = None):
         )
         SELECT
             *,
-            ROUND(
-                (video_completion_rate * 0.25) +
-                (attendance_rate * 0.35) +
-                (homework_avg * 0.40),
-            2) AS overall_score,
+            ROUND((
+                video_completion_rate * 0.25
+                + homework_avg * 0.40
+                + attendance_rate * 0.20
+                + behavioral_rate * 0.15
+            ), 2) AS shs_score,
             RANK() OVER (
-                ORDER BY ROUND(
-                    (video_completion_rate * 0.25) +
-                    (attendance_rate * 0.35) +
-                    (homework_avg * 0.40),
-                2) DESC
+                ORDER BY ROUND((
+                    video_completion_rate * 0.25
+                    + homework_avg * 0.40
+                    + attendance_rate * 0.20
+                    + behavioral_rate * 0.15
+                ), 2) DESC
             ) AS ranking
         FROM base
-        ORDER BY overall_score DESC, full_name
+        ORDER BY shs_score DESC, full_name
     """
 
     students = await execute_query(query, class_id, teacher_id)
@@ -485,6 +504,7 @@ async def get_student_detail(student_id: str, class_id: str, teacher_id: Optiona
     shs_row = await execute_one(
         """
         SELECT
+            -- VIDEO: watch completion rate for this teacher's lectures
             COALESCE((
                 SELECT CASE WHEN COUNT(tt.topic_id) = 0 THEN 0 ELSE
                     ROUND(100.0 * COUNT(CASE WHEN COALESCE(stp.lecture_watch_percent,0) >= 75 THEN 1 END)
@@ -506,22 +526,50 @@ async def get_student_detail(student_id: str, class_id: str, teacher_id: Optiona
                 LEFT JOIN student_topic_progress stp
                     ON stp.topic_id = tt.topic_id AND stp.student_id = $3::uuid
             ), 0) AS video_rate,
+            -- ATTENDANCE
             COALESCE((
                 SELECT ROUND(100.0 * SUM(CASE WHEN is_present THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2)
                 FROM attendance WHERE student_id = $3::uuid AND class_id = $1::uuid
             ), 0) AS attendance_rate,
+            -- HOMEWORK: best submission per homework (retakes never lower grade)
             COALESCE((
                 SELECT ROUND(COALESCE(AVG(CASE
-                    WHEN hs.marks_awarded IS NOT NULL AND h.total_marks > 0
-                        THEN (hs.marks_awarded / h.total_marks * 100)
-                    WHEN hs.submission_status IN ('submitted','late','in_progress')
+                    WHEN best.marks_awarded IS NOT NULL AND h.total_marks > 0
+                        THEN (best.marks_awarded / h.total_marks * 100)
+                    WHEN best.submission_status IN ('submitted','late','in_progress')
                         THEN 75
                     ELSE 0
                 END), 0), 2)
                 FROM homeworks h
-                LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = $3::uuid
+                LEFT JOIN (
+                    SELECT DISTINCT ON (homework_id)
+                        homework_id, marks_awarded, submission_status
+                    FROM homework_submissions
+                    WHERE student_id = $3::uuid
+                    ORDER BY homework_id, marks_awarded DESC NULLS LAST, submitted_at DESC
+                ) best ON best.homework_id = h.id
                 WHERE h.class_id = $1::uuid AND h.status = 'published'
-            ), 0) AS homework_rate
+            ), 0) AS homework_rate,
+            -- BEHAVIORAL: topic revisits (capped 5=100)
+            LEAST(COALESCE((
+                SELECT COUNT(DISTINCT stp2.topic_id) / 5.0 * 100
+                FROM student_topic_progress stp2
+                JOIN teacher_topic_content ttc2 ON ttc2.library_topic_id = stp2.topic_id
+                JOIN teacher_class_subject_assignments tcsa2
+                    ON tcsa2.teacher_id = ttc2.teacher_id AND tcsa2.class_id = $1::uuid
+                WHERE stp2.student_id = $3::uuid AND stp2.lecture_watch_percent > 0
+            ), 0), 100) AS revisit_score,
+            -- BEHAVIORAL: homework retakes (capped 3=100)
+            LEAST(COALESCE((
+                SELECT COUNT(*) / 3.0 * 100
+                FROM (
+                    SELECT hs2.homework_id
+                    FROM homework_submissions hs2
+                    JOIN homeworks h2 ON h2.id = hs2.homework_id
+                    WHERE hs2.student_id = $3::uuid AND h2.class_id = $1::uuid
+                    GROUP BY hs2.homework_id HAVING COUNT(*) > 1
+                ) retakes_q
+            ), 0), 100) AS retake_score
         """,
         class_id, tid, student_id,
     )
@@ -529,12 +577,16 @@ async def get_student_detail(student_id: str, class_id: str, teacher_id: Optiona
     video_rate = float(shs_row["video_rate"] or 0)
     attendance_rate = float(shs_row["attendance_rate"] or 0)
     homework_rate = float(shs_row["homework_rate"] or 0)
+    revisit_score = float(shs_row["revisit_score"] or 0)
+    retake_score = float(shs_row["retake_score"] or 0)
+    behavioral_score = round(revisit_score * 0.50 + retake_score * 0.50, 2)
 
-    # Calculate SHS using simplified formula (25-40-20-15)
+    # Calculate SHS: Video×0.25 + Homework×0.40 + Attendance×0.20 + Behavioral×0.15
     shs_score = calculate_live_shs(
         video_rate=video_rate,
         homework_grade=homework_rate,
         attendance_rate=attendance_rate,
+        behavioral_score=behavioral_score,
     )
     risk_level = _get_risk_level(shs_score)
 
@@ -620,21 +672,35 @@ async def get_student_detail(student_id: str, class_id: str, teacher_id: Optiona
     submitted_hw = int(hw_counts["submitted_count"] or 0)
     submission_rate = round(100.0 * submitted_hw / total_hw, 1) if total_hw > 0 else 0.0
 
-    # Behavioral: quiz retakes (attempts > 1 on same quiz instance)
-    retakes_row = await execute_one(
+    # Actual homework retakes count for display
+    hw_retakes_row = await execute_one(
         """
         SELECT COUNT(*) AS retakes
         FROM (
-            SELECT quiz_instance_id, COUNT(*) AS attempts
-            FROM quiz_attempts
-            WHERE student_id = $1::uuid
-            GROUP BY quiz_instance_id
-            HAVING COUNT(*) > 1
+            SELECT hs.homework_id
+            FROM homework_submissions hs
+            JOIN homeworks h ON h.id = hs.homework_id
+            WHERE hs.student_id = $1::uuid AND h.class_id = $2::uuid
+            GROUP BY hs.homework_id HAVING COUNT(*) > 1
         ) sub
         """,
-        student_id,
+        student_id, class_id,
     )
-    retakes = int(retakes_row["retakes"] or 0) if retakes_row else 0
+    hw_retakes = int(hw_retakes_row["retakes"] or 0) if hw_retakes_row else 0
+
+    # Actual topic revisits count for display
+    revisits_row = await execute_one(
+        """
+        SELECT COUNT(DISTINCT stp.topic_id) AS revisits
+        FROM student_topic_progress stp
+        JOIN teacher_topic_content ttc ON ttc.library_topic_id = stp.topic_id
+        JOIN teacher_class_subject_assignments tcsa
+            ON tcsa.teacher_id = ttc.teacher_id AND tcsa.class_id = $2::uuid
+        WHERE stp.student_id = $1::uuid AND stp.lecture_watch_percent > 0
+        """,
+        student_id, class_id,
+    )
+    revisits_count = int(revisits_row["revisits"] or 0) if revisits_row else 0
 
     response = {
         "student": {"full_name": student["full_name"], "email": student["email"], "profile_picture_url": student.get("profile_picture_url")},
@@ -642,7 +708,13 @@ async def get_student_detail(student_id: str, class_id: str, teacher_id: Optiona
         "risk_level": risk_level,
         "rank": rank,
         "total_students": total_students,
-        "shs_formula": "Video×0.25 + Homework×0.40 + Attendance×0.20 + Homework×0.15",
+        "shs_formula": "Video×0.25 + Homework×0.40 + Attendance×0.20 + Behavioral×0.15",
+        "components": {
+            "video": round(video_rate, 2),
+            "homework": round(homework_rate, 2),
+            "attendance": round(attendance_rate, 2),
+            "behavioral": round(behavioral_score, 2),
+        },
         "video": {"rate": video_rate, "total_lectures": int(lecture_counts["total_lectures"] or 0), "watched_count": int(lecture_counts["watched_count"] or 0)},
         "attendance": {"rate": attendance_rate, "present_days": int(att_counts["present_days"] or 0), "total_days": int(att_counts["total_days"] or 0)},
         "homework": {
@@ -658,8 +730,11 @@ async def get_student_detail(student_id: str, class_id: str, teacher_id: Optiona
             "submission_rate": submission_rate,
         },
         "behavioral": {
-            "retakes": retakes,
-            "revisits": 0,
+            "score": round(behavioral_score, 2),
+            "retakes": hw_retakes,
+            "retake_score": round(retake_score, 2),
+            "revisits": revisits_count,
+            "revisit_score": round(revisit_score, 2),
         },
         "alerts": alerts,
     }
@@ -1516,6 +1591,23 @@ async def upload_my_topic_lecture(
     dur_ts = max((_flt(item.get("time")) for item in slide_timestamps if isinstance(item, dict)), default=0.0)
     stored_dur = max(dur_form, dur_ts)
 
+    # If duration still unknown, try to extract it from the file via ffprobe
+    if stored_dur <= 0:
+        try:
+            import subprocess as _sp
+            import json as _json2
+            r = _sp.run(
+                ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", abs_path],
+                capture_output=True, text=True, timeout=15,
+            )
+            if r.returncode == 0:
+                _info = _json2.loads(r.stdout)
+                _dur = float(_info.get("format", {}).get("duration", 0) or 0)
+                if _dur > 0:
+                    stored_dur = _dur
+        except Exception:
+            pass
+
     lecture_metadata = {
         "lectureId": uuid.uuid4().hex,
         "topicId": topic_id,
@@ -1772,6 +1864,7 @@ WITH base AS (
     SELECT
         u.id AS student_id,
         u.full_name,
+        -- VIDEO: watch completion rate for this teacher's lectures in this class
         COALESCE((
             SELECT CASE WHEN COUNT(tt.topic_id) = 0 THEN 0 ELSE
                 ROUND(100.0 * COUNT(CASE WHEN COALESCE(stp.lecture_watch_percent,0) >= 75 THEN 1 END)
@@ -1794,7 +1887,26 @@ WITH base AS (
                 ON stp.topic_id = tt.topic_id AND stp.student_id = u.id
         ), 0) AS video_rate,
         COALESCE(att.attendance_rate, 0) AS attendance_rate,
-        COALESCE(hw.homework_rate, 0) AS homework_rate
+        COALESCE(hw.homework_rate, 0) AS homework_rate,
+        -- BEHAVIORAL: topic revisits (cap 5=100) * 0.5 + hw retakes (cap 3=100) * 0.5
+        LEAST(COALESCE((
+            SELECT COUNT(DISTINCT stp2.topic_id) / 5.0 * 100
+            FROM student_topic_progress stp2
+            JOIN teacher_topic_content ttc2 ON ttc2.library_topic_id = stp2.topic_id
+            JOIN teacher_class_subject_assignments tcsa2
+                ON tcsa2.teacher_id = ttc2.teacher_id AND tcsa2.class_id = $1::uuid
+            WHERE stp2.student_id = u.id AND stp2.lecture_watch_percent > 0
+        ), 0), 100) * 0.50
+        + LEAST(COALESCE((
+            SELECT COUNT(*) / 3.0 * 100
+            FROM (
+                SELECT hs3.homework_id
+                FROM homework_submissions hs3
+                JOIN homeworks h3 ON h3.id = hs3.homework_id
+                WHERE hs3.student_id = u.id AND h3.class_id = $1::uuid
+                GROUP BY hs3.homework_id HAVING COUNT(*) > 1
+            ) r
+        ), 0), 100) * 0.50 AS behavioral_rate
     FROM enrollments e
     JOIN users u ON e.student_id = u.id
     LEFT JOIN (
@@ -1805,21 +1917,32 @@ WITH base AS (
     LEFT JOIN (
         SELECT e2.student_id,
             ROUND(COALESCE(AVG(CASE
-                WHEN hs.marks_awarded IS NOT NULL AND h.total_marks > 0
-                    THEN (hs.marks_awarded / h.total_marks * 100)
-                WHEN hs.submission_status IN ('submitted','late','in_progress')
+                WHEN best.marks_awarded IS NOT NULL AND h.total_marks > 0
+                    THEN (best.marks_awarded / h.total_marks * 100)
+                WHEN best.submission_status IN ('submitted','late','in_progress')
                     THEN 75
                 ELSE 0
             END), 0), 2) AS homework_rate
         FROM enrollments e2
         JOIN homeworks h ON h.class_id = e2.class_id AND h.status = 'published'
-        LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = e2.student_id
+        LEFT JOIN (
+            SELECT DISTINCT ON (homework_id, student_id)
+                homework_id, student_id, marks_awarded, submission_status
+            FROM homework_submissions
+            ORDER BY homework_id, student_id, marks_awarded DESC NULLS LAST, submitted_at DESC
+        ) best ON best.homework_id = h.id AND best.student_id = e2.student_id
         WHERE e2.class_id = $1::uuid AND e2.is_active = true
         GROUP BY e2.student_id
     ) hw ON hw.student_id = u.id
     WHERE e.class_id = $1 AND e.is_active = true
 )
-SELECT *, ROUND((video_rate * 0.25 + attendance_rate * 0.35 + homework_rate * 0.40), 2) AS shs_score
+SELECT *,
+    ROUND((
+        video_rate * 0.25
+        + homework_rate * 0.40
+        + attendance_rate * 0.20
+        + behavioral_rate * 0.15
+    ), 2) AS shs_score
 FROM base
 """
 
@@ -1902,7 +2025,12 @@ async def ensure_analytics_schema():
     """)
 
 
-def _compute_class_cvi_metrics(shs_values: list, hw_rates: list) -> dict:
+def _compute_class_cvi_metrics(
+    shs_values: list,
+    hw_rates: list,
+    video_rates: list = None,
+    learning_velocity: float = 50.0,
+) -> dict:
     """Compute CVI and related metrics from lists of student scores."""
     if not shs_values:
         return {
@@ -1913,13 +2041,23 @@ def _compute_class_cvi_metrics(shs_values: list, hw_rates: list) -> dict:
     avg_shs = _statistics.mean(shs_values)
     variance = _statistics.stdev(shs_values) if len(shs_values) > 1 else 0.0
     content_eff = _statistics.mean(hw_rates) if hw_rates else 0.0
-    cvi = _calculate_cvi(avg_shs, 50.0, variance, content_eff)
+    avg_video = _statistics.mean(video_rates) if video_rates else 0.0
+    cvi = _calculate_cvi(avg_shs, learning_velocity, variance, content_eff)
     grade = _get_teacher_grade(cvi)
     struggling = sum(1 for v in shs_values if v < 50)
     excelling = sum(1 for v in shs_values if v >= 80)
+
+    # Three CVI-specific alerts from schoolanalysis.md
     alert_msg = None
-    if len(shs_values) > 0 and struggling >= max(1, len(shs_values) * 0.3):
+    if avg_video > 85 and content_eff < 60:
+        alert_msg = "High engagement but low comprehension — content may be too complex"
+    elif avg_video < 50 and content_eff < 60:
+        alert_msg = "Low engagement AND comprehension — teaching approach needs revision"
+    elif variance > 25:
+        alert_msg = "Large performance gap — some students being left behind"
+    elif struggling >= max(1, len(shs_values) * 0.3):
         alert_msg = f"{struggling} student(s) below SHS 50 — immediate attention needed"
+
     return {
         "avg_shs": round(avg_shs, 2),
         "cvi_score": round(cvi, 2),
@@ -1929,6 +2067,8 @@ def _compute_class_cvi_metrics(shs_values: list, hw_rates: list) -> dict:
         "total": len(shs_values),
         "teacher_grade": grade,
         "alert_message": alert_msg,
+        "learning_velocity": round(learning_velocity, 2),
+        "avg_video": round(avg_video, 2),
     }
 
 
@@ -1960,7 +2100,21 @@ async def get_teacher_analytics_overview(
         students = await execute_query(_LIVE_SHS_SQL, cid, teacher_id)
         shs_vals = [float(s["shs_score"] or 0) for s in students]
         hw_vals = [float(s["homework_rate"] or 0) for s in students]
-        m = _compute_class_cvi_metrics(shs_vals, hw_vals)
+        vid_vals = [float(s["video_rate"] or 0) for s in students]
+
+        # Real learning velocity from student_health_scores (weekly vs monthly)
+        vel_row = await execute_one(
+            "SELECT AVG(weekly_shs) AS avg_weekly, AVG(monthly_shs) AS avg_monthly FROM student_health_scores WHERE class_id = $1::uuid",
+            cid,
+        )
+        avg_monthly = float(vel_row["avg_monthly"] or 0) if vel_row else 0.0
+        if avg_monthly > 0:
+            raw_vel = float(vel_row["avg_weekly"] or 0) - avg_monthly
+            learning_velocity = min(max((raw_vel + 10) / 20.0 * 100, 0), 100)
+        else:
+            learning_velocity = 50.0
+
+        m = _compute_class_cvi_metrics(shs_vals, hw_vals, vid_vals, learning_velocity)
         class_analytics.append({
             "class_id": cid,
             "class_name": cls["name"],
@@ -1974,6 +2128,8 @@ async def get_teacher_analytics_overview(
             "total_students": m["total"],
             "teacher_grade": m["teacher_grade"],
             "alert_message": m["alert_message"],
+            "learning_velocity": m["learning_velocity"],
+            "avg_video": m["avg_video"],
         })
 
     cvi_scores = [c["cvi_score"] for c in class_analytics]

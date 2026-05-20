@@ -709,17 +709,23 @@ async def get_student_shs(current_user: dict = Depends(require_student)):
                 COALESCE((SELECT COUNT(*) FROM attendance WHERE student_id = $2::uuid AND class_id = $1::uuid), 0) AS total_days,
                 COALESCE((SELECT SUM(CASE WHEN is_present THEN 1 ELSE 0 END) FROM attendance WHERE student_id = $2::uuid AND class_id = $1::uuid), 0) AS present_days,
 
-                -- HOMEWORK: grade-based (marks_awarded/total_marks * 100)
+                -- HOMEWORK: best submission per homework (retakes never lower grade)
                 COALESCE((
                     SELECT ROUND(COALESCE(AVG(CASE
-                        WHEN hs.marks_awarded IS NOT NULL AND h.total_marks > 0
-                            THEN (hs.marks_awarded / h.total_marks * 100)
-                        WHEN hs.submission_status IN ('submitted','late','in_progress')
+                        WHEN best.marks_awarded IS NOT NULL AND h.total_marks > 0
+                            THEN (best.marks_awarded / h.total_marks * 100)
+                        WHEN best.submission_status IN ('submitted','late','in_progress')
                             THEN 75
                         ELSE 0
                     END), 0), 2)
                     FROM homeworks h
-                    LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = $2::uuid
+                    LEFT JOIN (
+                        SELECT DISTINCT ON (homework_id)
+                            homework_id, marks_awarded, submission_status
+                        FROM homework_submissions
+                        WHERE student_id = $2::uuid
+                        ORDER BY homework_id, marks_awarded DESC NULLS LAST, submitted_at DESC
+                    ) best ON best.homework_id = h.id
                     WHERE h.class_id = $1::uuid AND h.status = 'published'
                 ), 0) AS homework_rate,
                 (SELECT COUNT(DISTINCT h.id) FROM homeworks h WHERE h.class_id = $1::uuid AND h.status = 'published') AS total_homeworks,
@@ -777,56 +783,42 @@ async def get_student_shs(current_user: dict = Depends(require_student)):
         ar = float(row["attendance_rate"] or 0)
         hr = float(row["homework_rate"] or 0)
 
-        # Get behavioral metrics for new SHS formula
-        submission_data = await execute_one(
-            """SELECT COALESCE(ROUND(100.0 * COUNT(CASE WHEN hs.submission_status IN ('submitted','late','reviewed','returned') THEN 1 END)
-               / NULLIF(COUNT(DISTINCT h.id), 0), 2), 0) AS submission_rate
-               FROM homeworks h
-               LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = $1::uuid
-               WHERE h.class_id = $2::uuid AND h.status = 'published'""",
-            student_id, class_id,
+        # Behavioral: topic revisits + homework retakes for this class
+        behav_row = await execute_one(
+            """
+            SELECT
+                LEAST(COALESCE((
+                    SELECT COUNT(DISTINCT stp2.topic_id) / 5.0 * 100
+                    FROM student_topic_progress stp2
+                    JOIN teacher_topic_content ttc2 ON ttc2.library_topic_id = stp2.topic_id
+                    JOIN teacher_class_subject_assignments tcsa2 ON tcsa2.teacher_id = ttc2.teacher_id
+                        AND tcsa2.class_id = $1::uuid
+                    WHERE stp2.student_id = $2::uuid
+                      AND stp2.lecture_watch_percent > 0
+                ), 0), 100) AS revisit_score,
+                LEAST(COALESCE((
+                    SELECT COUNT(*) / 3.0 * 100
+                    FROM (
+                        SELECT hs3.homework_id
+                        FROM homework_submissions hs3
+                        JOIN homeworks h3 ON h3.id = hs3.homework_id
+                        WHERE hs3.student_id = $2::uuid AND h3.class_id = $1::uuid
+                        GROUP BY hs3.homework_id HAVING COUNT(*) > 1
+                    ) r
+                ), 0), 100) AS retake_score
+            """,
+            class_id, student_id,
         )
-        submission_rate = float(submission_data["submission_rate"] or 0)
+        behavioral_score = round(
+            float(behav_row["revisit_score"] or 0) * 0.50
+            + float(behav_row["retake_score"] or 0) * 0.50, 2
+        ) if behav_row else 0.0
 
-        retakes_data = await execute_one(
-            """SELECT COALESCE(AVG(attempt_count), 0) AS avg_attempts
-               FROM (SELECT COUNT(*) AS attempt_count FROM homework_submissions
-                     WHERE student_id = $1::uuid AND homework_id IN
-                     (SELECT h.id FROM homeworks h WHERE h.class_id = $2::uuid AND h.status = 'published')
-                     GROUP BY homework_id) sub""",
-            student_id, class_id,
-        )
-        homework_retakes_avg = float(retakes_data["avg_attempts"] or 0) - 1 if retakes_data and retakes_data["avg_attempts"] else 0
-
-        revisits_data = await execute_one(
-            """SELECT COALESCE(AVG(revisit_count), 0) AS avg_revisits FROM student_topic_progress
-               WHERE student_id = $1::uuid AND topic_id IN
-               (SELECT lt.id FROM library_topics lt
-                JOIN library_chapters ch ON ch.id = lt.chapter_id
-                JOIN library_books b ON b.id = ch.book_id
-                JOIN teacher_class_subject_assignments tcsa ON tcsa.library_book_id = b.id
-                WHERE tcsa.class_id = $2::uuid)""",
-            student_id, class_id,
-        )
-        topic_revisits_avg = float(revisits_data["avg_revisits"] or 0)
-
-        duration_data = await execute_one(
-            """SELECT COALESCE(SUM(duration_minutes), 0) AS total_minutes FROM student_session_logs
-               WHERE student_id = $1::uuid AND class_id = $2::uuid
-               AND login_at >= CURRENT_DATE - INTERVAL '30 days'""",
-            student_id, class_id,
-        )
-        study_duration_minutes = float(duration_data["total_minutes"] or 0)
-
-        # Calculate SHS using new formula (25-40-20-15)
-        shs, consistency_score, behavioral_score = calculate_live_shs(
+        shs = calculate_live_shs(
             video_rate=vr,
-            homework_rate=hr,
+            homework_grade=hr,
             attendance_rate=ar,
-            homework_submission_rate=submission_rate,
-            homework_retakes_avg=homework_retakes_avg,
-            topic_revisits_avg=topic_revisits_avg,
-            study_duration_minutes=study_duration_minutes,
+            behavioral_score=behavioral_score,
         )
 
         if shs < 40:
@@ -861,16 +853,10 @@ async def get_student_shs(current_user: dict = Depends(require_student)):
                 "marks_earned": float(row["marks_earned"] or 0),
                 "total_marks_available": float(row["total_marks_available"] or 0),
             },
-            "consistency": {
-                "rate": consistency_score,
+            "components": {
+                "video": vr,
+                "homework": hr,
                 "attendance": ar,
-                "submission": submission_rate,
-            },
-            "behavioral": {
-                "rate": behavioral_score,
-                "homework_retakes_avg": round(homework_retakes_avg, 2),
-                "topic_revisits_avg": round(topic_revisits_avg, 2),
-                "study_duration_minutes": int(study_duration_minutes),
             },
             # per-book breakdown so the student can see which subject they're behind in
             "books": [
