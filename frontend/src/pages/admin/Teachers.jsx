@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 import api from "../../services/api";
 import { PageSpinner } from "../../components/common/Spinner";
 import Modal from "../../components/common/Modal";
@@ -23,11 +24,14 @@ import { setAdminPreviewTeacher } from "../../utils/adminPreviewTeacher";
 
 export default function AdminTeachers() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [teachers, setTeachers] = useState([]);
   const [schools, setSchools] = useState([]);
+  const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterSchoolId, setFilterSchoolId] = useState("");
+  const [filterBranchId, setFilterBranchId] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState(null);
   const [selectedTeacher, setSelectedTeacher] = useState(null);
@@ -65,12 +69,29 @@ export default function AdminTeachers() {
     loadTeachers();
   }, []);
 
+  // Load branches when school is selected
+  useEffect(() => {
+    if (!filterSchoolId) {
+      setBranches([]);
+      setFilterBranchId("");
+      return;
+    }
+    adminService
+      .getSchoolBranches(filterSchoolId)
+      .then((res) => setBranches(res.data || []))
+      .catch(() => setBranches([]));
+  }, [filterSchoolId]);
+
+  // Get school-filtered list for role-based access
+  const availableSchools = user?.role === "super_admin" ? schools : schools.filter((s) => s.admin_id === user?.id);
+
   const filtered = teachers.filter((t) => {
     const matchesSearch =
       t.full_name?.toLowerCase().includes(search.toLowerCase()) ||
       t.email?.toLowerCase().includes(search.toLowerCase());
     const matchesSchool = !filterSchoolId || t.school_id === filterSchoolId;
-    return matchesSearch && matchesSchool;
+    const matchesBranch = !filterBranchId || t.branch_id === filterBranchId;
+    return matchesSearch && matchesSchool && matchesBranch;
   });
 
   const handleDeleteTeacher = async () => {
@@ -173,19 +194,36 @@ export default function AdminTeachers() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-3 mb-5">
+      <div className="flex gap-3 mb-5 flex-wrap">
         <select
           value={filterSchoolId}
-          onChange={(e) => setFilterSchoolId(e.target.value)}
+          onChange={(e) => {
+            setFilterSchoolId(e.target.value);
+            setFilterBranchId("");
+          }}
           className="rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
         >
           <option value="">All Schools</option>
-          {schools.map((s) => (
+          {availableSchools.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
             </option>
           ))}
         </select>
+        {filterSchoolId && (
+          <select
+            value={filterBranchId}
+            onChange={(e) => setFilterBranchId(e.target.value)}
+            className="rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+          >
+            <option value="">All Branches</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+        )}
         <div className="relative flex-1 max-w-sm">
           <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
           <input
