@@ -593,13 +593,13 @@ function ClassRow({ cls, onEdit, onDelete, onLinkSubjects, branchName, schoolNam
       <span className="text-xs font-medium text-indigo-600 flex-shrink-0 hidden sm:inline">
         Open section
       </span>
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-1">
+      <div className="flex items-center gap-1 ml-1">
         <button
           onClick={(e) => {
             e.stopPropagation();
             if (typeof onLinkSubjects === "function") onLinkSubjects(cls);
           }}
-          className="p-1.5 text-gray-400 hover:text-emerald-600 rounded-md hover:bg-emerald-50"
+          className="p-1.5 text-gray-400 hover:text-emerald-600 rounded-md hover:bg-emerald-50 transition-colors"
           title="Link subjects"
         >
           <BookOpenIcon className="h-4 w-4" />
@@ -609,7 +609,8 @@ function ClassRow({ cls, onEdit, onDelete, onLinkSubjects, branchName, schoolNam
             e.stopPropagation();
             if (typeof onEdit === "function") onEdit(cls);
           }}
-          className="p-1.5 text-gray-400 hover:text-indigo-600 rounded-md hover:bg-indigo-50"
+          className="p-1.5 text-gray-400 hover:text-indigo-600 rounded-md hover:bg-indigo-50 transition-colors"
+          title="Edit class"
         >
           <PencilSquareIcon className="h-4 w-4" />
         </button>
@@ -618,7 +619,8 @@ function ClassRow({ cls, onEdit, onDelete, onLinkSubjects, branchName, schoolNam
             e.stopPropagation();
             if (typeof onDelete === "function") onDelete(cls);
           }}
-          className="p-1.5 text-gray-400 hover:text-red-600 rounded-md hover:bg-red-50"
+          className="p-1.5 text-gray-400 hover:text-red-600 rounded-md hover:bg-red-50 transition-colors"
+          title="Delete class"
         >
           <TrashIcon className="h-4 w-4" />
         </button>
@@ -781,6 +783,21 @@ function BranchPanel({ branch, branchClasses, branchTeacherCount, onEdit, onDele
         // Edit single class
         if (!classForm.grade_level.trim()) throw new Error("Class level is required.");
         const sectionVal = classForm.section?.startsWith("custom_") ? "" : classForm.section;
+
+        // Check if trying to change to a section that already exists (excluding current class)
+        const isDuplicate = branchClasses.some(
+          (c) => c.id !== editingClass.id && // exclude the class being edited
+                 c.grade_level === classForm.grade_level &&
+                 ((sectionVal && c.section === sectionVal) || (!sectionVal && !c.section))
+        );
+
+        if (isDuplicate) {
+          const displayName = sectionVal
+            ? `Class ${classForm.grade_level} - Section ${sectionVal}`
+            : `Class ${classForm.grade_level}`;
+          throw new Error(`${displayName} already exists. Choose another name.`);
+        }
+
         const computedName = sectionVal ? `${classForm.grade_level} - ${sectionVal}` : classForm.grade_level;
 
         await adminService.updateClass(editingClass.id, {
@@ -794,6 +811,20 @@ function BranchPanel({ branch, branchClasses, branchTeacherCount, onEdit, onDele
         if (creationMode === "single") {
           if (!classForm.grade_level.trim()) throw new Error("Class level is required.");
           const sectionVal = classForm.section?.startsWith("custom_") ? "" : classForm.section;
+
+          // Check if class+section already exists
+          const isDuplicate = branchClasses.some(
+            (c) => c.grade_level === classForm.grade_level &&
+                   ((sectionVal && c.section === sectionVal) || (!sectionVal && !c.section))
+          );
+
+          if (isDuplicate) {
+            const displayName = sectionVal
+              ? `Class ${classForm.grade_level} - Section ${sectionVal}`
+              : `Class ${classForm.grade_level}`;
+            throw new Error(`${displayName} already exists. Choose another name.`);
+          }
+
           const computedName = sectionVal ? `${classForm.grade_level} - ${sectionVal}` : classForm.grade_level;
 
           await adminService.createClass({
@@ -809,6 +840,20 @@ function BranchPanel({ branch, branchClasses, branchTeacherCount, onEdit, onDele
           const range = getRange(multiForm.type, multiForm.from, multiForm.to);
           if (range.length === 0) throw new Error("Invalid range selected.");
           if (range.length > 50) throw new Error("Cannot create more than 50 classes at once.");
+
+          // Check for duplicates in the range
+          const existingSections = branchClasses
+            .filter((c) => c.grade_level === multiForm.grade_level)
+            .map((c) => c.section)
+            .filter(Boolean);
+
+          const duplicates = range.filter((sec) => existingSections.includes(sec));
+          if (duplicates.length > 0) {
+            throw new Error(
+              `Section(s) "${duplicates.join(", ")}" already exist in Class ${multiForm.grade_level}. ` +
+              `Choose different names.`
+            );
+          }
 
           // Create concurrently
           await Promise.all(

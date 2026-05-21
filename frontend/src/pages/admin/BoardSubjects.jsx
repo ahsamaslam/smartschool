@@ -12,7 +12,6 @@ import {
   TrashIcon,
   ChevronRightIcon,
   MagnifyingGlassIcon,
-  LinkIcon,
 } from "@heroicons/react/24/outline";
 
 export default function BoardSubjects() {
@@ -27,18 +26,13 @@ export default function BoardSubjects() {
   const [selectedSubject, setSelectedSubject] = useState(null);
   const [subjectBooks, setSubjectBooks] = useState([]);
   const [booksLoading, setBooksLoading] = useState(false);
-  const [allSubjects, setAllSubjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
 
   // Modals
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showLinkModal, setShowLinkModal] = useState(false);
-  const [showDeleteModal, setShowDeleteModal] = useState(null);
   const [subjectForm, setSubjectForm] = useState({ name: "", description: "" });
-  const [linkIds, setLinkIds] = useState([]);
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -66,17 +60,6 @@ export default function BoardSubjects() {
     loadData();
   }, [loadData]);
 
-  const openLinkModal = async () => {
-    try {
-      const res = await libraryService.getAllSubjects();
-      const all = res?.data?.data || res?.data || [];
-      setAllSubjects(Array.isArray(all) ? all : []);
-      setLinkIds(subjects.map((s) => s.id));
-      setShowLinkModal(true);
-    } catch {
-      toast.error("Failed to load subjects.");
-    }
-  };
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -126,19 +109,6 @@ export default function BoardSubjects() {
     }
   };
 
-  const handleSaveLinks = async () => {
-    setSaving(true);
-    try {
-      await libraryService.setBoardSubjects(boardId, { subject_ids: linkIds });
-      toast.success("Subjects updated.");
-      setShowLinkModal(false);
-      loadData();
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || "Failed to update subjects.");
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const handleUnlink = async (subject) => {
     try {
@@ -151,10 +121,6 @@ export default function BoardSubjects() {
     }
   };
 
-  const toggleLink = (id) =>
-    setLinkIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
 
   const filtered = subjects.filter((s) =>
     s.name.toLowerCase().includes(search.toLowerCase())
@@ -204,22 +170,13 @@ export default function BoardSubjects() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <button
-            onClick={openLinkModal}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-gray-700 text-sm font-semibold hover:bg-gray-50 transition-colors"
-          >
-            <LinkIcon className="h-4 w-4" />
-            Link Existing
-          </button>
-          <button
-            onClick={() => { setSubjectForm({ name: "", description: "" }); setShowCreateModal(true); }}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors shadow-sm"
-          >
-            <PlusIcon className="h-4 w-4" />
-            Add Subject
-          </button>
-        </div>
+        <button
+          onClick={() => { setSubjectForm({ name: "", description: "" }); setShowCreateModal(true); }}
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors shadow-sm flex-shrink-0"
+        >
+          <PlusIcon className="h-4 w-4" />
+          Add Subject
+        </button>
       </div>
 
       {/* Search */}
@@ -388,63 +345,6 @@ export default function BoardSubjects() {
         </form>
       </Modal>
 
-      {/* Link Existing Subjects Modal */}
-      <Modal
-        isOpen={showLinkModal}
-        onClose={() => setShowLinkModal(false)}
-        title={`Link Subjects — ${board?.name || "Board"}`}
-      >
-        <div className="space-y-4">
-          {allSubjects.length === 0 ? (
-            <p className="text-sm text-gray-500 py-4 text-center">
-              No subjects in library yet.{" "}
-              <button
-                onClick={() => { setShowLinkModal(false); setShowCreateModal(true); }}
-                className="text-indigo-600 hover:underline"
-              >
-                Create one first →
-              </button>
-            </p>
-          ) : (
-            <div className="max-h-72 overflow-y-auto border border-gray-200 rounded-xl p-2 space-y-1">
-              {allSubjects.map((s) => (
-                <label
-                  key={s.id}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={linkIds.includes(s.id)}
-                    onChange={() => toggleLink(s.id)}
-                    className="rounded"
-                  />
-                  <span className="text-sm text-gray-800">{s.name}</span>
-                </label>
-              ))}
-            </div>
-          )}
-          <div className="flex gap-3">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setShowLinkModal(false)}
-              fullWidth
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="primary"
-              onClick={handleSaveLinks}
-              loading={saving}
-              disabled={allSubjects.length === 0}
-              fullWidth
-            >
-              Save
-            </Button>
-          </div>
-        </div>
-      </Modal>
     </div>
   );
 }

@@ -27,8 +27,10 @@ export default function ClassDetail() {
   const [adding, setAdding] = useState(false);
 
   const loadStudents = () => {
+    const teacherId =
+      user?.role === "admin" ? getAdminPreviewTeacherId() || user?.id : user?.id;
     teacherService
-      .getClassStudents(classId)
+      .getClassStudents(classId, teacherId)
       .then((res) => setStudents(res.data || []))
       .catch(() => setError("Failed to load students."))
       .finally(() => setLoading(false));

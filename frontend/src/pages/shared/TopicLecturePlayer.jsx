@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import libraryService from "../../services/libraryService";
 import teacherService from "../../services/teacherService";
+import learningService from "../../services/learningService";
 import { useAuth } from "../../context/AuthContext";
 import { PageSpinner } from "../../components/common/Spinner";
 
@@ -15,6 +16,41 @@ export default function TopicLecturePlayer() {
   const [topic, setTopic] = useState(null);
   const [speed, setSpeed] = useState(1);
   const videoRef = useRef(null);
+  const progressTimerRef = useRef(null);
+
+  // Focus metrics tracking
+  const focusMetricsRef = useRef({
+    pauseCount: 0,
+    rewindCount: 0,
+    lastPosition: 0,
+    totalWatchSeconds: 0,
+    watchStartTime: null,
+    dropsCount: 0
+  });
+
+  const reportProgress = useCallback((pct, posSeconds) => {
+    if (!topicId || user?.role !== "student") return;
+    learningService.updateProgress({
+      topic_id: topicId,
+      lecture_watch_percent: Math.min(100, Math.round(pct)),
+      lecture_position_seconds: posSeconds,
+      focus_metrics: focusMetricsRef.current,
+    }).catch(() => {});
+  }, [topicId, user?.role]);
+
+  // Cleanup and track drops on unmount
+  useEffect(() => {
+    return () => {
+      clearTimeout(progressTimerRef.current);
+      // Track drop if video wasn't fully watched
+      if (videoRef.current && videoRef.current.duration) {
+        const watchPercent = (videoRef.current.currentTime / videoRef.current.duration) * 100;
+        if (watchPercent < 95) {
+          focusMetricsRef.current.dropsCount += 1;
+        }
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancel = false;
@@ -96,6 +132,63 @@ export default function TopicLecturePlayer() {
           src={lectureUrl}
           controls
           className="w-full rounded-xl border border-gray-200 bg-black"
+          onPlay={() => {
+            const metrics = focusMetricsRef.current;
+            metrics.watchStartTime = Date.now();
+          }}
+          onPause={() => {
+            const v = videoRef.current;
+            if (!v || !v.duration) return;
+
+            // Track pause event
+            focusMetricsRef.current.pauseCount += 1;
+
+            // Track watch duration while playing
+            if (focusMetricsRef.current.watchStartTime) {
+              const watchDuration = (Date.now() - focusMetricsRef.current.watchStartTime) / 1000;
+              focusMetricsRef.current.totalWatchSeconds += watchDuration;
+              focusMetricsRef.current.watchStartTime = null;
+            }
+
+            clearTimeout(progressTimerRef.current);
+            progressTimerRef.current = null;
+            const pct = (v.currentTime / v.duration) * 100;
+            reportProgress(pct, v.currentTime);
+          }}
+          onTimeUpdate={() => {
+            const v = videoRef.current;
+            if (!v || !v.duration) return;
+
+            // Detect rewind (when position goes backward)
+            const metrics = focusMetricsRef.current;
+            if (v.currentTime < metrics.lastPosition - 0.5) {
+              metrics.rewindCount += 1;
+            }
+            metrics.lastPosition = v.currentTime;
+
+            // Report progress every 5 seconds
+            if (!progressTimerRef.current) {
+              progressTimerRef.current = setTimeout(() => {
+                progressTimerRef.current = null;
+                if (!videoRef.current || !videoRef.current.duration) return;
+                const pct = (videoRef.current.currentTime / videoRef.current.duration) * 100;
+                reportProgress(pct, videoRef.current.currentTime);
+              }, 5000);
+            }
+          }}
+          onEnded={() => {
+            const metrics = focusMetricsRef.current;
+            // Track final watch duration
+            if (metrics.watchStartTime) {
+              const watchDuration = (Date.now() - metrics.watchStartTime) / 1000;
+              metrics.totalWatchSeconds += watchDuration;
+              metrics.watchStartTime = null;
+            }
+
+            clearTimeout(progressTimerRef.current);
+            progressTimerRef.current = null;
+            reportProgress(100, videoRef.current?.duration || 0);
+          }}
         />
 
         <div className="mt-4 flex flex-wrap items-center gap-3">

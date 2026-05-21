@@ -160,6 +160,7 @@ const NAV_BY_ROLE = {
   ],
   manager: [
     { label: "Dashboard", to: "/manager/dashboard", icon: "HomeIcon" },
+    { label: "School", to: "/manager/schools", icon: "BuildingOfficeIcon" },
     { label: "Library", to: "/manager/library", icon: "BookOpenIcon" },
     { label: "Teachers", to: "/manager/teachers", icon: "AcademicCapIcon" },
     { label: "Students", to: "/manager/students", icon: "UserGroupIcon" },
@@ -180,6 +181,11 @@ const NAV_BY_ROLE = {
       label: "Teacher Reports",
       to: "/manager/teacher-reports",
       icon: "PresentationChartLineIcon",
+    },
+    {
+      label: "SPI Report",
+      to: "/manager/spi-report",
+      icon: "ChartPieIcon",
     },
   ],
   admin: [

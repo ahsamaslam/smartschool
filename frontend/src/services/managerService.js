@@ -91,9 +91,20 @@ const managerService = {
       responseType: "blob",
     }),
 
+  // Branches
+  createBranch: (data) => api.post(`${API_ROUTES.MANAGERS}/branches`, data),
+  updateBranch: (branchId, data) =>
+    api.put(`${API_ROUTES.MANAGERS}/branches/${branchId}`, data),
+  deleteBranch: (branchId) =>
+    api.delete(`${API_ROUTES.MANAGERS}/branches/${branchId}`),
+
   // Classes
   getClasses: (params) => api.get(`${API_ROUTES.MANAGERS}/classes`, { params }),
   createClass: (data) => api.post(`${API_ROUTES.MANAGERS}/classes`, data),
+  updateClass: (classId, data) =>
+    api.put(`${API_ROUTES.MANAGERS}/classes/${classId}`, data),
+  deleteClass: (classId) =>
+    api.delete(`${API_ROUTES.MANAGERS}/classes/${classId}`,),
 
   // Reports
   getStudentReports: (filters) =>
@@ -123,6 +134,14 @@ const managerService = {
     api.get(`${API_ROUTES.MANAGERS}/analytics/student/${studentId}`, {
       params: { period, ...(start && { start }), ...(end && { end }) },
     }),
+
+  // Curriculum (linking subjects/books to sections)
+  getSectionSubjectCatalog: (sectionId) =>
+    api.get(`${API_ROUTES.MANAGERS}/sections/${sectionId}/subject-catalog`),
+  getSectionCurriculum: (sectionId) =>
+    api.get(`${API_ROUTES.MANAGERS}/sections/${sectionId}/curriculum`),
+  saveSectionCurriculum: (sectionId, data) =>
+    api.post(`${API_ROUTES.MANAGERS}/sections/${sectionId}/curriculum`, data),
 
   // AI Predictions
   getAIPredictions: (entityType, entityId) =>

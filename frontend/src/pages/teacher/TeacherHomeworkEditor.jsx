@@ -211,13 +211,42 @@ export default function TeacherHomeworkEditor() {
       await saveDraft();
       return;
     }
+    if (!title.trim()) {
+      toast.error("Title is required");
+      return;
+    }
     setSaving(true);
     try {
+      // Save latest title/instructions/marks and questions before publishing
+      await homeworkService.update(homeworkId, {
+        title: title.trim(),
+        instructions: instructions.trim() || null,
+        total_marks: totalMarks ? Number(totalMarks) : null,
+        due_at: due ? new Date(due).toISOString() : null,
+        allowed_file_extensions: type === "upload" ? allowedExt : null,
+        allow_late_submission: allowLate,
+      });
+      if (type === "interactive") {
+        const filled = questions.filter((q) => q.question_text.trim()).map(buildQuestionPayload);
+        if (!filled.length) {
+          toast.error("Add at least one question before publishing");
+          setSaving(false);
+          return;
+        }
+        const bad = validateInteractiveQuestions(filled);
+        if (bad) {
+          toast.error(bad);
+          setSaving(false);
+          return;
+        }
+        await homeworkService.replaceQuestions(homeworkId, filled);
+      }
       await homeworkService.publish(homeworkId);
       toast.success("Published to this class");
       navigate(`/teacher/classes/${classId}/homework`);
-    } catch {
-      toast.error("Publish failed — add questions for interactive homework");
+    } catch (e) {
+      const msg = e?.response?.data?.detail;
+      toast.error(typeof msg === "string" ? msg : "Publish failed");
     } finally {
       setSaving(false);
     }

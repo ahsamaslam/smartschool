@@ -186,11 +186,25 @@ export default function StudentTopicLearn() {
       if (progressTimer.current) clearTimeout(progressTimer.current);
       progressTimer.current = setTimeout(sendVideoProgress, 2000);
     };
+    const onEnded = () => {
+      if (progressTimer.current) clearTimeout(progressTimer.current);
+      progressTimer.current = null;
+      if (!v.duration) return;
+      learningService
+        .updateProgress({
+          topic_id: String(topic.id),
+          lecture_watch_percent: 100,
+          lecture_position_seconds: v.duration,
+        })
+        .catch(() => {});
+    };
     v.addEventListener("timeupdate", onTime);
     v.addEventListener("pause", sendVideoProgress);
+    v.addEventListener("ended", onEnded);
     return () => {
       v.removeEventListener("timeupdate", onTime);
       v.removeEventListener("pause", sendVideoProgress);
+      v.removeEventListener("ended", onEnded);
       if (progressTimer.current) clearTimeout(progressTimer.current);
     };
   }, [topic?.id, sendVideoProgress]);

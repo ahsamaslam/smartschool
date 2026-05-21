@@ -130,8 +130,8 @@ export default function TeacherMyLectures() {
         limit,
         offset,
       });
-      const payload = res?.data?.data ?? res?.data;
-      const rawItems = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.items) ? payload.items : [];
+      const payload = res?.data;
+      const rawItems = Array.isArray(payload?.data) ? payload.data : [];
       setItems(rawItems);
       setTotal(Number(payload?.total) || 0);
     } catch (e) {

@@ -69,6 +69,7 @@ const TeacherMyCurriculum = lazy(() => import("./pages/teacher/MyCurriculum"));
 const TeacherSlides = lazy(() => import("./pages/teacher/Slides"));
 const TeacherRecordLecture = lazy(() => import("./pages/teacher/TeacherRecordLecture"));
 const TeacherMyLectures = lazy(() => import("./pages/teacher/MyLectures"));
+const TeacherDailyDashboard = lazy(() => import("./pages/teacher/DailyDashboard"));
 
 // Manager
 const ManagerDashboard = lazy(() => import("./pages/manager/Dashboard"));
@@ -81,6 +82,7 @@ const TeacherReportsMgr = lazy(() => import("./pages/manager/TeacherReports"));
 const ManagerTeachers = lazy(() => import("./pages/manager/Teachers"));
 const ManagerStudents = lazy(() => import("./pages/manager/Students"));
 const ManagerSettings = lazy(() => import("./pages/manager/Settings"));
+const SpiReport = lazy(() => import("./pages/manager/SpiReport"));
 
 // Admin
 const AdminDashboard = lazy(() => import("./pages/admin/Dashboard"));
@@ -124,6 +126,9 @@ const ProfilePage = lazy(() => import("./pages/shared/ProfilePage"));
 const TopicLecturePlayer = lazy(
   () => import("./pages/shared/TopicLecturePlayer"),
 );
+
+// Parent Portal
+const StudentReport = lazy(() => import("./pages/parent/StudentReport"));
 
 // ── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
@@ -190,6 +195,7 @@ export default function App() {
             />
             {/* /student/profile handled by shared ProfilePage below */}
             <Route path="/student/chat" element={<StudentChat />} />
+            <Route path="/student/report/:studentId" element={<StudentReport />} />
 
             {/* ── TEACHER (students cannot open these URLs — see TeacherRoute) ── */}
             <Route element={<TeacherRoute />}>
@@ -234,6 +240,7 @@ export default function App() {
               <Route path="/teacher/exams" element={<ExamsPage />} />
               <Route path="/teacher/exams/:examId" element={<ExamEditor />} />
               <Route path="/teacher/reports" element={<TeacherReports />} />
+              <Route path="/teacher/daily-dashboard/:classId" element={<TeacherDailyDashboard />} />
               <Route
                 path="/teacher/curriculum"
                 element={<TeacherMyCurriculum />}
@@ -277,6 +284,7 @@ export default function App() {
               path="/manager/teacher-reports"
               element={<TeacherReportsMgr />}
             />
+            <Route path="/manager/spi-report" element={<SpiReport />} />
             <Route path="/manager/teachers" element={<ManagerTeachers />} />
             <Route path="/manager/students" element={<ManagerStudents />} />
             <Route path="/manager/settings" element={<ManagerSettings />} />

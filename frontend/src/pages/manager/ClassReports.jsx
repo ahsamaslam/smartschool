@@ -21,7 +21,7 @@ const COLUMNS = [
     type: "score",
     align: "center",
   },
-  { key: "avg_quiz_score", label: "Quiz Avg", type: "score", align: "center" },
+  { key: "avg_homework_score", label: "Homework Score", type: "score", align: "center" },
 ];
 
 export default function ClassReports() {

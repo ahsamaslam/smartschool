@@ -30,6 +30,7 @@ from app.routers import (
     exams,
     homework,
     chat,
+    metrics,
 )
 from app.schemas.slides_ai import GenerateSlidesRequest, GenerateSlidesResponse
 from app.utils.ai_slide_deck import generate_slide_deck as run_generate_slide_deck
@@ -161,6 +162,9 @@ app.include_router(homework.router, prefix="/api/homework", tags=["Homework"])
 
 # Chat (academic communication, WebSocket + REST)
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
+
+# Metrics & Historical Analytics
+app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
 
 # Spec alias: POST /api/generate-slides (same handler as admin route)
 @app.post("/api/generate-slides", response_model=GenerateSlidesResponse, tags=["AI Slides"])
@@ -526,6 +530,98 @@ async def startup_event():
             "CREATE INDEX IF NOT EXISTS idx_schools_tenant ON schools(tenant_id);",
             "CREATE INDEX IF NOT EXISTS idx_branches_tenant ON branches(tenant_id);",
             "CREATE INDEX IF NOT EXISTS idx_classes_tenant ON classes(tenant_id);",
+            # Historical Metrics & Snapshot System
+            """CREATE TABLE IF NOT EXISTS daily_student_metrics (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+                date DATE NOT NULL,
+                video_completion_rate NUMERIC(5,2) DEFAULT 0,
+                homework_submission_rate NUMERIC(5,2) DEFAULT 0,
+                attendance_rate NUMERIC(5,2) DEFAULT 0,
+                homework_retakes_avg NUMERIC(5,2) DEFAULT 0,
+                topic_revisits_avg NUMERIC(5,2) DEFAULT 0,
+                study_duration_minutes NUMERIC(8,2) DEFAULT 0,
+                daily_shs NUMERIC(5,2),
+                risk_level VARCHAR(20),
+                consistency_score NUMERIC(5,2),
+                behavioral_score NUMERIC(5,2),
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(student_id, class_id, date)
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_daily_metrics_student ON daily_student_metrics(student_id);",
+            "CREATE INDEX IF NOT EXISTS idx_daily_metrics_class ON daily_student_metrics(class_id);",
+            "CREATE INDEX IF NOT EXISTS idx_daily_metrics_date ON daily_student_metrics(date);",
+            """CREATE TABLE IF NOT EXISTS student_health_scores (
+                student_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+                current_shs NUMERIC(5,2),
+                weekly_shs NUMERIC(5,2),
+                monthly_shs NUMERIC(5,2),
+                momentum NUMERIC(5,2),
+                risk_level VARCHAR(20),
+                last_updated TIMESTAMP DEFAULT NOW(),
+                UNIQUE(student_id, class_id)
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_health_student ON student_health_scores(student_id);",
+            """CREATE TABLE IF NOT EXISTS performance_alerts (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                alert_type VARCHAR(50),
+                severity VARCHAR(20),
+                student_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                class_id UUID REFERENCES classes(id) ON DELETE CASCADE,
+                teacher_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                message TEXT,
+                action_required TEXT,
+                is_resolved BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT NOW(),
+                resolved_at TIMESTAMP,
+                UNIQUE(alert_type, student_id, class_id, DATE(created_at))
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_alerts_student ON performance_alerts(student_id);",
+            "CREATE INDEX IF NOT EXISTS idx_alerts_teacher ON performance_alerts(teacher_id);",
+            "CREATE INDEX IF NOT EXISTS idx_alerts_severity ON performance_alerts(severity);",
+            # Video focus metrics
+            """CREATE TABLE IF NOT EXISTS video_focus_metrics (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                topic_id UUID NOT NULL,
+                date DATE DEFAULT CURRENT_DATE,
+                pause_count INTEGER DEFAULT 0,
+                rewind_count INTEGER DEFAULT 0,
+                drops_count INTEGER DEFAULT 0,
+                avg_watch_speed NUMERIC(3,2) DEFAULT 1.0,
+                total_watch_seconds INTEGER DEFAULT 0,
+                video_duration_seconds INTEGER DEFAULT 0,
+                focus_score NUMERIC(5,2),
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(student_id, topic_id, date)
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_focus_student ON video_focus_metrics(student_id);",
+            "CREATE INDEX IF NOT EXISTS idx_focus_date ON video_focus_metrics(date);",
+            # Update student_topic_progress to track revisits
+            "ALTER TABLE student_topic_progress ADD COLUMN IF NOT EXISTS revisit_count INTEGER DEFAULT 1;",
+            "ALTER TABLE student_topic_progress ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMP DEFAULT NOW();",
+            # Update student_session_logs for login/logout tracking
+            "ALTER TABLE student_session_logs ADD COLUMN IF NOT EXISTS login_at TIMESTAMP DEFAULT NOW();",
+            "ALTER TABLE student_session_logs ADD COLUMN IF NOT EXISTS logout_at TIMESTAMP;",
+            "ALTER TABLE student_session_logs ADD COLUMN IF NOT EXISTS duration_minutes INTEGER;",
+            # AI Performance Insights table
+            """CREATE TABLE IF NOT EXISTS ai_performance_insights (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                entity_type VARCHAR(20),
+                entity_id UUID,
+                analysis_date DATE,
+                predictions JSONB,
+                recommendations JSONB,
+                confidence_score NUMERIC(5,2),
+                updated_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(entity_type, entity_id, analysis_date)
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_insights_entity ON ai_performance_insights(entity_type, entity_id);",
+            "CREATE INDEX IF NOT EXISTS idx_insights_date ON ai_performance_insights(analysis_date);",
         ]
         for sql in migrations:
             try:
@@ -717,13 +813,46 @@ async def startup_event():
     except Exception as e:
         logger.error(f"❌ Admin bootstrap failed: {str(e)}")
 
+    # Start background job schedulers
+    try:
+        import asyncio
+        from app.utils.historical_metrics import run_daily_metrics_job
+        from app.utils.ai_predictions import run_weekly_ai_analysis_job
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+        scheduler = AsyncIOScheduler()
+
+        # Daily metrics job: 00:00 UTC every day
+        scheduler.add_job(run_daily_metrics_job, 'cron', hour=0, minute=0, id='daily_metrics_job')
+        logger.info("✅ Daily metrics job scheduled (00:00 UTC)")
+
+        # Weekly AI analysis job: Monday at 06:00 UTC (analyze at-risk students)
+        scheduler.add_job(run_weekly_ai_analysis_job, 'cron', day_of_week='mon', hour=6, minute=0, id='weekly_ai_job')
+        logger.info("✅ Weekly AI analysis job scheduled (Monday 06:00 UTC)")
+
+        scheduler.start()
+        app.state.scheduler = scheduler
+        logger.info("✅ All background job schedulers started")
+    except ImportError:
+        logger.warning("⚠️  APScheduler not installed. Background jobs will not run automatically.")
+    except Exception as e:
+        logger.warning(f"⚠️  Could not start background job schedulers: {str(e)}")
+
     logger.info("✅ Education Platform API Started Successfully!")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
     logger.info("🛑 Education Platform API Shutting Down...")
-    
+
+    # Shutdown scheduler
+    try:
+        if hasattr(app.state, 'scheduler') and app.state.scheduler.running:
+            app.state.scheduler.shutdown()
+            logger.info("✅ Metrics scheduler shutdown")
+    except Exception as e:
+        logger.warning(f"⚠️  Error shutting down scheduler: {str(e)}")
+
     # Close Redis connection
     try:
         from app.utils.cache import close_cache
@@ -731,7 +860,7 @@ async def shutdown_event():
         logger.info("✅ Redis cache closed")
     except Exception as e:
         logger.warning(f"⚠️  Error closing cache: {str(e)}")
-    
+
     # Close database connections
     try:
         from app.utils.database import close_db

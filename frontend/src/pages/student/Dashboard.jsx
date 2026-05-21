@@ -8,13 +8,29 @@ import PerformanceChart from "../../components/student/PerformanceChart";
 import AttendanceBarChart from "../../components/student/AttendanceBarChart";
 import { PageSpinner } from "../../components/common/Spinner";
 import Alert from "../../components/common/Alert";
-import { ChevronRightIcon } from "@heroicons/react/24/outline";
+import { ChevronRightIcon, ExclamationTriangleIcon } from "@heroicons/react/24/outline";
+
+const RISK_CONFIG = {
+  critical:   { label: "Critical",   bg: "bg-red-50",     border: "border-red-200",    text: "text-red-700",    score: "text-red-600"    },
+  at_risk:    { label: "At-Risk",    bg: "bg-amber-50",   border: "border-amber-200",  text: "text-amber-700",  score: "text-amber-600"  },
+  stable:     { label: "Stable",     bg: "bg-green-50",   border: "border-green-200",  text: "text-green-700",  score: "text-green-600"  },
+  excelling:  { label: "Excelling",  bg: "bg-blue-50",    border: "border-blue-200",   text: "text-blue-700",   score: "text-blue-600"   },
+};
+
+function SHSBar({ value, color = "bg-indigo-500" }) {
+  return (
+    <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+      <div className={`h-1.5 rounded-full ${color}`} style={{ width: `${Math.min(100, Math.max(0, value))}%` }} />
+    </div>
+  );
+}
 
 export default function StudentDashboard() {
   const { user } = useAuth();
   const [subjects, setSubjects] = useState([]);
   const [learnSummary, setLearnSummary] = useState(null);
   const [attendanceSummary, setAttendanceSummary] = useState(null);
+  const [shsData, setShsData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -25,11 +41,13 @@ export default function StudentDashboard() {
       studentService.getDashboard(user.id).catch(() => ({ data: {} })),
       learningService.getDashboardSummary().catch(() => null),
       studentService.getAttendanceSummary(user.id).catch(() => ({ data: null })),
+      learningService.getSHS().catch(() => ({ data: [] })),
     ])
-      .then(([dash, summary, attendance]) => {
+      .then(([dash, summary, attendance, shs]) => {
         setSubjects(dash.data?.subjects || []);
         setLearnSummary(summary?.data || null);
         setAttendanceSummary(attendance?.data || null);
+        setShsData(Array.isArray(shs?.data) ? shs.data : []);
       })
       .catch(() => setError("Failed to load dashboard."))
       .finally(() => setLoading(false));
@@ -115,6 +133,107 @@ export default function StudentDashboard() {
           </p>
         </div>
       </div>
+
+      {/* SHS Health Score Section */}
+      {shsData.length > 0 && (
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">
+              Student Health Score (SHS)
+            </h2>
+            <p className="text-xs text-gray-400">Video × 0.25 · Attendance × 0.35 · Homework × 0.40</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {shsData.map((cls) => {
+              const risk = RISK_CONFIG[cls.risk_level] || RISK_CONFIG.stable;
+              const books = cls.books || [];
+              const multiBook = books.filter(b => b.total_lectures > 0).length > 1;
+              return (
+                <div key={cls.class_id} className={`rounded-2xl border ${risk.border} ${risk.bg} p-5`}>
+                  {/* Header */}
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <p className="font-semibold text-gray-900 text-sm">{cls.class_name}</p>
+                      {cls.section && <p className="text-xs text-gray-400">{cls.section}</p>}
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-3xl font-black ${risk.score}`}>{cls.shs.toFixed(1)}</p>
+                      <span className={`text-xs font-bold uppercase ${risk.text}`}>{risk.label}</span>
+                    </div>
+                  </div>
+
+                  {/* Overall component bars */}
+                  <div className="space-y-2">
+                    <div>
+                      <div className="flex justify-between text-xs text-gray-500 mb-0.5">
+                        <span>Video (25%)</span>
+                        <span>{cls.video.watched_count}/{cls.video.total_lectures} lectures · {cls.video.rate.toFixed(0)}%</span>
+                      </div>
+                      <SHSBar value={cls.video.rate} color="bg-indigo-400" />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-xs text-gray-500 mb-0.5">
+                        <span>Attendance (35%)</span>
+                        <span>{cls.attendance.present_days}/{cls.attendance.total_days} days · {cls.attendance.rate.toFixed(0)}%</span>
+                      </div>
+                      <SHSBar value={cls.attendance.rate} color="bg-emerald-400" />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-xs text-gray-500 mb-0.5">
+                        <span>Homework (40%)</span>
+                        <span>
+                          {cls.homework.graded_count > 0 && cls.homework.total_marks_available > 0
+                            ? `${cls.homework.marks_earned?.toFixed(0)}/${cls.homework.total_marks_available?.toFixed(0)} marks · ${cls.homework.rate.toFixed(0)}%`
+                            : `${cls.homework.submitted_count}/${cls.homework.total_homeworks} done · ${cls.homework.rate.toFixed(0)}%`}
+                        </span>
+                      </div>
+                      <SHSBar value={cls.homework.rate} color="bg-violet-400" />
+                    </div>
+                  </div>
+
+                  {/* Per-book video breakdown (only when multiple books) */}
+                  {multiBook && (
+                    <div className="mt-4 pt-3 border-t border-white/50">
+                      <p className="text-xs font-semibold text-gray-600 mb-2">Video by Subject</p>
+                      <div className="space-y-2">
+                        {books.map((b, i) => (
+                          <div key={i}>
+                            <div className="flex justify-between text-xs text-gray-500 mb-0.5">
+                              <span className="truncate max-w-[55%]" title={`${b.subject_name} — ${b.book_title}`}>
+                                {b.subject_name}
+                              </span>
+                              <span>
+                                {b.total_lectures > 0
+                                  ? `${b.watched_count}/${b.total_lectures} · ${b.video_rate.toFixed(0)}%`
+                                  : "No lectures"}
+                              </span>
+                            </div>
+                            {b.total_lectures > 0 && (
+                              <SHSBar value={b.video_rate} color={b.video_rate >= 75 ? "bg-indigo-500" : b.video_rate >= 40 ? "bg-amber-400" : "bg-red-400"} />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* At-risk tip */}
+                  {(cls.risk_level === "critical" || cls.risk_level === "at_risk") && (
+                    <div className="mt-3 flex items-start gap-1.5 text-xs text-amber-700 bg-white/60 rounded-lg px-2.5 py-1.5">
+                      <ExclamationTriangleIcon className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                      {cls.video.rate < cls.attendance.rate && cls.video.rate < cls.homework.rate
+                        ? "Watch more lectures (≥75%) to boost your Video score."
+                        : cls.homework.rate < cls.attendance.rate && cls.homework.rate < cls.video.rate
+                        ? "Submit pending homework to raise your score."
+                        : "Improve your attendance to raise your SHS."}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 mb-8">
         <div className="xl:col-span-2 bg-white rounded-2xl shadow-sm border border-gray-200 p-5">

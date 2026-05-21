@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import clsx from "clsx";
 import { KeyIcon } from "@heroicons/react/24/outline";
 import teacherService from "../../services/teacherService";
@@ -9,6 +9,8 @@ import toast from "react-hot-toast";
  * per business guide requirement
  */
 export default function StudentList({ students = [], classId }) {
+  const navigate = useNavigate();
+
   const handlePasswordReset = async (studentId, name) => {
     try {
       await teacherService.sendPasswordReset(studentId);
@@ -18,9 +20,11 @@ export default function StudentList({ students = [], classId }) {
     }
   };
 
+  // SHS risk thresholds: <40 critical, 40-59 at-risk, 60-79 stable, >=80 excelling
   const scoreColor = (score) => {
-    if (score >= 80) return "text-green-600 bg-green-50";
-    if (score >= 60) return "text-amber-600 bg-amber-50";
+    if (score >= 80) return "text-blue-700 bg-blue-50";
+    if (score >= 60) return "text-green-600 bg-green-50";
+    if (score >= 40) return "text-amber-600 bg-amber-50";
     return "text-red-600 bg-red-50";
   };
 
@@ -56,7 +60,6 @@ export default function StudentList({ students = [], classId }) {
             <th className="text-left py-3 px-4">Student</th>
             <th className="text-center py-3 px-4">Video %</th>
             <th className="text-center py-3 px-4">Attendance %</th>
-            <th className="text-center py-3 px-4">Quiz Avg</th>
             <th className="text-center py-3 px-4">Homework</th>
             <th className="text-center py-3 px-4">Overall</th>
             <th className="text-center py-3 px-4">Rank</th>
@@ -67,14 +70,13 @@ export default function StudentList({ students = [], classId }) {
           {students.map((s) => {
             const overall = Math.round(s.overall_score || 0);
             return (
-              <tr key={s.id} className="hover:bg-gray-50 transition-colors">
+              <tr
+                key={s.id}
+                className="hover:bg-indigo-50 transition-colors cursor-pointer"
+                onClick={() => navigate(`/teacher/classes/${classId}/student/${s.id}`)}
+              >
                 <td className="py-3 px-4">
-                  <Link
-                    to={`/teacher/classes/${classId}/student/${s.id}`}
-                    className="font-medium text-gray-900 hover:text-blue-600"
-                  >
-                    {s.full_name}
-                  </Link>
+                  <p className="font-medium text-gray-900">{s.full_name}</p>
                   <p className="text-xs text-gray-400">{s.email}</p>
                 </td>
                 <td className="py-3 px-4">
@@ -88,9 +90,6 @@ export default function StudentList({ students = [], classId }) {
                     {Math.round(s.attendance_rate || 0)}%
                     {bar(s.attendance_rate)}
                   </div>
-                </td>
-                <td className="py-3 px-4 text-center text-xs font-medium text-gray-700">
-                  {Math.round(s.average_quiz_score || 0)}%
                 </td>
                 <td className="py-3 px-4 text-center text-xs font-medium text-gray-700">
                   {s.homework_avg != null
@@ -110,7 +109,7 @@ export default function StudentList({ students = [], classId }) {
                 <td className="py-3 px-4 text-center text-xs text-gray-500 font-medium">
                   {s.ranking || "—"}
                 </td>
-                <td className="py-3 px-4 text-right">
+                <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                   <button
                     onClick={() => handlePasswordReset(s.id, s.full_name)}
                     className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
