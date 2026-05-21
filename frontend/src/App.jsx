@@ -97,6 +97,7 @@ const AdminStudentPreview = lazy(
 const AdminCurriculum = lazy(() => import("./pages/admin/Curriculum"));
 const AdminLibrary = lazy(() => import("./pages/admin/Library"));
 const AdminAIParser = lazy(() => import("./pages/admin/AIParser"));
+const AdminVideos = lazy(() => import("./pages/admin/Videos"));
 const AdminSlides = lazy(() => import("./pages/admin/Slides"));
 const AdminRecordLecture = lazy(() => import("./pages/admin/RecordLecture"));
 const AdminRecordedLectures = lazy(
@@ -337,6 +338,7 @@ export default function App() {
               path="/admin/ai-parser"
               element={superAdminOnly(<AdminAIParser />)}
             />
+            <Route path="/admin/videos" element={<AdminVideos />} />
             <Route
               path="/admin/library/topics/:topicId/present"
               element={<AdminLibraryTopicPresent />}
