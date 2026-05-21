@@ -898,16 +898,28 @@ export default function ManagerTeachers() {
       setTeachers(teachersList);
       setClasses(classList);
 
-      const branchMap = {};
+      // Extract all unique branches from both teachers and classes
+      const branchMap = new Map();
+
+      // Get branches from teachers
       teachersList.forEach((t) => {
-        if (t.branch_id) branchMap[t.branch_id] = t.branch_name;
+        if (t.branch_id) {
+          branchMap.set(t.branch_id, { id: t.branch_id, name: t.branch_name });
+        }
       });
+
+      // Get branches from classes (in case there are branches with no teachers)
       classList.forEach((c) => {
-        if (c.branch_id) branchMap[c.branch_id] = c.branch_name;
+        if (c.branch_id) {
+          branchMap.set(c.branch_id, { id: c.branch_id, name: c.branch_name });
+        }
       });
-      setBranches(
-        Object.entries(branchMap).map(([id, name]) => ({ id, name })),
-      );
+
+      // Convert to sorted array
+      const branchesArray = Array.from(branchMap.values())
+        .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+
+      setBranches(branchesArray);
     } catch (err) {
       toast.error("Failed to load data");
     } finally {
