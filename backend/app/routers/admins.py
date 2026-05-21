@@ -3323,114 +3323,11 @@ async def composite_with_teacher_pip(
 # VIDEO MANAGEMENT
 # ============================================
 
-@router.get("/videos/templates")
-async def get_all_video_templates():
-    """Get all video templates"""
-    
-    query = """
-        SELECT 
-            vt.*,
-            t.title as topic_title,
-            s.name as subject_name,
-            u.full_name as created_by_name
-        FROM video_templates vt
-        JOIN topics t ON vt.topic_id = t.id
-        JOIN subjects s ON t.subject_id = s.id
-        LEFT JOIN users u ON vt.created_by = u.id
-        ORDER BY s.name, t.order_index
-    """
-    
-    templates = await execute_query(query)
-    return [dict(template) for template in templates]
-
-
-@router.post("/videos/templates")
-async def create_video_template(
-    topic_id: str,
-    title: str,
-    video_url: str,
-    duration_seconds: int,
-    admin_id: str
-):
-    """Create new video template (without avatar)"""
-    
-    query = """
-        INSERT INTO video_templates (topic_id, title, video_url, duration_seconds, created_by)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, topic_id, title, video_url, duration_seconds
-    """
-    
-    template = await execute_one(
-        query,
-        topic_id,
-        title,
-        video_url,
-        duration_seconds,
-        admin_id
-    )
-    
-    return {
-        "message": "Video template created successfully",
-        "template": dict(template)
-    }
-
-
-@router.put("/videos/templates/{template_id}")
-async def update_video_template(
-    template_id: str,
-    title: Optional[str] = None,
-    video_url: Optional[str] = None,
-    duration_seconds: Optional[int] = None
-):
-    """Update video template"""
-    
-    updates = []
-    params = []
-    param_count = 1
-    
-    if title:
-        updates.append(f"title = ${param_count}")
-        params.append(title)
-        param_count += 1
-    
-    if video_url:
-        updates.append(f"video_url = ${param_count}")
-        params.append(video_url)
-        param_count += 1
-    
-    if duration_seconds:
-        updates.append(f"duration_seconds = ${param_count}")
-        params.append(duration_seconds)
-        param_count += 1
-    
-    if not updates:
-        raise HTTPException(status_code=400, detail="No updates provided")
-    
-    params.append(template_id)
-    
-    query = f"""
-        UPDATE video_templates
-        SET {', '.join(updates)}, updated_at = NOW()
-        WHERE id = ${param_count}
-        RETURNING id, title, video_url, duration_seconds
-    """
-    
-    template = await execute_one(query, *params)
-    
-    return {
-        "message": "Video template updated successfully",
-        "template": dict(template)
-    }
-
-
-@router.delete("/videos/templates/{template_id}")
-async def delete_video_template(template_id: str):
-    """Delete video template"""
-    
-    query = "DELETE FROM video_templates WHERE id = $1"
-    await execute_write(query, template_id)
-    
-    return {"message": "Video template deleted successfully"}
+# Video Templates endpoints disabled for Admin and Super Admin
+# @router.get("/videos/templates")
+# @router.post("/videos/templates")
+# @router.put("/videos/templates/{template_id}")
+# @router.delete("/videos/templates/{template_id}")
 
 
 # ============================================
