@@ -1888,6 +1888,24 @@ async def create_school_class(body: CreateClassRequest, current_user: dict = Dep
     return dict(cls)
 
 
+@router.delete("/classes/{class_id}")
+async def delete_school_class(class_id: str, current_user: dict = Depends(require_manager)):
+    """Delete a class (branch must belong to manager's school)."""
+    cls = await execute_one("SELECT branch_id FROM classes WHERE id = $1::uuid", class_id)
+    if not cls:
+        raise HTTPException(status_code=404, detail="Class not found")
+
+    branch = await execute_one("SELECT school_id, tenant_id FROM branches WHERE id = $1::uuid", cls["branch_id"])
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    _assert_school_access(current_user, str(branch["school_id"]))
+    await _assert_tenant_access(current_user, branch.get("tenant_id"))
+
+    await execute_write("DELETE FROM classes WHERE id = $1::uuid", class_id)
+    return {"ok": True}
+
+
 @router.get("/branches/{branch_id}/overview")
 async def get_branch_overview(branch_id: str, current_user: dict = Depends(require_manager)):  # noqa: ARG001
     """
