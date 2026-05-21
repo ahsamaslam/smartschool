@@ -217,13 +217,6 @@ function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onManageSectio
           >
             <PlusIcon className="h-3 w-3" /> Section
           </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete(classes[0]); }}
-            className="opacity-0 group-hover/classgroup:opacity-100 transition-opacity inline-flex items-center gap-1 px-2 py-1 rounded-md bg-red-50 text-red-700 hover:bg-red-100 text-xs font-semibold"
-            title="Delete entire class"
-          >
-            <TrashIcon className="h-3 w-3" /> Class
-          </button>
         </div>
       </div>
 
@@ -332,12 +325,6 @@ function BranchPanel({ branch, branchClasses, onEdit, onDelete, onRefresh }) {
           if (!classForm.grade_level.trim()) throw new Error("Class level is required.");
           const sectionVal = classForm.section?.startsWith("custom_") ? "" : classForm.section;
 
-          // Check if class (grade level) already exists
-          const classExists = branchClasses.some((c) => c.grade_level === classForm.grade_level);
-          if (classExists) {
-            throw new Error(`Class ${classForm.grade_level} already exists. Please choose a different class level.`);
-          }
-
           const isDuplicate = branchClasses.some(
             (c) => c.grade_level === classForm.grade_level &&
                    ((sectionVal && c.section === sectionVal) || (!sectionVal && !c.section))
@@ -361,13 +348,6 @@ function BranchPanel({ branch, branchClasses, onEdit, onDelete, onRefresh }) {
           toast.success("Class created!");
         } else {
           if (!multiForm.grade_level.trim()) throw new Error("Class level is required.");
-
-          // Check if class (grade level) already exists
-          const classExists = branchClasses.some((c) => c.grade_level === multiForm.grade_level);
-          if (classExists) {
-            throw new Error(`Class ${multiForm.grade_level} already exists. Please choose a different class level.`);
-          }
-
           const range = getRange(multiForm.type, multiForm.from, multiForm.to);
           if (range.length === 0) throw new Error("Invalid range selected.");
           if (range.length > 50) throw new Error("Cannot create more than 50 classes at once.");

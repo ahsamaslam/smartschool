@@ -888,9 +888,10 @@ export default function ManagerTeachers() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [tRes, cRes] = await Promise.all([
+      const [tRes, cRes, sRes] = await Promise.all([
         managerService.getTeachers(),
         managerService.getClasses(),
+        managerService.getSchools(),
       ]);
       const teachersList = Array.isArray(tRes.data) ? tRes.data : [];
       const classList = Array.isArray(cRes.data) ? cRes.data : [];
@@ -898,26 +899,13 @@ export default function ManagerTeachers() {
       setTeachers(teachersList);
       setClasses(classList);
 
-      // Extract all unique branches from both teachers and classes
-      const branchMap = new Map();
-
-      // Get branches from teachers
-      teachersList.forEach((t) => {
-        if (t.branch_id) {
-          branchMap.set(t.branch_id, { id: t.branch_id, name: t.branch_name });
-        }
-      });
-
-      // Get branches from classes (in case there are branches with no teachers)
-      classList.forEach((c) => {
-        if (c.branch_id) {
-          branchMap.set(c.branch_id, { id: c.branch_id, name: c.branch_name });
-        }
-      });
-
-      // Convert to sorted array
-      const branchesArray = Array.from(branchMap.values())
-        .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+      // Extract all branches from school data
+      const schoolData = sRes.data;
+      const branchesArray = Array.isArray(schoolData?.branches)
+        ? schoolData.branches
+            .map((b) => ({ id: b.id, name: b.name }))
+            .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+        : [];
 
       setBranches(branchesArray);
     } catch (err) {
