@@ -712,17 +712,17 @@ export default function AdminStudents() {
         {[
           {
             label: "Total Students",
-            value: students.length,
+            value: filtered.length,
             color: "text-indigo-700 bg-indigo-50",
           },
           {
             label: "Active",
-            value: students.filter((s) => s.is_active).length,
+            value: filtered.filter((s) => s.is_active).length,
             color: "text-green-700 bg-green-50",
           },
           {
             label: "Inactive",
-            value: students.filter((s) => !s.is_active).length,
+            value: filtered.filter((s) => !s.is_active).length,
             color: "text-red-600 bg-red-50",
           },
         ].map((stat) => (

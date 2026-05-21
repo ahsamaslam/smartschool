@@ -843,9 +843,8 @@ export default function ManagerStudents() {
     load();
   }, [load]);
 
-  const totalStudents = students.length;
-  const activeStudents = students.filter((s) => s.is_active !== false).length;
-  const inactiveStudents = students.filter((s) => s.is_active === false).length;
+  // Stats are calculated from the filtered students (not all students)
+  // Will be updated after filteredClasses and filtered are defined below
 
   const filteredClasses = filterBranchId
     ? classes.filter((c) => c.branch_id === filterBranchId)
@@ -869,6 +868,11 @@ export default function ManagerStudents() {
       s.class_name?.toLowerCase().includes(q)
     );
   });
+
+  // Calculate stats from filtered students (updates when filters change)
+  const totalStudents = filtered.length;
+  const activeStudents = filtered.filter((s) => s.is_active !== false).length;
+  const inactiveStudents = filtered.filter((s) => s.is_active === false).length;
 
   const openBulkPromote = () => {
     const nextYear = new Date().getFullYear();
