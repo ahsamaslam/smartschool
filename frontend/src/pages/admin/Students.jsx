@@ -114,8 +114,33 @@ export default function AdminStudents() {
   const loadStudents = async () => {
     setLoading(true);
     try {
-      const res = await adminService.getStudentsLedger();
-      setStudents(res.data || []);
+      const [studentsRes, schoolsRes] = await Promise.all([
+        adminService.getStudentsLedger(),
+        adminService.getSchools(),
+      ]);
+      setStudents(studentsRes.data || []);
+      setSchools(schoolsRes.data || []);
+
+      // Fetch all branches from all schools
+      const schoolList = Array.isArray(schoolsRes.data) ? schoolsRes.data : [];
+      const branchMap = {};
+
+      const branchResults = await Promise.all(
+        schoolList.map((school) =>
+          adminService.getSchoolBranches(school.id).catch(() => ({ data: [] }))
+        )
+      );
+
+      branchResults.forEach((res) => {
+        const list = Array.isArray(res.data) ? res.data : [];
+        list.forEach((b) => {
+          if (!branchMap[b.id]) branchMap[b.id] = b.name;
+        });
+      });
+
+      setBranches(
+        Object.entries(branchMap).map(([id, name]) => ({ id, name })).sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+      );
     } catch {
       setStudents([]);
     } finally {
@@ -125,7 +150,6 @@ export default function AdminStudents() {
 
   useEffect(() => {
     loadStudents();
-    adminService.getSchools().then((res) => setSchools(res.data || []));
   }, []);
 
   useEffect(() => {
@@ -261,7 +285,7 @@ export default function AdminStudents() {
     location.pathname,
   ]);
 
-  const uniqueBranches = [...new Map(students.filter((s) => s.branch_name).map((s) => [s.branch_name, s.branch_name])).values()].sort();
+  const uniqueBranches = branches.map((b) => b.name).sort();
   const uniqueClasses = [...new Map(
     students.filter((s) => s.class_name).map((s) => {
       const key = s.class_name;
