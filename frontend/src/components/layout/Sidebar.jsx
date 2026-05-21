@@ -195,6 +195,7 @@ const NAV_BY_ROLE = {
     { label: "Library", to: "/admin/library", icon: "BookOpenIcon" },
     { label: "Teachers", to: "/admin/teachers", icon: "AcademicCapIcon" },
     { label: "Students", to: "/admin/students", icon: "UserGroupIcon" },
+    { label: "Videos", to: "/admin/videos", icon: "VideoCameraIcon" },
     { label: "Slides", to: "/admin/slides", icon: "PresentationChartBarIcon" },
     {
       label: "Recorded lectures",
@@ -213,6 +214,7 @@ const NAV_BY_ROLE = {
     { label: "AI Book Parser", to: "/admin/ai-parser", icon: "SparklesIcon" },
     { label: "Teachers", to: "/admin/teachers", icon: "AcademicCapIcon" },
     { label: "Students", to: "/admin/students", icon: "UserGroupIcon" },
+    { label: "Videos", to: "/admin/videos", icon: "VideoCameraIcon" },
     { label: "Slides", to: "/admin/slides", icon: "PresentationChartBarIcon" },
     {
       label: "Recorded lectures",
