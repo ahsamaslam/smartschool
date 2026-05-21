@@ -53,7 +53,7 @@ export default function AdminSlides() {
 
   const [topicInput, setTopicInput] = useState(topicFromLibrary?.title || "");
   const [contentInput, setContentInput] = useState(topicFromLibrary?.content_body || topicFromLibrary?.content || "");
-  const [audience, setAudience] = useState("students");
+  const [audience, setAudience] = useState("basic");
   const [tone, setTone] = useState("simple");
   const [slideCount, setSlideCount] = useState(8);
   const [persistToDb, setPersistToDb] = useState(false);
@@ -476,7 +476,7 @@ export default function AdminSlides() {
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Audience</label>
             <div className="grid grid-cols-2 gap-2">
               {[
-                ["students", "Students"],
+                ["basic", "Basic"],
                 ["advanced", "Advanced"],
               ].map(([val, label]) => (
                 <button

@@ -58,7 +58,7 @@ export default function TeacherSlides() {
   const [contentInput, setContentInput] = useState(
     topicFromLibrary?.content_body || topicFromLibrary?.content || "",
   );
-  const [audience, setAudience] = useState("students");
+  const [audience, setAudience] = useState("basic");
   const [tone, setTone] = useState("simple");
   const [slideCount, setSlideCount] = useState(8);
   const [persistToDb, setPersistToDb] = useState(false);
@@ -555,7 +555,7 @@ export default function TeacherSlides() {
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   {[
-                    ["students", "Students"],
+                    ["basic", "Basic"],
                     ["advanced", "Advanced"],
                   ].map(([val, label]) => (
                     <button
