@@ -32,6 +32,7 @@ export default function TeacherHomeworkEditor() {
   const [allowLate, setAllowLate] = useState(false);
   const [questions, setQuestions] = useState([emptyQuestion()]);
   const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState("draft");
 
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiNumMcq, setAiNumMcq] = useState(4);
@@ -70,6 +71,7 @@ export default function TeacherHomeworkEditor() {
         setInstructions(h.instructions || "");
         setTopicId(h.library_topic_id || "");
         setType(h.homework_type || "interactive");
+        setStatus(h.status || "draft");
         if (h.due_at) setDue(h.due_at.slice(0, 16));
         setAllowLate(Boolean(h.allow_late_submission));
         setTotalMarks(h.total_marks != null ? String(h.total_marks) : "");
@@ -242,11 +244,27 @@ export default function TeacherHomeworkEditor() {
         await homeworkService.replaceQuestions(homeworkId, filled);
       }
       await homeworkService.publish(homeworkId);
+      setStatus("published");
       toast.success("Published to this class");
       navigate(`/teacher/classes/${classId}/homework`);
     } catch (e) {
       const msg = e?.response?.data?.detail;
       toast.error(typeof msg === "string" ? msg : "Publish failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const unpublish = async () => {
+    setSaving(true);
+    try {
+      await homeworkService.unpublish(homeworkId);
+      setStatus("draft");
+      toast.success("Unpublished — moved to draft");
+      navigate(`/teacher/classes/${classId}/homework`);
+    } catch (e) {
+      const msg = e?.response?.data?.detail;
+      toast.error(typeof msg === "string" ? msg : "Unpublish failed");
     } finally {
       setSaving(false);
     }
@@ -622,9 +640,19 @@ export default function TeacherHomeworkEditor() {
         <Button variant="secondary" onClick={saveDraft} loading={saving}>
           Save draft
         </Button>
-        {!isNew && (
+        {!isNew && status === "draft" && (
           <Button variant="primary" onClick={publish} loading={saving}>
             Publish
+          </Button>
+        )}
+        {!isNew && status === "published" && (
+          <Button
+            variant="danger"
+            onClick={unpublish}
+            loading={saving}
+            className="bg-red-600 hover:bg-red-700"
+          >
+            Unpublish
           </Button>
         )}
       </div>

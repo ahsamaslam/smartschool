@@ -1106,9 +1106,6 @@ export default function ManagerTeachers() {
                 <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">
                   Designation
                 </th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">
-                  Status
-                </th>
                 <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   Actions
                 </th>
@@ -1144,17 +1141,6 @@ export default function ManagerTeachers() {
                   </td>
                   <td className={"px-5 py-3 text-sm text-gray-700 hidden lg:table-cell"}>
                     {teacher.designation || "N/A"}
-                  </td>
-                  <td className="px-5 py-3 hidden lg:table-cell">
-                    <span
-                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        teacher.is_active !== false
-                          ? "bg-green-50 text-green-700"
-                          : "bg-red-50 text-red-600"
-                      }`}
-                    >
-                      {teacher.is_active !== false ? "Active" : "Inactive"}
-                    </span>
                   </td>
                   <td className="px-5 py-3">
                     <div className="flex items-center justify-end gap-2">

@@ -162,19 +162,6 @@ function AddStudentModal({ isOpen, onClose, onSuccess, branches, classes }) {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Roll No.
-              </label>
-              <input
-                type="text"
-                name="student_roll_no"
-                value={form.student_roll_no}
-                onChange={handleChange}
-                placeholder="Roll number"
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
                 Guardian Name
               </label>
               <input
@@ -183,6 +170,19 @@ function AddStudentModal({ isOpen, onClose, onSuccess, branches, classes }) {
                 value={form.guardian_name}
                 onChange={handleChange}
                 placeholder="Parent / Guardian"
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Roll No.
+              </label>
+              <input
+                type="text"
+                name="student_roll_no"
+                value={form.student_roll_no}
+                onChange={handleChange}
+                placeholder="Roll number"
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
@@ -335,12 +335,12 @@ function EditStudentModal({ isOpen, onClose, onSuccess, studentId, initialData }
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Roll No.</label>
-              <input type="text" name="student_roll_no" value={form.student_roll_no || ""} onChange={handleChange} className={inputCls} />
-            </div>
-            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Guardian Name</label>
               <input type="text" name="guardian_name" value={form.guardian_name || ""} onChange={handleChange} className={inputCls} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Roll No.</label>
+              <input type="text" name="student_roll_no" value={form.student_roll_no || ""} onChange={handleChange} className={inputCls} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">

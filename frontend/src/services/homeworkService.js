@@ -26,6 +26,8 @@ const homeworkService = {
 
   publish: (homeworkId) => api.post(`${BASE}/${homeworkId}/publish`),
 
+  unpublish: (homeworkId) => api.post(`${BASE}/${homeworkId}/unpublish`),
+
   gradeSubmission: (submissionId, data) =>
     api.patch(`${BASE}/submissions/${submissionId}`, data),
 

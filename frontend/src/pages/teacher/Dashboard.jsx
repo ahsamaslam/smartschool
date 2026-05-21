@@ -132,7 +132,7 @@ export default function TeacherDashboard() {
               {classes.slice(0, 5).map((cls) => (
                 <Link
                   key={cls.id}
-                  to={`/teacher/classes/${cls.id}`}
+                  to={`/teacher/attendance?class_id=${cls.id}&locked=true`}
                   className="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-3 hover:border-indigo-200 hover:bg-indigo-50/30 transition-colors group"
                 >
                   <div>

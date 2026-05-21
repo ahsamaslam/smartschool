@@ -40,11 +40,11 @@ const Input = forwardRef(function Input(
           type={resolvedType}
           disabled={disabled}
           className={clsx(
-            "w-full rounded-lg border px-3 py-2 text-sm shadow-sm",
-            "placeholder:text-gray-400",
+            "w-full rounded-lg border px-3 py-2 text-sm shadow-sm text-gray-900",
+            "placeholder:text-gray-500",
             "focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500",
             disabled
-              ? "border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed"
+              ? "border-gray-200 bg-gray-100 text-gray-700 cursor-not-allowed"
               : error
                 ? "border-red-400 bg-red-50"
                 : "border-gray-300 bg-white hover:border-gray-400",

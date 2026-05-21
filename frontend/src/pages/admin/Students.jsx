@@ -66,6 +66,7 @@ export default function AdminStudents() {
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [filterSchool, setFilterSchool] = useState("");
   const [filterBranch, setFilterBranch] = useState("");
   const [filterClass, setFilterClass] = useState("");
   const [showCreate, setShowCreate] = useState(false);
@@ -74,6 +75,7 @@ export default function AdminStudents() {
   const [detail, setDetail] = useState(null);
   const [schools, setSchools] = useState([]);
   const [branches, setBranches] = useState([]);
+  const [branchSchoolMap, setBranchSchoolMap] = useState({});
   const [classes, setClasses] = useState([]);
   const [saving, setSaving] = useState(false);
   const [actionOpen, setActionOpen] = useState(false);
@@ -121,26 +123,30 @@ export default function AdminStudents() {
       setStudents(studentsRes.data || []);
       setSchools(schoolsRes.data || []);
 
-      // Fetch all branches from all schools
+      // Fetch branches for each school
       const schoolList = Array.isArray(schoolsRes.data) ? schoolsRes.data : [];
       const branchMap = {};
+      const schoolMap = {};
 
       const branchResults = await Promise.all(
         schoolList.map((school) =>
-          adminService.getSchoolBranches(school.id).catch(() => ({ data: [] }))
+          adminService.getSchoolBranches(school.id).then((res) => ({ schoolId: school.id, data: res })).catch(() => ({ schoolId: school.id, data: { data: [] } }))
         )
       );
 
-      branchResults.forEach((res) => {
+      branchResults.forEach(({ schoolId, data: res }) => {
         const list = Array.isArray(res.data) ? res.data : [];
         list.forEach((b) => {
-          if (!branchMap[b.id]) branchMap[b.id] = b.name;
+          if (!branchMap[b.id]) {
+            branchMap[b.id] = b.name;
+            schoolMap[b.id] = schoolId;
+          }
         });
       });
 
-      setBranches(
-        Object.entries(branchMap).map(([id, name]) => ({ id, name })).sort((a, b) => (a.name || "").localeCompare(b.name || ""))
-      );
+      const finalBranches = Object.entries(branchMap).map(([id, name]) => ({ id, name })).sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+      setBranches(finalBranches);
+      setBranchSchoolMap(schoolMap);
     } catch {
       setStudents([]);
     } finally {
@@ -285,9 +291,15 @@ export default function AdminStudents() {
     location.pathname,
   ]);
 
-  const uniqueBranches = branches.map((b) => b.name).sort();
+  const uniqueSchools = schools.map((s) => ({ id: s.id, name: s.name })).sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+
+  const filteredBranchesBySchool = filterSchool
+    ? branches.filter((b) => branchSchoolMap[b.id] === filterSchool).map((b) => b.name).sort()
+    : branches.map((b) => b.name).sort();
+
+  const uniqueBranches = filteredBranchesBySchool;
   const uniqueClasses = [...new Map(
-    students.filter((s) => s.class_name).map((s) => {
+    students.filter((s) => s.class_name && (!filterSchool || s.school_id === filterSchool)).map((s) => {
       const key = s.class_name;
       return [key, { name: s.class_name, grade_level: s.grade_level, section: s.section }];
     })
@@ -299,7 +311,7 @@ export default function AdminStudents() {
   });
   const filteredClassesByBranch = filterBranch
     ? [...new Map(
-        students.filter((s) => s.branch_name === filterBranch && s.class_name).map((s) => [s.class_name, { name: s.class_name, grade_level: s.grade_level, section: s.section }])
+        students.filter((s) => s.branch_name === filterBranch && s.class_name && (!filterSchool || s.school_id === filterSchool)).map((s) => [s.class_name, { name: s.class_name, grade_level: s.grade_level, section: s.section }])
       ).values()].sort((a, b) => {
         const ga = Number(a.grade_level) || 0;
         const gb = Number(b.grade_level) || 0;
@@ -310,6 +322,7 @@ export default function AdminStudents() {
 
   const q = search.toLowerCase();
   const filtered = students.filter((s) => {
+    if (filterSchool && s.school_id !== filterSchool) return false;
     if (filterBranch && s.branch_name !== filterBranch) return false;
     if (filterClass && s.class_name !== filterClass) return false;
     return (
@@ -775,6 +788,16 @@ export default function AdminStudents() {
           />
         </div>
         <select
+          value={filterSchool}
+          onChange={(e) => { setFilterSchool(e.target.value); setFilterBranch(""); setFilterClass(""); }}
+          className="rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+        >
+          <option value="">All Schools</option>
+          {uniqueSchools.map((s) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+        <select
           value={filterBranch}
           onChange={(e) => { setFilterBranch(e.target.value); setFilterClass(""); }}
           className="rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
@@ -850,7 +873,6 @@ export default function AdminStudents() {
                 <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Class</th>
                 <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Branch</th>
                 <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">Session</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">Status</th>
                 <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
@@ -908,11 +930,6 @@ export default function AdminStudents() {
                   </td>
                   <td className="px-5 py-3 text-sm text-gray-500 hidden lg:table-cell">
                     {student.academic_session || "—"}
-                  </td>
-                  <td className="px-5 py-3 hidden lg:table-cell">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${student.is_active ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-                      {student.is_active ? "Active" : "Inactive"}
-                    </span>
                   </td>
                   <td className="px-5 py-3 text-right">
                     <div className="flex items-center justify-end gap-1.5">
@@ -976,6 +993,13 @@ export default function AdminStudents() {
               setForm((f) => ({ ...f, full_name: e.target.value }))
             }
             required
+          />
+          <Input
+            label="Guardian Name"
+            value={form.guardian_name}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, guardian_name: e.target.value }))
+            }
           />
           <Input
             label="Email (optional)"
@@ -1073,13 +1097,6 @@ export default function AdminStudents() {
             disabled
             hint="Auto generated from start year"
             required
-          />
-          <Input
-            label="Guardian Name"
-            value={form.guardian_name}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, guardian_name: e.target.value }))
-            }
           />
           <PhoneField
             label="Primary Contact"
@@ -1641,12 +1658,11 @@ export default function AdminStudents() {
             required
           />
           <Input
-            label="Student ID (Roll No)"
-            value={editForm.student_roll_no || ""}
+            label="Guardian Name"
+            value={editForm.guardian_name || ""}
             onChange={(e) =>
-              setEditForm((f) => ({ ...f, student_roll_no: e.target.value }))
+              setEditForm((f) => ({ ...f, guardian_name: e.target.value }))
             }
-            hint="Also used as the login password — update password separately if needed"
           />
           <Input
             label="Email"
@@ -1657,11 +1673,12 @@ export default function AdminStudents() {
             hint="Leave blank to keep current email"
           />
           <Input
-            label="Guardian Name"
-            value={editForm.guardian_name || ""}
+            label="Student ID (Roll No)"
+            value={editForm.student_roll_no || ""}
             onChange={(e) =>
-              setEditForm((f) => ({ ...f, guardian_name: e.target.value }))
+              setEditForm((f) => ({ ...f, student_roll_no: e.target.value }))
             }
+            hint="Also used as the login password — update password separately if needed"
           />
           <Input
             label="Primary Contact"

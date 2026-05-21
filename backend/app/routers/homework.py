@@ -977,6 +977,27 @@ async def publish_homework(
     return {"data": dict(row)}
 
 
+@router.post("/{homework_id}/unpublish")
+async def unpublish_homework(
+    homework_id: str,
+    user: dict = Depends(get_user_from_token),
+):
+    await ensure_homework_schema()
+    uid = user["user_id"]
+    hw = await execute_one("SELECT * FROM homeworks WHERE id = $1::uuid", homework_id)
+    if not hw:
+        raise HTTPException(status_code=404, detail="Not found")
+    if user.get("role") != "admin" and str(hw["teacher_id"]) != uid:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    await execute_write(
+        "UPDATE homeworks SET status = 'draft', updated_at = NOW() WHERE id = $1::uuid",
+        homework_id,
+    )
+    row = await execute_one("SELECT * FROM homeworks WHERE id = $1::uuid", homework_id)
+    return {"data": dict(row)}
+
+
 @router.get("/teacher/list")
 async def list_teacher_homework(
     class_id: Optional[str] = None,

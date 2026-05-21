@@ -40,10 +40,10 @@ export default function Dropdown({
           onChange={handleChange}
           disabled={disabled}
           className={clsx(
-            "w-full appearance-none rounded-lg border border-gray-300 bg-white py-2 pl-3 pr-10 text-left text-sm shadow-sm",
+            "w-full appearance-none rounded-lg border border-gray-300 bg-white py-2 pl-3 pr-10 text-left text-sm shadow-sm text-gray-900",
             "focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500",
             disabled && "opacity-50 cursor-not-allowed",
-            !selected && "text-gray-400",
+            !selected && "text-gray-700",
           )}
         >
           <option value="" disabled hidden>
