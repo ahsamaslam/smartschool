@@ -6,7 +6,7 @@ import { PageSpinner } from "../../components/common/Spinner";
 import { SHSTrendChart, MomentumIndicator, ComponentBreakdownChart } from "../../components/metrics/TrendChart";
 import {
   CheckCircleIcon,
-  ExclamationIcon,
+  ExclamationTriangleIcon,
   SparklesIcon,
 } from "@heroicons/react/24/solid";
 
@@ -176,7 +176,7 @@ export default function StudentReport() {
           {predictions.topics_needing_help && predictions.topics_needing_help.length > 0 && (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 p-8 mb-8">
               <div className="flex items-center gap-2 mb-6">
-                <ExclamationIcon className="h-5 w-5 text-amber-600" />
+                <ExclamationTriangleIcon className="h-5 w-5 text-amber-600" />
                 <h3 className="text-lg font-bold text-amber-900">Topics Needing Review</h3>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
