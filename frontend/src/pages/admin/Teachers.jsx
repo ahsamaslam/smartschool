@@ -141,6 +141,37 @@ export default function AdminTeachers() {
         ]}
       />
 
+      {/* Stats banner */}
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        {[
+          {
+            label: "Total Teachers",
+            value: filtered.length,
+            color: "text-indigo-700 bg-indigo-50",
+          },
+          {
+            label: "Active",
+            value: filtered.filter((t) => t.is_active).length,
+            color: "text-green-700 bg-green-50",
+          },
+          {
+            label: "Inactive",
+            value: filtered.filter((t) => !t.is_active).length,
+            color: "text-red-600 bg-red-50",
+          },
+        ].map((stat) => (
+          <div
+            key={stat.label}
+            className={`rounded-2xl p-4 ${stat.color} border border-transparent`}
+          >
+            <p className="text-2xl font-bold tabular-nums">{stat.value}</p>
+            <p className="text-xs font-medium mt-0.5 opacity-80">
+              {stat.label}
+            </p>
+          </div>
+        ))}
+      </div>
+
       {/* Filters */}
       <div className="flex gap-3 mb-5">
         <select
