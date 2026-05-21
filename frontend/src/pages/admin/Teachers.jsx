@@ -83,7 +83,8 @@ export default function AdminTeachers() {
   }, [filterSchoolId]);
 
   // Get school-filtered list for role-based access
-  const availableSchools = user?.role === "super_admin" ? schools : schools.filter((s) => s.admin_id === user?.id);
+  // Super admin sees all schools, admin sees all schools in their tenant (backend already filters by tenant)
+  const availableSchools = schools;
 
   const filtered = teachers.filter((t) => {
     const matchesSearch =
