@@ -895,17 +895,26 @@ export default function ManagerTeachers() {
       ]);
       const teachersList = Array.isArray(tRes.data) ? tRes.data : [];
       const classList = Array.isArray(cRes.data) ? cRes.data : [];
+      const schools = Array.isArray(sRes.data) ? sRes.data : [];
 
       setTeachers(teachersList);
       setClasses(classList);
 
-      // Extract all branches from school data
-      const schoolData = sRes.data;
-      const branchesArray = Array.isArray(schoolData?.branches)
-        ? schoolData.branches
-            .map((b) => ({ id: b.id, name: b.name }))
-            .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
-        : [];
+      // Get branches from the manager's school
+      let branchesArray = [];
+      if (schools.length > 0) {
+        const schoolId = schools[0].id;
+        try {
+          const branchesRes = await managerService.getSchoolBranches(schoolId);
+          branchesArray = Array.isArray(branchesRes.data)
+            ? branchesRes.data
+                .map((b) => ({ id: b.id, name: b.name }))
+                .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+            : [];
+        } catch (err) {
+          console.error("Failed to load branches:", err);
+        }
+      }
 
       setBranches(branchesArray);
     } catch (err) {
