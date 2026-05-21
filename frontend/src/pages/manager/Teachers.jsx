@@ -904,13 +904,16 @@ export default function ManagerTeachers() {
       let branchesArray = [];
       if (schools.length > 0) {
         const schoolId = schools[0].id;
+        console.log("Manager school:", schools[0], "School ID:", schoolId);
         try {
           const branchesRes = await managerService.getSchoolBranches(schoolId);
+          console.log("Branches response:", branchesRes);
           branchesArray = Array.isArray(branchesRes.data)
             ? branchesRes.data
                 .map((b) => ({ id: b.id, name: b.name }))
                 .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
             : [];
+          console.log("Branches array:", branchesArray);
         } catch (err) {
           console.error("Failed to load branches:", err);
         }

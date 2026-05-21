@@ -2333,7 +2333,7 @@ async def get_manager_analytics_overview(
 
     for cls in classes:
         cid = str(cls["id"])
-        rows = await execute_query(_MGR_SHS_SQL, cid, "00000000-0000-0000-0000-000000000000")
+        rows = await execute_query(_MGR_SHS_SQL, cid)
         shs_vals = [float(r["shs_score"] or 0) for r in rows]
         hw_vals = [float(r["homework_rate"] or 0) for r in rows]
         att_vals = [float(r["attendance_rate"] or 0) for r in rows]
@@ -2491,7 +2491,7 @@ async def get_manager_teacher_analytics(
         )
         all_shs, all_hw = [], []
         for cls in t_classes:
-            rows = await execute_query(_MGR_SHS_SQL, str(cls["id"]), "00000000-0000-0000-0000-000000000000")
+            rows = await execute_query(_MGR_SHS_SQL, str(cls["id"]))
             all_shs.extend(float(r["shs_score"] or 0) for r in rows)
             all_hw.extend(float(r["homework_rate"] or 0) for r in rows)
 
@@ -2545,7 +2545,7 @@ async def get_manager_class_analytics(
     results = []
     for cls in class_rows:
         cid = str(cls["id"])
-        rows = await execute_query(_MGR_SHS_SQL, cid, "00000000-0000-0000-0000-000000000000")
+        rows = await execute_query(_MGR_SHS_SQL, cid)
         shs_vals = [float(r["shs_score"] or 0) for r in rows]
         hw_vals = [float(r["homework_rate"] or 0) for r in rows]
 
