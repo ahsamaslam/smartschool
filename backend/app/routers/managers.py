@@ -510,7 +510,6 @@ async def get_school_branches(school_id: str, current_user: dict = Depends(requi
         ORDER BY b.name
     """
     branches = await execute_query(query, school_id)
-    print(f"[DEBUG] get_school_branches: school_id={school_id}, branches_count={len(branches)}, branches={[dict(b) for b in branches]}")
     return [dict(b) for b in branches]
 
 
