@@ -197,15 +197,25 @@ export default function TeacherSlides() {
         subj.books?.forEach((book) => {
           if (results.length >= maxResults) return;
           const bookDetails = bookDetailsCache[book.book_id];
-          const chapters = bookDetails?.chapters || [];
+          if (!bookDetails) {
+            console.log("Book details not cached yet:", book.book_id);
+            return;
+          }
+
+          const chapters = bookDetails.chapters || bookDetails.data?.chapters || [];
+          console.log("Searching chapters:", chapters.length, "for query:", query);
 
           chapters.forEach((ch) => {
             if (results.length >= maxResults) return;
-            ch.topics?.forEach((topic) => {
+            const topics = ch.topics || ch.library_topics || [];
+            console.log("Chapter topics:", topics.length);
+
+            topics.forEach((topic) => {
               if (results.length >= maxResults) return;
 
               const matchesQuery =
                 topic.name?.toLowerCase().includes(query) ||
+                topic.title?.toLowerCase().includes(query) ||
                 ch.title?.toLowerCase().includes(query) ||
                 ch.chapter_number?.toString().includes(query) ||
                 book.book_title?.toLowerCase().includes(query);
@@ -213,7 +223,7 @@ export default function TeacherSlides() {
               if (matchesQuery) {
                 results.push({
                   id: topic.id,
-                  name: topic.name,
+                  name: topic.name || topic.title,
                   chapterNum: ch.chapter_number || "—",
                   chapterTitle: ch.title,
                   bookTitle: book.book_title,
@@ -230,6 +240,7 @@ export default function TeacherSlides() {
       });
     });
 
+    console.log("Search results:", results.length);
     return results;
   }, [curriculumSearch, curriculum, bookDetailsCache]);
 
