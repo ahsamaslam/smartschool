@@ -162,19 +162,19 @@ export default function TeacherSlides() {
     curriculum.forEach((cls) => {
       cls.subjects?.forEach((subj) => {
         subj.books?.forEach((book) => {
-          if (!bookDetailsCache[book.id]) {
-            console.log("Loading book details for:", book.id, book.title);
+          if (!bookDetailsCache[book.book_id]) {
+            console.log("Loading book details for:", book.book_id, book.book_title);
             libraryService
-              .getBookDetails(book.id)
+              .getBookDetails(book.book_id)
               .then((res) => {
-                console.log("Book details loaded:", book.id, res.data);
+                console.log("Book details loaded:", book.book_id, res.data);
                 setBookDetailsCache((prev) => ({
                   ...prev,
-                  [book.id]: res.data,
+                  [book.book_id]: res.data,
                 }));
               })
               .catch((err) => {
-                console.error("Failed to load book details:", book.id, err);
+                console.error("Failed to load book details:", book.book_id, err);
               });
           }
         });
@@ -196,7 +196,7 @@ export default function TeacherSlides() {
         if (results.length >= maxResults) return;
         subj.books?.forEach((book) => {
           if (results.length >= maxResults) return;
-          const bookDetails = bookDetailsCache[book.id];
+          const bookDetails = bookDetailsCache[book.book_id];
           const chapters = bookDetails?.chapters || [];
 
           chapters.forEach((ch) => {
@@ -208,7 +208,7 @@ export default function TeacherSlides() {
                 topic.name?.toLowerCase().includes(query) ||
                 ch.title?.toLowerCase().includes(query) ||
                 ch.chapter_number?.toString().includes(query) ||
-                book.title?.toLowerCase().includes(query);
+                book.book_title?.toLowerCase().includes(query);
 
               if (matchesQuery) {
                 results.push({
@@ -216,9 +216,9 @@ export default function TeacherSlides() {
                   name: topic.name,
                   chapterNum: ch.chapter_number || "—",
                   chapterTitle: ch.title,
-                  bookTitle: book.title,
-                  className: cls.name,
-                  subjectName: subj.name,
+                  bookTitle: book.book_title,
+                  className: cls.class_name,
+                  subjectName: subj.subject_name,
                   topicObj: topic,
                   bookObj: book,
                   chapterObj: ch,
