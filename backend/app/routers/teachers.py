@@ -59,6 +59,16 @@ class ExamGenerationRequest(BaseModel):
     exam_format: Dict[str, int]  # {"mcq": 10, "short": 5, "long": 3}
 
 
+class CreateTeacherChapterRequest(BaseModel):
+    chapter_number: int
+    chapter_title: str
+
+
+class CreateTeacherTopicRequest(BaseModel):
+    title: str
+    content_body: Optional[str] = ""
+
+
 # ============================================
 # TEACHER DASHBOARD
 # ============================================
@@ -1488,16 +1498,6 @@ class TeacherSlideSaveRequest(BaseModel):
     slides: List[Dict]
     slide_theme: Optional[str] = None
     content_body: Optional[str] = None
-
-
-class CreateTeacherChapterRequest(BaseModel):
-    chapter_number: int
-    chapter_title: str
-
-
-class CreateTeacherTopicRequest(BaseModel):
-    title: str
-    content_body: Optional[str] = ""
 
 
 def _ttc_row_json(row: dict) -> dict:
