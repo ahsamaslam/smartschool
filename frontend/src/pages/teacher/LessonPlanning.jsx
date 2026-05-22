@@ -8,7 +8,7 @@ import { SyllabusCoverageCard } from "../../components/teacher/SyllabusCoverageC
 import teacherService from "../../services/teacherService";
 import toast from "react-hot-toast";
 
-export function LessonPlanning() {
+export default function LessonPlanning() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState("calendar");
   const [showModal, setShowModal] = useState(false);

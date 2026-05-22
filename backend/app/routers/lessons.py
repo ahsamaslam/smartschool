@@ -3,10 +3,10 @@ from datetime import date, datetime, timedelta
 from uuid import UUID
 from typing import Optional, List
 from pydantic import BaseModel
-from app.dependencies import get_current_user
-from app.db import get_db
+from app.routers.auth import get_user_from_token
+from app.utils.database import execute_query, execute_one, execute_scalar, execute_write
 
-router = APIRouter(prefix="/lessons", tags=["lessons"])
+router = APIRouter(tags=["lessons"])
 
 
 # ==================== REQUEST/RESPONSE MODELS ====================
@@ -59,9 +59,9 @@ class LessonPlanResponse(BaseModel):
 
 # ==================== HELPER FUNCTIONS ====================
 
-async def validate_teacher_assignment(db, teacher_id: str, class_id: str, library_subject_id: str, library_book_id: str):
+async def validate_teacher_assignment(teacher_id: str, class_id: str, library_subject_id: str, library_book_id: str):
     """Validate teacher has assignment for this class, subject, and book."""
-    assignment = await db.fetchrow(
+    assignment = await execute_one(
         """
         SELECT id FROM teacher_class_subject_assignments
         WHERE teacher_id = $1::uuid
@@ -78,9 +78,9 @@ async def validate_teacher_assignment(db, teacher_id: str, class_id: str, librar
         )
 
 
-async def get_lesson_plan_details(db, lesson_id: str):
+async def get_lesson_plan_details(lesson_id: str):
     """Fetch lesson plan with all related data."""
-    lesson = await db.fetchrow(
+    lesson = await execute_one(
         """
         SELECT id, teacher_id, planned_date, class_id, library_subject_id, library_book_id,
                title, description, status, duration_minutes, created_at, updated_at
@@ -93,7 +93,7 @@ async def get_lesson_plan_details(db, lesson_id: str):
         raise HTTPException(status_code=404, detail="Lesson plan not found")
 
     # Fetch class names
-    class_ids = await db.fetch(
+    class_ids = await execute_query(
         """
         SELECT DISTINCT c.id, c.name
         FROM lesson_plan_classes lpc
@@ -104,19 +104,19 @@ async def get_lesson_plan_details(db, lesson_id: str):
     )
 
     # Fetch subject name
-    subject = await db.fetchrow(
+    subject = await execute_one(
         "SELECT id, name FROM library_subjects WHERE id = $1::uuid",
         str(lesson["library_subject_id"])
     )
 
     # Fetch book title
-    book = await db.fetchrow(
+    book = await execute_one(
         "SELECT id, title FROM library_books WHERE id = $1::uuid",
         str(lesson["library_book_id"])
     )
 
     # Fetch topics
-    topics = await db.fetch(
+    topics = await execute_query(
         """
         SELECT lpt.id, lpt.library_topic_id, lpt.chapter_number, lpt.topic_title, lpt.sort_order
         FROM lesson_plan_topics lpt
@@ -157,19 +157,18 @@ async def get_lesson_plan_details(db, lesson_id: str):
 @router.post("")
 async def create_lesson_plan(
     request: CreateLessonPlanRequest,
-    current_user = Depends(get_current_user),
-    db = Depends(get_db)
+    current_user = Depends(get_user_from_token),
 ):
     """Create a new lesson plan for the authenticated teacher."""
-    teacher_id = current_user.id
+    teacher_id = current_user["user_id"]
 
     # Validate teacher has assignment for all selected classes with this subject and book
     for class_id in request.class_ids:
-        await validate_teacher_assignment(db, str(teacher_id), class_id, request.library_subject_id, request.library_book_id)
+        await validate_teacher_assignment(str(teacher_id), class_id, request.library_subject_id, request.library_book_id)
 
     # Check for duplicate lesson plan (same teacher, date, class, subject)
     for class_id in request.class_ids:
-        existing = await db.fetchrow(
+        existing = await execute_one(
             """
             SELECT id FROM lesson_plans
             WHERE teacher_id = $1::uuid
@@ -186,7 +185,7 @@ async def create_lesson_plan(
             )
 
     # Create lesson plan (use first class_id as primary, will link all in junction table)
-    lesson_id = await db.fetchval(
+    lesson_id = await execute_scalar(
         """
         INSERT INTO lesson_plans (
             teacher_id, planned_date, class_id, library_subject_id,
@@ -201,7 +200,7 @@ async def create_lesson_plan(
 
     # Link all classes to lesson plan
     for class_id in request.class_ids:
-        await db.execute(
+        await execute_write(
             """
             INSERT INTO lesson_plan_classes (lesson_plan_id, class_id)
             VALUES ($1::uuid, $2::uuid)
@@ -211,12 +210,12 @@ async def create_lesson_plan(
 
     # Link all topics to lesson plan
     for idx, topic in enumerate(request.topics):
-        topic_data = await db.fetchrow(
+        topic_data = await execute_one(
             "SELECT title, chapter_number FROM library_topics WHERE id = $1::uuid",
             topic.library_topic_id
         )
 
-        await db.execute(
+        await execute_write(
             """
             INSERT INTO lesson_plan_topics (
                 lesson_plan_id, library_topic_id, chapter_number, topic_title, sort_order
@@ -229,7 +228,7 @@ async def create_lesson_plan(
         )
 
         # Update topic_coverage_tracking with first_planned_date
-        await db.execute(
+        await execute_write(
             """
             INSERT INTO topic_coverage_tracking (
                 teacher_id, library_topic_id, class_id,
@@ -243,17 +242,16 @@ async def create_lesson_plan(
             teacher_id, topic.library_topic_id, request.class_ids[0], request.planned_date
         )
 
-    return await get_lesson_plan_details(db, str(lesson_id))
+    return await get_lesson_plan_details(str(lesson_id))
 
 
 @router.get("/{lesson_id}")
 async def get_lesson_plan(
     lesson_id: str,
-    current_user = Depends(get_current_user),
-    db = Depends(get_db)
+    current_user = Depends(get_user_from_token),
 ):
     """Get a single lesson plan by ID."""
-    lesson = await db.fetchrow(
+    lesson = await execute_one(
         "SELECT teacher_id FROM lesson_plans WHERE id = $1::uuid",
         lesson_id
     )
@@ -261,10 +259,10 @@ async def get_lesson_plan(
         raise HTTPException(status_code=404, detail="Lesson plan not found")
 
     # Verify teacher owns this lesson
-    if str(lesson["teacher_id"]) != str(current_user.id):
+    if str(lesson["teacher_id"]) != str(current_user["user_id"]):
         raise HTTPException(status_code=403, detail="You don't have permission to view this lesson")
 
-    return await get_lesson_plan_details(db, lesson_id)
+    return await get_lesson_plan_details(lesson_id)
 
 
 @router.get("/teacher/{teacher_id}")
@@ -276,12 +274,11 @@ async def list_teacher_lessons(
     status: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
-    current_user = Depends(get_current_user),
-    db = Depends(get_db)
+    current_user = Depends(get_user_from_token),
 ):
     """List teacher's lesson plans with optional filters."""
     # Verify teacher can only view own lessons
-    if str(teacher_id) != str(current_user.id):
+    if str(teacher_id) != str(current_user["user_id"]):
         raise HTTPException(status_code=403, detail="You can only view your own lessons")
 
     # Build query
@@ -324,17 +321,17 @@ async def list_teacher_lessons(
     if status:
         count_query += f" AND status = '{status}'"
 
-    total = await db.fetchval(count_query)
+    total = await execute_scalar(count_query)
 
     # Apply pagination
     offset = (page - 1) * limit
     query += f" LIMIT {limit} OFFSET {offset}"
 
-    lesson_ids = await db.fetch(query, *params)
+    lesson_ids = await execute_query(query, *params)
 
     lessons = []
     for row in lesson_ids:
-        lessons.append(await get_lesson_plan_details(db, str(row["id"])))
+        lessons.append(await get_lesson_plan_details(str(row["id"])))
 
     return {
         "total": total,
@@ -348,11 +345,10 @@ async def list_teacher_lessons(
 async def get_calendar_view(
     teacher_id: str,
     year_month: str = Query(...),  # Format: YYYY-MM
-    current_user = Depends(get_current_user),
-    db = Depends(get_db)
+    current_user = Depends(get_user_from_token),
 ):
     """Get lesson plan counts for calendar view."""
-    if str(teacher_id) != str(current_user.id):
+    if str(teacher_id) != str(current_user["user_id"]):
         raise HTTPException(status_code=403, detail="You can only view your own calendar")
 
     try:
@@ -362,7 +358,7 @@ async def get_calendar_view(
         raise HTTPException(status_code=400, detail="Invalid year_month format. Use YYYY-MM")
 
     # Get all lessons for the month
-    lessons = await db.fetch(
+    lessons = await execute_query(
         """
         SELECT planned_date, class_id
         FROM lesson_plans
@@ -383,7 +379,7 @@ async def get_calendar_view(
         dates_data[date_str]["lesson_count"] += 1
 
         # Get class name
-        cls = await db.fetchrow(
+        cls = await execute_one(
             "SELECT name FROM classes WHERE id = $1::uuid",
             lesson["class_id"]
         )
@@ -397,18 +393,17 @@ async def get_calendar_view(
 async def update_lesson_plan(
     lesson_id: str,
     request: UpdateLessonPlanRequest,
-    current_user = Depends(get_current_user),
-    db = Depends(get_db)
+    current_user = Depends(get_user_from_token),
 ):
     """Update an existing lesson plan."""
-    lesson = await db.fetchrow(
+    lesson = await execute_one(
         "SELECT teacher_id, library_subject_id, library_book_id FROM lesson_plans WHERE id = $1::uuid",
         lesson_id
     )
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson plan not found")
 
-    if str(lesson["teacher_id"]) != str(current_user.id):
+    if str(lesson["teacher_id"]) != str(current_user["user_id"]):
         raise HTTPException(status_code=403, detail="You don't have permission to edit this lesson")
 
     # Update basic fields
@@ -445,26 +440,26 @@ async def update_lesson_plan(
         updates.append("updated_at = NOW()")
         query = f"UPDATE lesson_plans SET {', '.join(updates)} WHERE id = $1::uuid"
         params.insert(0, lesson_id)
-        await db.execute(query, *params)
+        await execute_write(query, *params)
 
     # Update classes if provided
     if request.class_ids:
         # Validate teacher has assignment for all new classes
         for class_id in request.class_ids:
             await validate_teacher_assignment(
-                db, str(current_user.id), class_id,
+                db, str(current_user["user_id"]), class_id,
                 str(lesson["library_subject_id"]), str(lesson["library_book_id"])
             )
 
         # Delete old class links
-        await db.execute(
+        await execute_write(
             "DELETE FROM lesson_plan_classes WHERE lesson_plan_id = $1::uuid",
             lesson_id
         )
 
         # Add new class links
         for class_id in request.class_ids:
-            await db.execute(
+            await execute_write(
                 """
                 INSERT INTO lesson_plan_classes (lesson_plan_id, class_id)
                 VALUES ($1::uuid, $2::uuid)
@@ -475,19 +470,19 @@ async def update_lesson_plan(
     # Update topics if provided
     if request.topics:
         # Delete old topic links
-        await db.execute(
+        await execute_write(
             "DELETE FROM lesson_plan_topics WHERE lesson_plan_id = $1::uuid",
             lesson_id
         )
 
         # Add new topic links
         for idx, topic in enumerate(request.topics):
-            topic_data = await db.fetchrow(
+            topic_data = await execute_one(
                 "SELECT title, chapter_number FROM library_topics WHERE id = $1::uuid",
                 topic.library_topic_id
             )
 
-            await db.execute(
+            await execute_write(
                 """
                 INSERT INTO lesson_plan_topics (
                     lesson_plan_id, library_topic_id, chapter_number, topic_title, sort_order
@@ -499,28 +494,27 @@ async def update_lesson_plan(
                 idx
             )
 
-    return await get_lesson_plan_details(db, lesson_id)
+    return await get_lesson_plan_details(lesson_id)
 
 
 @router.delete("/{lesson_id}")
 async def delete_lesson_plan(
     lesson_id: str,
-    current_user = Depends(get_current_user),
-    db = Depends(get_db)
+    current_user = Depends(get_user_from_token),
 ):
     """Delete a lesson plan."""
-    lesson = await db.fetchrow(
+    lesson = await execute_one(
         "SELECT teacher_id FROM lesson_plans WHERE id = $1::uuid",
         lesson_id
     )
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson plan not found")
 
-    if str(lesson["teacher_id"]) != str(current_user.id):
+    if str(lesson["teacher_id"]) != str(current_user["user_id"]):
         raise HTTPException(status_code=403, detail="You don't have permission to delete this lesson")
 
     # Delete (cascade handles lesson_plan_topics and lesson_plan_classes)
-    await db.execute(
+    await execute_write(
         "DELETE FROM lesson_plans WHERE id = $1::uuid",
         lesson_id
     )
@@ -531,11 +525,10 @@ async def delete_lesson_plan(
 @router.post("/{lesson_id}/mark-complete")
 async def mark_lesson_complete(
     lesson_id: str,
-    current_user = Depends(get_current_user),
-    db = Depends(get_db)
+    current_user = Depends(get_user_from_token),
 ):
     """Mark a lesson plan as completed."""
-    lesson = await db.fetchrow(
+    lesson = await execute_one(
         """
         SELECT teacher_id, class_id FROM lesson_plans WHERE id = $1::uuid
         """,
@@ -544,11 +537,11 @@ async def mark_lesson_complete(
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson plan not found")
 
-    if str(lesson["teacher_id"]) != str(current_user.id):
+    if str(lesson["teacher_id"]) != str(current_user["user_id"]):
         raise HTTPException(status_code=403, detail="You don't have permission to mark this lesson")
 
     # Update lesson status
-    await db.execute(
+    await execute_write(
         """
         UPDATE lesson_plans
         SET status = 'completed', updated_at = NOW()
@@ -558,7 +551,7 @@ async def mark_lesson_complete(
     )
 
     # Update topic_coverage_tracking for all topics in this lesson
-    topics = await db.fetch(
+    topics = await execute_query(
         """
         SELECT library_topic_id FROM lesson_plan_topics WHERE lesson_plan_id = $1::uuid
         """,
@@ -566,7 +559,7 @@ async def mark_lesson_complete(
     )
 
     for topic in topics:
-        await db.execute(
+        await execute_write(
             """
             UPDATE topic_coverage_tracking
             SET is_covered = true, covered_at = NOW(), last_covered_date = NOW()::date
@@ -574,10 +567,10 @@ async def mark_lesson_complete(
               AND library_topic_id = $2::uuid
               AND class_id = $3::uuid
             """,
-            current_user.id, topic["library_topic_id"], lesson["class_id"]
+            current_user["user_id"], topic["library_topic_id"], lesson["class_id"]
         )
 
-    return await get_lesson_plan_details(db, lesson_id)
+    return await get_lesson_plan_details(lesson_id)
 
 
 @router.get("/{teacher_id}/syllabus-coverage")
@@ -585,11 +578,10 @@ async def get_syllabus_coverage(
     teacher_id: str,
     class_id: Optional[str] = Query(None),
     library_subject_id: Optional[str] = Query(None),
-    current_user = Depends(get_current_user),
-    db = Depends(get_db)
+    current_user = Depends(get_user_from_token),
 ):
     """Get syllabus coverage statistics for a teacher."""
-    if str(teacher_id) != str(current_user.id):
+    if str(teacher_id) != str(current_user["user_id"]):
         raise HTTPException(status_code=403, detail="You can only view your own coverage")
 
     # Get all topics in assigned books
@@ -608,7 +600,7 @@ async def get_syllabus_coverage(
         query += " AND lb.library_subject_id = $2::uuid"
         params.append(library_subject_id)
 
-    all_topics = await db.fetch(query, *params)
+    all_topics = await execute_query(query, *params)
     total_topics = len(all_topics)
 
     # Get planned topics
@@ -624,7 +616,7 @@ async def get_syllabus_coverage(
         planned_query += " AND lp.class_id = $2::uuid"
         planned_params.append(class_id)
 
-    planned = await db.fetch(planned_query, *planned_params)
+    planned = await execute_query(planned_query, *planned_params)
     planned_topic_ids = {str(p["library_topic_id"]) for p in planned}
     planned_count = len(planned_topic_ids)
 
@@ -640,7 +632,7 @@ async def get_syllabus_coverage(
         covered_query += " AND class_id = $2::uuid"
         covered_params.append(class_id)
 
-    covered = await db.fetch(covered_query, *covered_params)
+    covered = await execute_query(covered_query, *covered_params)
     covered_topic_ids = {str(c["library_topic_id"]) for c in covered}
     covered_count = len(covered_topic_ids)
 
@@ -650,7 +642,7 @@ async def get_syllabus_coverage(
         topic_id_str = str(topic["id"])
         if topic_id_str in covered_topic_ids:
             status = "covered"
-            coverage_info = await db.fetchrow(
+            coverage_info = await execute_one(
                 "SELECT covered_at FROM topic_coverage_tracking WHERE library_topic_id = $1::uuid AND teacher_id = $2::uuid AND is_covered = true LIMIT 1",
                 topic_id_str, teacher_id
             )
@@ -664,7 +656,7 @@ async def get_syllabus_coverage(
             })
         elif topic_id_str in planned_topic_ids:
             status = "planned"
-            lesson_info = await db.fetchrow(
+            lesson_info = await execute_one(
                 """
                 SELECT lp.planned_date FROM lesson_plans lp
                 JOIN lesson_plan_topics lpt ON lp.id = lpt.lesson_plan_id
