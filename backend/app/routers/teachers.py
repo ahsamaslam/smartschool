@@ -1739,7 +1739,7 @@ async def list_my_slides(
         SELECT
             ttc.id              AS id,
             ttc.library_topic_id AS topic_id,
-            lt.title            AS topic_title,
+            lt.title            AS title,
             ttc.slides_json,
             ttc.slide_theme,
             ttc.updated_at      AS created_at,
