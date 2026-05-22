@@ -132,18 +132,16 @@ export default function MySlides() {
                 </div>
 
                 <div className="flex gap-2 pt-3 mt-auto">
-                  <button
-                    onClick={() =>
-                      window.open(`/teacher/slides?view=${slide.topic_id}`)
-                    }
+                  <Link
+                    to={`/teacher/slide-viewer?topic=${slide.topic_id}`}
                     className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"
                     title="View slide"
                   >
                     <EyeIcon className="h-4 w-4" />
                     View
-                  </button>
+                  </Link>
                   <Link
-                    to={`/teacher/slides?edit=${slide.topic_id}`}
+                    to={`/teacher/slides?topic=${slide.topic_id}`}
                     className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
                     title="Edit slide"
                   >
