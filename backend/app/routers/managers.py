@@ -2927,5 +2927,165 @@ async def get_system_overview(
     """
     
     stats = await execute_one(stats_query, *params) if params else await execute_one(stats_query.replace("$1", "NULL"))
-    
+
     return dict(stats) if stats else {}
+
+
+# ============================================
+# MANAGER CHAPTER MANAGEMENT (add/edit/delete)
+# ============================================
+
+class CreateChapterRequest(BaseModel):
+    chapter_number: int
+    title: str
+
+
+class UpdateChapterRequest(BaseModel):
+    chapter_number: int
+    title: str
+
+
+@router.post("/chapters/{book_id}")
+async def manager_add_chapter(
+    book_id: str,
+    body: CreateChapterRequest,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Manager adds a new approved chapter to an existing book.
+    Chapter has teacher_id = NULL (visible to all teachers)."""
+    from app.routers.library import ensure_library_tables
+    await ensure_library_tables()
+
+    # Verify user is manager
+    user_role = current_user.get("role")
+    if user_role not in ("manager", "admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Only manager can add chapters")
+
+    book_id = (book_id or "").strip()
+
+    # Verify book exists
+    book = await execute_one(
+        "SELECT id FROM library_books WHERE id = $1::uuid",
+        book_id,
+    )
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    if not body.title or not body.title.strip():
+        raise HTTPException(status_code=400, detail="Chapter title is required")
+
+    # Create chapter with teacher_id = NULL (approved/shared)
+    try:
+        row = await execute_one(
+            """
+            INSERT INTO library_chapters (book_id, chapter_number, title, teacher_id)
+            VALUES ($1::uuid, $2, $3, NULL)
+            RETURNING id, book_id, chapter_number, title, teacher_id, created_at
+            """,
+            book_id,
+            body.chapter_number,
+            body.title.strip()[:500],
+        )
+    except Exception as e:
+        if "duplicate key" in str(e).lower() or "unique" in str(e).lower():
+            raise HTTPException(status_code=400, detail=f"Chapter {body.chapter_number} already exists for this book")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    result = dict(row)
+    result["id"] = str(result["id"])
+    result["book_id"] = str(result["book_id"])
+    return {"data": result}
+
+
+@router.put("/chapters/{chapter_id}")
+async def manager_edit_chapter(
+    chapter_id: str,
+    body: UpdateChapterRequest,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Manager edits an approved chapter (must have teacher_id = NULL)."""
+    from app.routers.library import ensure_library_tables
+    await ensure_library_tables()
+
+    # Verify user is manager
+    user_role = current_user.get("role")
+    if user_role not in ("manager", "admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Only manager can edit chapters")
+
+    chapter_id = (chapter_id or "").strip()
+
+    # Get the chapter
+    chapter = await execute_one(
+        "SELECT id, teacher_id FROM library_chapters WHERE id = $1::uuid",
+        chapter_id,
+    )
+
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    # Only allow editing approved chapters (teacher_id IS NULL)
+    if chapter["teacher_id"] is not None:
+        raise HTTPException(status_code=403, detail="Only approved chapters can be edited by manager")
+
+    if not body.title or not body.title.strip():
+        raise HTTPException(status_code=400, detail="Chapter title is required")
+
+    # Update chapter
+    updated = await execute_one(
+        """
+        UPDATE library_chapters
+        SET title = $1, chapter_number = $2
+        WHERE id = $3::uuid AND teacher_id IS NULL
+        RETURNING id, book_id, chapter_number, title, teacher_id, created_at
+        """,
+        body.title.strip()[:500],
+        body.chapter_number,
+        chapter_id,
+    )
+
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to update chapter")
+
+    result = dict(updated)
+    result["id"] = str(result["id"])
+    result["book_id"] = str(result["book_id"])
+    return {"data": result}
+
+
+@router.delete("/chapters/{chapter_id}")
+async def manager_delete_chapter(
+    chapter_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Manager deletes an approved chapter (must have teacher_id = NULL).
+    Does not affect teacher's custom copies of this chapter."""
+    from app.routers.library import ensure_library_tables
+    await ensure_library_tables()
+
+    # Verify user is manager
+    user_role = current_user.get("role")
+    if user_role not in ("manager", "admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Only manager can delete chapters")
+
+    chapter_id = (chapter_id or "").strip()
+
+    # Get the chapter
+    chapter = await execute_one(
+        "SELECT id, teacher_id FROM library_chapters WHERE id = $1::uuid",
+        chapter_id,
+    )
+
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    # Only allow deleting approved chapters (teacher_id IS NULL)
+    if chapter["teacher_id"] is not None:
+        raise HTTPException(status_code=403, detail="Only approved chapters can be deleted by manager")
+
+    # Delete chapter (cascade deletes approved topics)
+    await execute_write(
+        "DELETE FROM library_chapters WHERE id = $1::uuid AND teacher_id IS NULL",
+        chapter_id,
+    )
+
+    return {"data": {"message": "Chapter deleted successfully", "chapter_id": chapter_id}}

@@ -146,6 +146,16 @@ const managerService = {
   // AI Predictions
   getAIPredictions: (entityType, entityId) =>
     api.get(`/analytics/insights/${entityType}/${entityId}`),
+
+  // Manager chapter management (create, edit, delete approved chapters)
+  addChapter: (bookId, data) =>
+    api.post(`${API_ROUTES.MANAGERS}/chapters/${bookId}`, data),
+
+  editChapter: (chapterId, data) =>
+    api.put(`${API_ROUTES.MANAGERS}/chapters/${chapterId}`, data),
+
+  deleteChapter: (chapterId) =>
+    api.delete(`${API_ROUTES.MANAGERS}/chapters/${chapterId}`),
 };
 
 export default managerService;

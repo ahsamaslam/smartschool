@@ -64,6 +64,11 @@ class CreateTeacherChapterRequest(BaseModel):
     chapter_title: str
 
 
+class UpdateChapterRequest(BaseModel):
+    chapter_number: int
+    chapter_title: str
+
+
 class CreateTeacherTopicRequest(BaseModel):
     title: str
     content_body: Optional[str] = ""
@@ -1311,58 +1316,84 @@ async def get_teacher_book(book_id: str, current_user: dict = Depends(get_user_f
             raise HTTPException(status_code=403, detail="You are not assigned to this book")
 
     book = await execute_one(
-        "SELECT id, title, author, description FROM library_books WHERE id = $1::uuid",
+        "SELECT id, title, author FROM library_books WHERE id = $1::uuid",
         book_id,
     )
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    # Admins/super_admins see only library chapters (teacher_id IS NULL)
-    # Teachers see library chapters + their own custom chapters
+    # Fetch all relevant chapters based on role
     if role in ("admin", "super_admin"):
-        # Admins only see library chapters
+        # Admins only see library chapters (teacher_id IS NULL)
         chapters = await execute_query(
-            """SELECT id, title, order_index FROM library_chapters
+            """SELECT id, title, chapter_number, teacher_id FROM library_chapters
                WHERE book_id = $1 AND teacher_id IS NULL
-               ORDER BY order_index""",
+               ORDER BY chapter_number""",
             book_id,
         )
+        # No custom chapters for admins
+        approved_chapters = chapters
+        custom_chapters = []
     else:
         # Teachers see library chapters + their own chapters
         chapters = await execute_query(
-            """SELECT id, title, order_index FROM library_chapters
+            """SELECT id, title, chapter_number, teacher_id FROM library_chapters
                WHERE book_id = $1 AND (teacher_id IS NULL OR teacher_id = $2::uuid)
-               ORDER BY order_index""",
+               ORDER BY chapter_number""",
             book_id,
             teacher_id,
         )
+        # Separate into approved (teacher_id IS NULL) and custom (teacher_id = user)
+        # Convert both to strings for comparison since UUID object != string
+        teacher_id_str = str(teacher_id)
+        approved_chapters = [c for c in chapters if c["teacher_id"] is None]
+        custom_chapters = [c for c in chapters if c["teacher_id"] is not None and str(c["teacher_id"]) == teacher_id_str]
 
-    chapter_list = []
-    for ch in chapters:
+    # Build chapter list with topics
+    approved_list = []
+    for ch in approved_chapters:
         if role in ("admin", "super_admin"):
             # Admins only see library topics
             topics = await execute_query(
-                """SELECT id, title, order_index,
+                """SELECT id, title,
                           slides_json IS NOT NULL AND slides_json::text != 'null' as has_slides
                    FROM library_topics
                    WHERE chapter_id = $1 AND teacher_id IS NULL
-                   ORDER BY order_index""",
+                   ORDER BY created_at""",
                 ch["id"],
             )
         else:
-            # Teachers see library topics + their own topics
+            # Teachers see library topics + their own topics (for this chapter)
             topics = await execute_query(
-                """SELECT id, title, order_index,
+                """SELECT id, title,
                           slides_json IS NOT NULL AND slides_json::text != 'null' as has_slides
                    FROM library_topics
                    WHERE chapter_id = $1 AND (teacher_id IS NULL OR teacher_id = $2::uuid)
-                   ORDER BY order_index""",
+                   ORDER BY created_at""",
                 ch["id"],
                 teacher_id,
             )
-        chapter_list.append({**dict(ch), "topics": [dict(t) for t in topics]})
+        approved_list.append({**dict(ch), "topics": [dict(t) for t in topics]})
 
-    result = {**dict(book), "chapters": chapter_list}
+    custom_list = []
+    for ch in custom_chapters:
+        # Teachers see their own topics
+        topics = await execute_query(
+            """SELECT id, title,
+                      slides_json IS NOT NULL AND slides_json::text != 'null' as has_slides
+               FROM library_topics
+               WHERE chapter_id = $1 AND teacher_id = $2::uuid
+               ORDER BY created_at""",
+            ch["id"],
+            teacher_id,
+        )
+        custom_list.append({**dict(ch), "topics": [dict(t) for t in topics]})
+
+    result = {
+        **dict(book),
+        "approved_chapters": approved_list,
+        "custom_chapters": custom_list,
+    }
     return {"data": result}
 
 
@@ -1470,6 +1501,131 @@ async def create_teacher_topic(
     result["chapter_id"] = str(result["chapter_id"])
     result["teacher_id"] = str(result["teacher_id"])
     return {"data": result}
+
+
+@router.put("/chapters/{chapter_id}")
+async def edit_teacher_chapter(
+    chapter_id: str,
+    body: CreateTeacherChapterRequest,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Edit a teacher chapter with copy-on-edit logic for approved chapters.
+
+    If editing an approved chapter (teacher_id IS NULL):
+    - Creates a copy with teacher's ID if one doesn't exist
+    - Updates the copy with new data
+
+    If editing own custom chapter:
+    - Updates directly
+    """
+    from app.routers.library import ensure_library_tables
+    await ensure_library_tables()
+
+    teacher_id = str(current_user.get("user_id"))
+    chapter_id = (chapter_id or "").strip()
+
+    # Get the original chapter
+    original = await execute_one(
+        "SELECT id, book_id, chapter_number, title, teacher_id FROM library_chapters WHERE id = $1::uuid",
+        chapter_id,
+    )
+    if not original:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    # Check if this is an approved chapter (teacher_id IS NULL)
+    if original["teacher_id"] is None:
+        # Try to find teacher's custom copy
+        custom = await execute_one(
+            "SELECT id FROM library_chapters WHERE book_id = $1::uuid AND chapter_number = $2 AND teacher_id = $3::uuid",
+            original["book_id"],
+            original["chapter_number"],
+            teacher_id,
+        )
+
+        if custom:
+            # Update existing custom copy
+            chapter_to_edit = str(custom["id"])
+        else:
+            # Create new custom copy via copy-on-edit
+            try:
+                new_chapter = await execute_one(
+                    """
+                    INSERT INTO library_chapters (book_id, chapter_number, title, teacher_id)
+                    VALUES ($1::uuid, $2, $3, $4::uuid)
+                    RETURNING id, book_id, chapter_number, title, teacher_id, created_at
+                    """,
+                    original["book_id"],
+                    original["chapter_number"],
+                    original["title"],
+                    teacher_id,
+                )
+                chapter_to_edit = str(new_chapter["id"])
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Failed to create custom chapter: {str(e)}")
+    else:
+        # Teacher is editing their own chapter - verify ownership
+        if original["teacher_id"] != teacher_id:
+            raise HTTPException(status_code=403, detail="You don't have permission to edit this chapter")
+        chapter_to_edit = chapter_id
+
+    # Update the chapter with new title
+    if not body.chapter_title or not body.chapter_title.strip():
+        raise HTTPException(status_code=400, detail="Chapter title is required")
+
+    updated = await execute_one(
+        """
+        UPDATE library_chapters
+        SET title = $1, chapter_number = $2
+        WHERE id = $3::uuid
+        RETURNING id, book_id, chapter_number, title, teacher_id, created_at
+        """,
+        body.chapter_title.strip()[:500],
+        body.chapter_number,
+        chapter_to_edit,
+    )
+
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to update chapter")
+
+    result = dict(updated)
+    result["id"] = str(result["id"])
+    result["book_id"] = str(result["book_id"])
+    result["teacher_id"] = str(result["teacher_id"])
+    return {"data": result}
+
+
+@router.delete("/chapters/{chapter_id}")
+async def delete_teacher_chapter(
+    chapter_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Delete a teacher-created chapter (only own custom chapters can be deleted)."""
+    from app.routers.library import ensure_library_tables
+    await ensure_library_tables()
+
+    teacher_id = str(current_user.get("user_id"))
+    chapter_id = (chapter_id or "").strip()
+
+    # Get the chapter to verify ownership
+    chapter = await execute_one(
+        "SELECT id, teacher_id FROM library_chapters WHERE id = $1::uuid",
+        chapter_id,
+    )
+
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    # Only allow deleting own custom chapters (teacher_id = current teacher)
+    if chapter["teacher_id"] != teacher_id:
+        raise HTTPException(status_code=403, detail="You can only delete your own custom chapters")
+
+    # Delete chapter (cascade deletes topics)
+    await execute_write(
+        "DELETE FROM library_chapters WHERE id = $1::uuid",
+        chapter_id,
+    )
+
+    return {"data": {"message": "Chapter deleted successfully", "chapter_id": chapter_id}}
 
 
 @router.get("/books/{book_id}/my-chapters")

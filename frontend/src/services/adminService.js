@@ -278,6 +278,16 @@ const adminService = {
   // AI Predictions
   getAIPredictions: (entityType, entityId) =>
     api.get(`/analytics/insights/${entityType}/${entityId}`),
+
+  // Admin chapter management (create, edit, delete approved chapters)
+  addChapter: (bookId, data) =>
+    api.post(`${API_ROUTES.ADMINS}/chapters/${bookId}`, data),
+
+  editChapter: (chapterId, data) =>
+    api.put(`${API_ROUTES.ADMINS}/chapters/${chapterId}`, data),
+
+  deleteChapter: (chapterId) =>
+    api.delete(`${API_ROUTES.ADMINS}/chapters/${chapterId}`),
 };
 
 export default adminService;

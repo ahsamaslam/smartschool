@@ -133,6 +133,16 @@ const teacherService = {
   getMyChaptersForBook: (bookId) =>
     api.get(`${API_ROUTES.TEACHERS}/books/${bookId}/my-chapters`),
 
+  // Teacher chapter management (create, edit, delete custom chapters)
+  createChapter: (bookId, data) =>
+    api.post(`${API_ROUTES.TEACHERS}/books/${bookId}/chapters`, data),
+
+  editChapter: (chapterId, data) =>
+    api.put(`${API_ROUTES.TEACHERS}/chapters/${chapterId}`, data),
+
+  deleteChapter: (chapterId) =>
+    api.delete(`${API_ROUTES.TEACHERS}/chapters/${chapterId}`),
+
   // Analytics (SHS / CVI)
   getAnalyticsOverview: (period = "last_month", start, end) =>
     api.get(`${API_ROUTES.TEACHERS}/analytics/overview`, {

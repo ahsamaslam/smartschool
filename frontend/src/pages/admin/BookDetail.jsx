@@ -63,7 +63,19 @@ export default function BookDetail() {
         teacherService.getHomeworkCounts(bookId).catch(() => ({ data: { data: [] } })),
       ]);
       const data = bookRes?.data?.data ?? bookRes?.data;
-      setBook(data);
+
+      // Handle both old format (chapters) and new format (approved_chapters + custom_chapters)
+      let processedData = { ...data };
+      if (data?.approved_chapters || data?.custom_chapters) {
+        // New format: combine approved and custom for display
+        const allChapters = [...(data?.approved_chapters || []), ...(data?.custom_chapters || [])];
+        processedData.chapters = allChapters;
+      } else if (!data?.chapters) {
+        // Ensure chapters exists
+        processedData.chapters = [];
+      }
+
+      setBook(processedData);
       setContentStatus(statusRes?.data ?? {});
 
       // Build homework count map: { topic_id: count, chapter_id: count }
@@ -76,15 +88,15 @@ export default function BookDetail() {
       });
       setHomeworkCounts(counts);
 
-      if (data?.chapters?.length > 0) {
-        setExpandedChapters({ [data.chapters[0].id]: true });
+      if (processedData?.chapters?.length > 0) {
+        setExpandedChapters({ [processedData.chapters[0].id]: true });
       }
     } catch {
       toast.error("Failed to load book.");
     } finally {
       setLoading(false);
     }
-  }, [bookId]);
+  }, [bookId, user?.role]);
 
   useEffect(() => { load(); }, [load]);
 
