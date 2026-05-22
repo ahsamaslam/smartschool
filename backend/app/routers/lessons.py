@@ -281,29 +281,33 @@ async def list_teacher_lessons(
     if str(teacher_id) != str(current_user["user_id"]):
         raise HTTPException(status_code=403, detail="You can only view your own lessons")
 
-    # Build query
+    # Build query with proper parameterization
     query = "SELECT id FROM lesson_plans WHERE teacher_id = $1::uuid"
     params = [teacher_id]
     param_count = 1
 
-    if date_from:
-        param_count += 1
-        query += f" AND planned_date >= ${param_count}"
-        params.append(date_from)
+    # Parse date strings to date objects
+    date_from_obj = None
+    date_to_obj = None
+    try:
+        if date_from:
+            date_from_obj = datetime.fromisoformat(date_from).date()
+            param_count += 1
+            query += f" AND planned_date >= ${param_count}"
+            params.append(date_from_obj)
 
-    if date_to:
-        param_count += 1
-        query += f" AND planned_date <= ${param_count}"
-        params.append(date_to)
+        if date_to:
+            date_to_obj = datetime.fromisoformat(date_to).date()
+            param_count += 1
+            query += f" AND planned_date <= ${param_count}"
+            params.append(date_to_obj)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use ISO format: YYYY-MM-DD")
 
     if class_id:
-        # Filter by class using junction table
-        class_query = f"""
-            SELECT lesson_plan_id FROM lesson_plan_classes WHERE class_id = ${param_count + 1}::uuid
-        """
         param_count += 1
+        query += f" AND id IN (SELECT lesson_plan_id FROM lesson_plan_classes WHERE class_id = ${param_count}::uuid)"
         params.append(class_id)
-        query = f"SELECT * FROM ({query}) AS lp WHERE lp.id IN ({class_query})"
 
     if status:
         param_count += 1
@@ -312,16 +316,21 @@ async def list_teacher_lessons(
 
     query += " ORDER BY planned_date ASC"
 
-    # Get total count
-    count_query = f"SELECT COUNT(*) as count FROM lesson_plans WHERE teacher_id = $1::uuid"
-    if date_from:
-        count_query += f" AND planned_date >= '{date_from}'"
-    if date_to:
-        count_query += f" AND planned_date <= '{date_to}'"
+    # Get total count with same filters
+    count_query = "SELECT COUNT(*) as count FROM lesson_plans WHERE teacher_id = $1::uuid"
+    count_params = [teacher_id]
+    if date_from_obj:
+        count_params.append(date_from_obj)
+        count_query += f" AND planned_date >= ${len(count_params)}"
+    if date_to_obj:
+        count_params.append(date_to_obj)
+        count_query += f" AND planned_date <= ${len(count_params)}"
     if status:
-        count_query += f" AND status = '{status}'"
+        count_params.append(status)
+        count_query += f" AND status = ${len(count_params)}"
 
-    total = await execute_scalar(count_query)
+    total_result = await execute_one(count_query, *count_params)
+    total = total_result["count"] if total_result else 0
 
     # Apply pagination
     offset = (page - 1) * limit
@@ -358,15 +367,23 @@ async def get_calendar_view(
         raise HTTPException(status_code=400, detail="Invalid year_month format. Use YYYY-MM")
 
     # Get all lessons for the month
+    month_start = date(year, month, 1)
+    if month == 12:
+        month_end = date(year + 1, 1, 1)
+    else:
+        month_end = date(year, month + 1, 1)
+
     lessons = await execute_query(
         """
         SELECT planned_date, class_id
         FROM lesson_plans
         WHERE teacher_id = $1::uuid
-          AND DATE_TRUNC('month', planned_date::timestamp) = DATE_TRUNC('month', $2::timestamp)
+          AND planned_date >= $2
+          AND planned_date < $3
         """,
         teacher_id,
-        f"{year}-{month:02d}-01"
+        month_start,
+        month_end
     )
 
     # Get class names for each date

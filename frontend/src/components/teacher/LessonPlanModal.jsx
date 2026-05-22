@@ -33,18 +33,9 @@ export function LessonPlanModal({
   const [availableSubjects, setAvailableSubjects] = useState([]);
   const [booksWithTopics, setBooksWithTopics] = useState([]);
 
-  if (!open) return null;
-
-  // Get assigned books for dropdown
-  const uniqueBooks = assignedBooks.reduce((acc, book) => {
-    if (!acc.find((b) => b.id === book.id)) {
-      acc.push(book);
-    }
-    return acc;
-  }, []);
-
   // Get available subjects for selected book
   useEffect(() => {
+    if (!open) return;
     if (formData.bookId) {
       const book = assignedBooks.find((b) => b.id === formData.bookId);
       if (book) {
@@ -176,6 +167,16 @@ export function LessonPlanModal({
       setSaving(false);
     }
   };
+
+  if (!open) return null;
+
+  // Get assigned books for dropdown
+  const uniqueBooks = assignedBooks.reduce((acc, book) => {
+    if (!acc.find((b) => b.id === book.id)) {
+      acc.push(book);
+    }
+    return acc;
+  }, []);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
