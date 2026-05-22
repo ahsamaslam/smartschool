@@ -485,7 +485,7 @@ export default function BookDetail() {
                             onChange={(e) => setEditingChapterTitle(e.target.value)}
                             onBlur={() => {
                               if (editingChapterTitle && editingChapterTitle !== chapter.title) {
-                                teacherService.editChapter(chapter.id, { title: editingChapterTitle }).then(() => {
+                                teacherService.editChapter(chapter.id, { chapter_title: editingChapterTitle }).then(() => {
                                   toast.success("Chapter updated");
                                   load();
                                 }).catch(err => {

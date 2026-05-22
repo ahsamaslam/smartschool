@@ -65,8 +65,8 @@ class CreateTeacherChapterRequest(BaseModel):
 
 
 class UpdateChapterRequest(BaseModel):
-    chapter_number: int
-    chapter_title: str
+    chapter_number: Optional[int] = None
+    chapter_title: Optional[str] = None
 
 
 class CreateTeacherTopicRequest(BaseModel):
@@ -1506,7 +1506,7 @@ async def create_teacher_topic(
 @router.put("/chapters/{chapter_id}")
 async def edit_teacher_chapter(
     chapter_id: str,
-    body: CreateTeacherChapterRequest,
+    body: UpdateChapterRequest,
     current_user: dict = Depends(get_user_from_token),
 ):
     """Edit a teacher chapter with copy-on-edit logic for approved chapters.
@@ -1568,9 +1568,17 @@ async def edit_teacher_chapter(
             raise HTTPException(status_code=403, detail="You don't have permission to edit this chapter")
         chapter_to_edit = chapter_id
 
-    # Update the chapter with new title
-    if not body.chapter_title or not body.chapter_title.strip():
-        raise HTTPException(status_code=400, detail="Chapter title is required")
+    # Prepare update fields - use provided values or keep existing
+    new_title = body.chapter_title.strip() if body.chapter_title else original["title"]
+    new_chapter_number = body.chapter_number if body.chapter_number is not None else original["chapter_number"]
+
+    # Validate at least one field is being updated
+    if not body.chapter_title and body.chapter_number is None:
+        raise HTTPException(status_code=400, detail="At least one field (title or chapter_number) must be provided")
+
+    # Validate title if provided
+    if body.chapter_title and not body.chapter_title.strip():
+        raise HTTPException(status_code=400, detail="Chapter title cannot be empty")
 
     updated = await execute_one(
         """
@@ -1579,8 +1587,8 @@ async def edit_teacher_chapter(
         WHERE id = $3::uuid
         RETURNING id, book_id, chapter_number, title, teacher_id, created_at
         """,
-        body.chapter_title.strip()[:500],
-        body.chapter_number,
+        new_title[:500],
+        new_chapter_number,
         chapter_to_edit,
     )
 
