@@ -1533,7 +1533,8 @@ async def edit_teacher_chapter(
         raise HTTPException(status_code=404, detail="Chapter not found")
 
     # Check if this is an approved chapter (teacher_id IS NULL)
-    if original["teacher_id"] is None:
+    original_teacher_id = str(original["teacher_id"]) if original["teacher_id"] else None
+    if original_teacher_id is None:
         # Try to find teacher's custom copy
         custom = await execute_one(
             "SELECT id FROM library_chapters WHERE book_id = $1::uuid AND chapter_number = $2 AND teacher_id = $3::uuid",
@@ -1564,7 +1565,7 @@ async def edit_teacher_chapter(
                 raise HTTPException(status_code=400, detail=f"Failed to create custom chapter: {str(e)}")
     else:
         # Teacher is editing their own chapter - verify ownership
-        if original["teacher_id"] != teacher_id:
+        if original_teacher_id != teacher_id:
             raise HTTPException(status_code=403, detail="You don't have permission to edit this chapter")
         chapter_to_edit = chapter_id
 
