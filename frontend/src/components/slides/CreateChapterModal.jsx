@@ -9,6 +9,7 @@ export function CreateChapterModal({
   onChapterCreated,
   boards = [],
   preselectedBookId = null,
+  user = null,
 }) {
   const [saving, setSaving] = useState(false);
   const [boardId, setBoardId] = useState("");
@@ -71,10 +72,14 @@ export function CreateChapterModal({
 
     setSaving(true);
     try {
-      const res = await libraryService.createChapter(bookId, {
+      const payload = {
         chapter_number: parseInt(chapterNumber, 10),
         chapter_title: chapterTitle.trim(),
-      });
+      };
+      if (user?.id) {
+        payload.teacher_id = user.id;
+      }
+      const res = await libraryService.createChapter(bookId, payload);
       const newChapter = res.data?.data ?? res.data;
       if (!newChapter?.id) throw new Error("No chapter id returned");
 

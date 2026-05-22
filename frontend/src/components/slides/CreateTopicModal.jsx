@@ -10,6 +10,7 @@ export function CreateTopicModal({
   boards = [],
   bookDetailsCache = {},
   preselectedChapterId = null,
+  user = null,
 }) {
   const [saving, setSaving] = useState(false);
   const [boardId, setBoardId] = useState("");
@@ -86,10 +87,14 @@ export function CreateTopicModal({
 
     setSaving(true);
     try {
-      const res = await libraryService.createTopic(chapterId, {
+      const payload = {
         title: topicName.trim(),
         content_body: "",
-      });
+      };
+      if (user?.id) {
+        payload.teacher_id = user.id;
+      }
+      const res = await libraryService.createTopic(chapterId, payload);
       const newTopic = res.data?.data ?? res.data;
       if (!newTopic?.id) throw new Error("No topic id returned");
 

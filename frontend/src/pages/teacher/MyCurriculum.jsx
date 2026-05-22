@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 import teacherService from "../../services/teacherService";
 import libraryService from "../../services/libraryService";
 import toast from "react-hot-toast";
@@ -212,6 +213,7 @@ function ClassAccordion({ cls, onBookClick, onAddChapter, onAddTopic, forceOpen 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function TeacherMyCurriculum() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [curriculum, setCurriculum] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -368,6 +370,7 @@ export default function TeacherMyCurriculum() {
         onTopicCreated={handleTopicCreated}
         boards={boards}
         preselectedChapterId={selectedChapterId}
+        user={user}
       />
 
       <CreateChapterModal
@@ -379,6 +382,7 @@ export default function TeacherMyCurriculum() {
         onChapterCreated={handleChapterCreated}
         boards={boards}
         preselectedBookId={selectedBookId}
+        user={user}
       />
     </div>
   );
