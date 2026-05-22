@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 import libraryService from "../../services/libraryService";
 import teacherService from "../../services/teacherService";
 import { PageSpinner } from "../../components/common/Spinner";
+import { CreateTopicModal } from "../../components/slides/CreateTopicModal";
+import { CreateChapterModal } from "../../components/slides/CreateChapterModal";
 import toast from "react-hot-toast";
 import {
   BookOpenIcon,
@@ -15,12 +18,14 @@ import {
   PlayIcon,
   ArrowPathIcon,
   FilmIcon,
+  PlusIcon,
 } from "@heroicons/react/24/outline";
 
 export default function BookDetail() {
   const { bookId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [book, setBook] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -31,6 +36,10 @@ export default function BookDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deletingLecture, setDeletingLecture] = useState(false);
   const [contentStatus, setContentStatus] = useState({});
+  const [createChapterModalOpen, setCreateChapterModalOpen] = useState(false);
+  const [createTopicModalOpen, setCreateTopicModalOpen] = useState(false);
+  const [selectedChapterForTopic, setSelectedChapterForTopic] = useState(null);
+  const [boards, setBoards] = useState([]);
 
   // passed via navigate state for breadcrumb
   const boardId = location.state?.boardId;
@@ -58,6 +67,27 @@ export default function BookDetail() {
   }, [bookId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Load boards for modals
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await libraryService.getBoards();
+        const list = res.data?.data ?? res.data ?? [];
+        setBoards(Array.isArray(list) ? list : []);
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, []);
+
+  const handleChapterCreated = () => {
+    load();
+  };
+
+  const handleTopicCreated = () => {
+    load();
+  };
 
   const toggleChapter = (chapterId) =>
     setExpandedChapters((p) => ({ ...p, [chapterId]: !p[chapterId] }));
@@ -179,7 +209,16 @@ export default function BookDetail() {
       <div className="flex gap-6">
         {/* Left: Chapters & Topics tree */}
         <div className="w-80 flex-shrink-0">
-          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Chapters</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Chapters</h2>
+            <button
+              onClick={() => setCreateChapterModalOpen(true)}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-semibold hover:bg-amber-100 transition-colors"
+              title="Add chapter"
+            >
+              <PlusIcon className="h-3 w-3" /> Add
+            </button>
+          </div>
           <div className="space-y-2">
             {(book.chapters || []).map((chapter) => (
               <div key={chapter.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -206,7 +245,21 @@ export default function BookDetail() {
 
                 {/* Topics list */}
                 {expandedChapters[chapter.id] && (
-                  <div className="border-t border-gray-100 bg-gray-50/50 py-1">
+                  <div className="border-t border-gray-100 bg-gray-50/50">
+                    <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100">
+                      <span className="text-xs font-semibold text-gray-500">Topics</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedChapterForTopic(chapter.id);
+                          setCreateTopicModalOpen(true);
+                        }}
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-600 text-xs font-semibold hover:bg-indigo-100 transition-colors"
+                        title="Add topic"
+                      >
+                        <PlusIcon className="h-3 w-3" /> Add
+                      </button>
+                    </div>
                     {(chapter.topics || []).length === 0 ? (
                       <p className="text-xs text-gray-400 px-4 py-2">No topics</p>
                     ) : (
@@ -392,7 +445,23 @@ export default function BookDetail() {
 
               {/* Content body */}
               <div className="bg-white rounded-2xl border border-gray-200 p-6">
-                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Content</h3>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Content</h3>
+                  <button
+                    onClick={() =>
+                      navigate("/teacher/slides", {
+                        state: {
+                          topic: selectedTopic,
+                          libraryContext: { book, chapter: selectedChapter },
+                        },
+                      })
+                    }
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors"
+                    title="Create slides with AI"
+                  >
+                    <PlusIcon className="h-3.5 w-3.5" /> Add Content
+                  </button>
+                </div>
                 {selectedTopic.content_body ? (
                   <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap leading-relaxed">
                     {selectedTopic.content_body}
@@ -414,6 +483,27 @@ export default function BookDetail() {
           )}
         </div>
       </div>
+
+      {/* Modals */}
+      <CreateChapterModal
+        open={createChapterModalOpen}
+        onClose={() => setCreateChapterModalOpen(false)}
+        onChapterCreated={handleChapterCreated}
+        boards={boards}
+        user={user}
+      />
+
+      <CreateTopicModal
+        open={createTopicModalOpen}
+        onClose={() => {
+          setCreateTopicModalOpen(false);
+          setSelectedChapterForTopic(null);
+        }}
+        onTopicCreated={handleTopicCreated}
+        boards={boards}
+        preselectedChapterId={selectedChapterForTopic}
+        user={user}
+      />
     </div>
   );
 }
