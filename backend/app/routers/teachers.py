@@ -1359,17 +1359,22 @@ async def create_teacher_chapter(
         raise HTTPException(status_code=400, detail="Chapter title is required")
 
     # Create chapter with teacher_id for scoping
-    row = await execute_one(
-        """
-        INSERT INTO library_chapters (book_id, chapter_number, title, teacher_id)
-        VALUES ($1::uuid, $2, $3, $4::uuid)
-        RETURNING id, book_id, chapter_number, title, teacher_id, created_at
-        """,
-        book_id,
-        body.chapter_number,
-        body.chapter_title.strip()[:500],
-        teacher_id,
-    )
+    try:
+        row = await execute_one(
+            """
+            INSERT INTO library_chapters (book_id, chapter_number, title, teacher_id)
+            VALUES ($1::uuid, $2, $3, $4::uuid)
+            RETURNING id, book_id, chapter_number, title, teacher_id, created_at
+            """,
+            book_id,
+            body.chapter_number,
+            body.chapter_title.strip()[:500],
+            teacher_id,
+        )
+    except Exception as e:
+        if "duplicate key" in str(e).lower() or "unique" in str(e).lower():
+            raise HTTPException(status_code=400, detail=f"Chapter {body.chapter_number} already exists for this book")
+        raise HTTPException(status_code=400, detail=str(e))
 
     result = dict(row)
     # Normalize UUIDs to strings
@@ -1405,17 +1410,22 @@ async def create_teacher_topic(
         raise HTTPException(status_code=400, detail="Topic title is required")
 
     # Create topic with teacher_id for scoping
-    row = await execute_one(
-        """
-        INSERT INTO library_topics (chapter_id, title, content_body, teacher_id)
-        VALUES ($1::uuid, $2, $3, $4::uuid)
-        RETURNING id, chapter_id, title, content_body, teacher_id, created_at
-        """,
-        chapter_id,
-        body.title.strip()[:500],
-        body.content_body or "",
-        teacher_id,
-    )
+    try:
+        row = await execute_one(
+            """
+            INSERT INTO library_topics (chapter_id, title, content_body, teacher_id)
+            VALUES ($1::uuid, $2, $3, $4::uuid)
+            RETURNING id, chapter_id, title, content_body, teacher_id, created_at
+            """,
+            chapter_id,
+            body.title.strip()[:500],
+            body.content_body or "",
+            teacher_id,
+        )
+    except Exception as e:
+        if "duplicate key" in str(e).lower() or "unique" in str(e).lower():
+            raise HTTPException(status_code=400, detail="Topic with this name already exists in this chapter")
+        raise HTTPException(status_code=400, detail=str(e))
 
     result = dict(row)
     # Normalize UUIDs to strings
@@ -1518,6 +1528,47 @@ async def _ensure_teacher_content_table():
     """Ensure teacher_topic_content table exists (delegates to library ensure)."""
     from app.routers.library import ensure_library_tables
     await ensure_library_tables()
+
+
+@router.get("/homework-counts/{book_id}")
+async def get_homework_counts(
+    book_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Get homework counts per chapter and topic for a book (teacher-scoped).
+    Returns list of {chapter_id, topic_id, count} for all published homeworks this teacher created."""
+    await ensure_homework_schema()
+
+    teacher_id = str(current_user.get("user_id"))
+    book_id = (book_id or "").strip()
+
+    # Query homework counts grouped by chapter and topic
+    rows = await execute_query(
+        """
+        SELECT
+          library_chapter_id,
+          library_topic_id,
+          COUNT(*) as homework_count
+        FROM homeworks
+        WHERE teacher_id = $1::uuid
+          AND library_book_id = $2::uuid
+          AND status = 'published'
+        GROUP BY library_chapter_id, library_topic_id
+        """,
+        teacher_id,
+        book_id,
+    )
+
+    # Transform to list format with string UUIDs
+    result = []
+    for row in rows:
+        result.append({
+            "chapter_id": str(row["library_chapter_id"]) if row["library_chapter_id"] else None,
+            "topic_id": str(row["library_topic_id"]) if row["library_topic_id"] else None,
+            "count": row["homework_count"],
+        })
+
+    return {"data": result}
 
 
 @router.get("/topics/{topic_id}/my-content")

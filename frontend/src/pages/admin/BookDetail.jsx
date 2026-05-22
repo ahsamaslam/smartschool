@@ -36,6 +36,7 @@ export default function BookDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deletingLecture, setDeletingLecture] = useState(false);
   const [contentStatus, setContentStatus] = useState({});
+  const [homeworkCounts, setHomeworkCounts] = useState({});
   const [createChapterModalOpen, setCreateChapterModalOpen] = useState(false);
   const [createTopicModalOpen, setCreateTopicModalOpen] = useState(false);
   const [selectedChapterForTopic, setSelectedChapterForTopic] = useState(null);
@@ -49,13 +50,25 @@ export default function BookDetail() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [bookRes, statusRes] = await Promise.all([
+      const [bookRes, statusRes, homeworkRes] = await Promise.all([
         libraryService.getBookDetails(bookId),
         teacherService.getMyContentStatusForBook(bookId).catch(() => ({ data: {} })),
+        teacherService.getHomeworkCounts(bookId).catch(() => ({ data: { data: [] } })),
       ]);
       const data = bookRes?.data?.data ?? bookRes?.data;
       setBook(data);
       setContentStatus(statusRes?.data ?? {});
+
+      // Build homework count map: { topic_id: count, chapter_id: count }
+      const counts = {};
+      (homeworkRes?.data?.data || []).forEach(item => {
+        if (item.topic_id) counts[`topic_${item.topic_id}`] = item.count;
+        if (item.chapter_id) {
+          counts[`chapter_${item.chapter_id}`] = (counts[`chapter_${item.chapter_id}`] || 0) + item.count;
+        }
+      });
+      setHomeworkCounts(counts);
+
       if (data?.chapters?.length > 0) {
         setExpandedChapters({ [data.chapters[0].id]: true });
       }
@@ -247,9 +260,16 @@ export default function BookDetail() {
                   <span className="text-sm font-medium text-gray-800 flex-1 min-w-0 truncate">
                     {chapter.title}
                   </span>
-                  <span className="text-xs text-gray-400 flex-shrink-0">
-                    {(chapter.topics || []).length}
-                  </span>
+                  <div className="flex gap-2 flex-shrink-0 items-center">
+                    {homeworkCounts[`chapter_${chapter.id}`] > 0 && (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+                        📚 {homeworkCounts[`chapter_${chapter.id}`]}
+                      </span>
+                    )}
+                    <span className="text-xs text-gray-400">
+                      {(chapter.topics || []).length}
+                    </span>
+                  </div>
                 </button>
 
                 {/* Topics list */}
@@ -285,13 +305,16 @@ export default function BookDetail() {
                           <span className="text-xs text-gray-400 mt-0.5 w-5 flex-shrink-0">{idx + 1}.</span>
                           <span className="flex-1 min-w-0">
                             <span className="line-clamp-2 block">{topic.title}</span>
-                            {(contentStatus[topic.id]?.has_slides || contentStatus[topic.id]?.has_lecture) && (
+                            {(contentStatus[topic.id]?.has_slides || contentStatus[topic.id]?.has_lecture || homeworkCounts[`topic_${topic.id}`]) && (
                               <span className="flex gap-1 mt-1 flex-wrap">
                                 {contentStatus[topic.id]?.has_slides && (
                                   <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">Slides</span>
                                 )}
                                 {contentStatus[topic.id]?.has_lecture && (
                                   <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Lecture</span>
+                                )}
+                                {homeworkCounts[`topic_${topic.id}`] > 0 && (
+                                  <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-green-100 text-green-700">📚 {homeworkCounts[`topic_${topic.id}`]}</span>
                                 )}
                               </span>
                             )}

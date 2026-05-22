@@ -85,6 +85,7 @@ const teacherService = {
   // Teacher curriculum (My Books)
   getMyCurriculum: () => api.get(`${API_ROUTES.TEACHERS}/my-curriculum`),
   getTeacherBook: (bookId) => api.get(`${API_ROUTES.TEACHERS}/books/${bookId}`),
+  getHomeworkCounts: (bookId) => api.get(`${API_ROUTES.TEACHERS}/homework-counts/${bookId}`),
 
   // AI Slide generation (no admin permission required)
   generateAISlides: (data) =>
