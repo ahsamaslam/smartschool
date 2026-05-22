@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import toast from "react-hot-toast";
 import libraryService from "../../services/libraryService";
 import teacherService from "../../services/teacherService";
+import adminService from "../../services/adminService";
+import managerService from "../../services/managerService";
 import { XMarkIcon } from "@heroicons/react/24/outline";
 
 export function CreateChapterModal({
@@ -76,10 +78,20 @@ export function CreateChapterModal({
     try {
       const payload = {
         chapter_number: parseInt(chapterNumber, 10),
-        chapter_title: chapterTitle.trim(),
+        title: chapterTitle.trim(),
       };
-      // Use teacher service for teacher-scoped chapter creation
-      const res = await teacherService.createMyChapter(bookId, payload);
+
+      let res;
+      // Route to correct endpoint based on user role
+      if (user?.role === "super_admin" || user?.role === "admin") {
+        res = await adminService.addChapter(bookId, payload);
+      } else if (user?.role === "manager") {
+        res = await managerService.addChapter(bookId, payload);
+      } else {
+        // Teacher creates own chapter
+        res = await teacherService.createChapter(bookId, payload);
+      }
+
       const newChapter = res.data?.data ?? res.data;
       if (!newChapter?.id) throw new Error("No chapter id returned");
 
