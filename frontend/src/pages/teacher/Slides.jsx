@@ -1530,6 +1530,7 @@ export default function TeacherSlides() {
         boards={boards}
         bookDetailsCache={bookDetailsCache}
         user={user}
+        teacherSpecific={true}
       />
 
       <CreateChapterModal
@@ -1538,6 +1539,7 @@ export default function TeacherSlides() {
         onChapterCreated={handleChapterCreated}
         boards={boards}
         user={user}
+        teacherSpecific={true}
       />
 
       {postSavePrompt && (
