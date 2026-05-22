@@ -675,9 +675,9 @@ export default function TeacherSlides() {
                 />
                 {showSearchDropdown && searchResults.length > 0 && (
                   <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-10 max-h-64 overflow-y-auto">
-                    {searchResults.map((result) => (
+                    {searchResults.map((result, idx) => (
                       <button
-                        key={result.id}
+                        key={`${result.id}-${result.className}-${result.bookTitle}-${idx}`}
                         type="button"
                         onClick={() => {
                           handleSelectTopic(result);
