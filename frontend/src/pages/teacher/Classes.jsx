@@ -158,7 +158,7 @@ export default function TeacherClasses() {
             return (
             <Link
               key={cls.id}
-              to={`/teacher/classes/${cls.id}`}
+              to={`/teacher/reports?class_id=${cls.id}&locked=true`}
               className="group flex flex-col rounded-2xl border border-gray-200 bg-white p-5 shadow-sm hover:border-indigo-200 hover:shadow-md transition-all min-h-[140px]"
             >
               <div className="flex items-start justify-between gap-2 mb-2">

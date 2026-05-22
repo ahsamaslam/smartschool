@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
 import teacherService from "../../services/teacherService";
 import StudentList from "../../components/teacher/StudentList";
@@ -135,6 +135,7 @@ function AlertCard({ alert }) {
 export default function TeacherReports() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [classes, setClasses]               = useState([]);
   const [selectedClass, setSelectedClass]   = useState("");
   const [students, setStudents]             = useState([]);
@@ -142,6 +143,9 @@ export default function TeacherReports() {
   const [loadingClasses, setLoadingClasses] = useState(true);
   const [loadingData, setLoadingData]       = useState(false);
   const [error, setError]                   = useState("");
+
+  const preselectedClassId = searchParams.get("class_id");
+  const isLocked = searchParams.get("locked") === "true";
 
   // Load teacher's classes
   useEffect(() => {
@@ -151,11 +155,15 @@ export default function TeacherReports() {
       .then((res) => {
         const cls = res.data || [];
         setClasses(cls);
-        if (cls.length) setSelectedClass(cls[0].id);
+        if (preselectedClassId && cls.some(c => c.id === preselectedClassId)) {
+          setSelectedClass(preselectedClassId);
+        } else if (cls.length) {
+          setSelectedClass(cls[0].id);
+        }
       })
       .catch(() => setError("Failed to load classes."))
       .finally(() => setLoadingClasses(false));
-  }, [user?.id]);
+  }, [user?.id, preselectedClassId]);
 
   // Load students + CVI analytics when class changes
   const loadClassData = useCallback(() => {
@@ -193,6 +201,8 @@ export default function TeacherReports() {
   const avgAttendance = avg(analyticStudents, "attendance_rate");
   const avgHomework   = avg(analyticStudents, "homework_rate");
 
+  const selectedClassName = classes.find(c => c.id === selectedClass)?.name || "";
+
   return (
     <div className="p-6 max-w-6xl mx-auto pb-24">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
@@ -201,12 +211,18 @@ export default function TeacherReports() {
           <p className="text-sm text-gray-500 mt-0.5">Class Vitality Index · Student performance breakdown</p>
         </div>
         <div className="max-w-xs w-full">
-          <Dropdown
-            options={classOptions}
-            value={selectedClass}
-            onChange={setSelectedClass}
-            placeholder="Choose a class…"
-          />
+          {isLocked ? (
+            <div className="px-3 py-2 rounded-lg border border-gray-300 bg-gray-100 text-gray-700 text-sm font-medium">
+              {selectedClassName}
+            </div>
+          ) : (
+            <Dropdown
+              options={classOptions}
+              value={selectedClass}
+              onChange={setSelectedClass}
+              placeholder="Choose a class…"
+            />
+          )}
         </div>
       </div>
 
