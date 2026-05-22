@@ -75,16 +75,17 @@ export function LessonPlanModal({
           id: ch.id,
           chapter_number: ch.chapter_number,
           title: ch.title,
-          topics: [
-            ...(ch.approved_topics || []),
-            ...(ch.custom_topics || []),
-          ].map((t) => ({
+          topics: (ch.topics || []).map((t) => ({
             id: t.id,
             title: t.title,
             chapter_number: ch.chapter_number,
           })),
         }));
-        setBooksWithTopics(chapters);
+        // Wrap in book object for TopicSelector which expects books with chapters
+        setBooksWithTopics([{
+          id: formData.bookId,
+          chapters: chapters,
+        }]);
       }
     } catch (error) {
       toast.error("Failed to load book details");

@@ -65,7 +65,7 @@ async def validate_teacher_assignment(teacher_id: str, class_id: str, library_su
         """
         SELECT id FROM teacher_class_subject_assignments
         WHERE teacher_id = $1::uuid
-          AND class_id = $1::uuid
+          AND class_id = $2::uuid
           AND library_subject_id = $3::uuid
           AND library_book_id = $4::uuid
         """,
