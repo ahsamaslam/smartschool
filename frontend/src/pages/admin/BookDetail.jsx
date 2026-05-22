@@ -220,8 +220,6 @@ export default function BookDetail() {
         <div className="w-80 flex-shrink-0">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Chapters</h2>
-            {/* Add Chapter button disabled until backend endpoint is implemented */}
-            {/*
             <button
               onClick={() => setCreateChapterModalOpen(true)}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-semibold hover:bg-amber-100 transition-colors"
@@ -229,7 +227,6 @@ export default function BookDetail() {
             >
               <PlusIcon className="h-3 w-3" /> Add
             </button>
-            */}
           </div>
           <div className="space-y-2">
             {(book.chapters || []).map((chapter) => (
@@ -260,8 +257,6 @@ export default function BookDetail() {
                   <div className="border-t border-gray-100 bg-gray-50/50">
                     <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100">
                       <span className="text-xs font-semibold text-gray-500">Topics</span>
-                      {/* Add Topic button disabled until backend endpoint is implemented */}
-                      {/*
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -273,7 +268,6 @@ export default function BookDetail() {
                       >
                         <PlusIcon className="h-3 w-3" /> Add
                       </button>
-                      */}
                     </div>
                     {(chapter.topics || []).length === 0 ? (
                       <p className="text-xs text-gray-400 px-4 py-2">No topics</p>
