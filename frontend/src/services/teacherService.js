@@ -119,6 +119,16 @@ const teacherService = {
   getMyContentStatusForBook: (bookId) =>
     api.get(`${API_ROUTES.TEACHERS}/my-content-status/book/${bookId}`),
 
+  // Teacher-specific chapter/topic management (isolated from library)
+  createMyChapter: (bookId, data) =>
+    api.post(`${API_ROUTES.TEACHERS}/books/${bookId}/chapters`, data),
+
+  createMyTopic: (chapterId, data) =>
+    api.post(`${API_ROUTES.TEACHERS}/chapters/${chapterId}/topics`, data),
+
+  getMyChaptersForBook: (bookId) =>
+    api.get(`${API_ROUTES.TEACHERS}/books/${bookId}/my-chapters`),
+
   // Analytics (SHS / CVI)
   getAnalyticsOverview: (period = "last_month", start, end) =>
     api.get(`${API_ROUTES.TEACHERS}/analytics/overview`, {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import toast from "react-hot-toast";
 import libraryService from "../../services/libraryService";
+import teacherService from "../../services/teacherService";
 import { XMarkIcon } from "@heroicons/react/24/outline";
 
 export function CreateChapterModal({
@@ -10,6 +11,7 @@ export function CreateChapterModal({
   boards = [],
   preselectedBookId = null,
   user = null,
+  teacherSpecific = false,
 }) {
   const [saving, setSaving] = useState(false);
   const [boardId, setBoardId] = useState("");
@@ -79,7 +81,9 @@ export function CreateChapterModal({
       if (user?.id) {
         payload.teacher_id = user.id;
       }
-      const res = await libraryService.createChapter(bookId, payload);
+      const res = teacherSpecific
+        ? await teacherService.createMyChapter(bookId, payload)
+        : await libraryService.createChapter(bookId, payload);
       const newChapter = res.data?.data ?? res.data;
       if (!newChapter?.id) throw new Error("No chapter id returned");
 

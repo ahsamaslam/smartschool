@@ -148,6 +148,15 @@ export default function BookDetail() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto pb-24">
+      {/* Teacher info banner */}
+      {user?.role === "teacher" && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
+          <p className="text-sm text-blue-900">
+            <span className="font-semibold">📝 Your Personal Library:</span> Any chapters, topics, or content you add here are visible only to you. Shared library content remains unchanged for other teachers.
+          </p>
+        </div>
+      )}
+
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-sm text-gray-400 mb-6 flex-wrap">
         <Link to="/admin/library" className="hover:text-gray-700 transition-colors">Library</Link>
@@ -491,6 +500,7 @@ export default function BookDetail() {
         onChapterCreated={handleChapterCreated}
         boards={boards}
         user={user}
+        teacherSpecific={user?.role === "teacher"}
       />
 
       <CreateTopicModal
@@ -503,6 +513,7 @@ export default function BookDetail() {
         boards={boards}
         preselectedChapterId={selectedChapterForTopic}
         user={user}
+        teacherSpecific={user?.role === "teacher"}
       />
     </div>
   );

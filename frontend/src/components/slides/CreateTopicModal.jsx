@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import toast from "react-hot-toast";
 import libraryService from "../../services/libraryService";
+import teacherService from "../../services/teacherService";
 import { XMarkIcon } from "@heroicons/react/24/outline";
 
 export function CreateTopicModal({
@@ -11,6 +12,7 @@ export function CreateTopicModal({
   bookDetailsCache = {},
   preselectedChapterId = null,
   user = null,
+  teacherSpecific = false,
 }) {
   const [saving, setSaving] = useState(false);
   const [boardId, setBoardId] = useState("");
@@ -94,7 +96,9 @@ export function CreateTopicModal({
       if (user?.id) {
         payload.teacher_id = user.id;
       }
-      const res = await libraryService.createTopic(chapterId, payload);
+      const res = teacherSpecific
+        ? await teacherService.createMyTopic(chapterId, payload)
+        : await libraryService.createTopic(chapterId, payload);
       const newTopic = res.data?.data ?? res.data;
       if (!newTopic?.id) throw new Error("No topic id returned");
 
