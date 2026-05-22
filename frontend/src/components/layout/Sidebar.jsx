@@ -134,12 +134,12 @@ const NAV_BY_ROLE = {
       to: "/teacher/slides",
       icon: "PresentationChartBarIcon",
     },
+    { label: "My Lectures", to: "/teacher/my-lectures", icon: "FilmIcon" },
     {
       label: "Exam",
       to: "/teacher/exams",
       icon: "DocumentTextIcon",
     },
-    { label: "My Lectures", to: "/teacher/my-lectures", icon: "FilmIcon" },
     { label: "Messages", to: "/teacher/chat", icon: "ChatBubbleLeftIcon" },
     { label: "Reports", to: "/teacher/reports", icon: "ChartBarIcon" },
   ],
