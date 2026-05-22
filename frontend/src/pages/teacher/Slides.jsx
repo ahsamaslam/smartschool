@@ -143,16 +143,9 @@ export default function TeacherSlides() {
     setLoadingCurriculum(true);
     teacherService
       .getMyCurriculum()
-      .then((res) => {
-        console.log("Curriculum loaded:", res.data);
-        setCurriculum(res.data || []);
-      })
-      .catch((err) => {
-        console.error("Failed to load curriculum:", {
-          status: err?.response?.status,
-          message: err?.response?.data?.detail || err?.message,
-          fullError: err,
-        });
+      .then((res) => setCurriculum(res.data || []))
+      .catch(() => {
+        /* ignore */
       })
       .finally(() => setLoadingCurriculum(false));
   }, [user?.id]);
@@ -163,18 +156,16 @@ export default function TeacherSlides() {
       cls.subjects?.forEach((subj) => {
         subj.books?.forEach((book) => {
           if (!bookDetailsCache[book.book_id]) {
-            console.log("Loading book details for:", book.book_id, book.book_title);
             libraryService
               .getBookDetails(book.book_id)
               .then((res) => {
-                console.log("Book details loaded:", book.book_id, res.data);
                 setBookDetailsCache((prev) => ({
                   ...prev,
                   [book.book_id]: res.data,
                 }));
               })
-              .catch((err) => {
-                console.error("Failed to load book details:", book.book_id, err);
+              .catch(() => {
+                /* ignore */
               });
           }
         });
@@ -197,18 +188,13 @@ export default function TeacherSlides() {
         subj.books?.forEach((book) => {
           if (results.length >= maxResults) return;
           const bookDetails = bookDetailsCache[book.book_id];
-          if (!bookDetails) {
-            console.log("Book details not cached yet:", book.book_id);
-            return;
-          }
+          if (!bookDetails) return;
 
           const chapters = bookDetails.chapters || bookDetails.data?.chapters || [];
-          console.log("Searching chapters:", chapters.length, "for query:", query);
 
           chapters.forEach((ch) => {
             if (results.length >= maxResults) return;
             const topics = ch.topics || ch.library_topics || [];
-            console.log("Chapter topics:", topics.length);
 
             topics.forEach((topic) => {
               if (results.length >= maxResults) return;
@@ -240,7 +226,6 @@ export default function TeacherSlides() {
       });
     });
 
-    console.log("Search results:", results.length);
     return results;
   }, [curriculumSearch, curriculum, bookDetailsCache]);
 
