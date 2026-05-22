@@ -1140,7 +1140,7 @@ async def create_book(req: CreateBookRequest, current_user: dict = Depends(get_u
 
 @router.get("/library/books/{book_id}")
 async def get_book_details(book_id: str):
-    """Get book with chapters and topics"""
+    """Get book with chapters and topics (library only, excluding teacher-created chapters)"""
     book = await execute_one(
         """
         SELECT b.*, lc.name as class_name, s.name as subject_name
@@ -1151,20 +1151,22 @@ async def get_book_details(book_id: str):
         """,
         book_id
     )
-    
+
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
-    
+
+    # Only get library chapters (teacher_id IS NULL), not teacher-created chapters
     chapters_raw = await execute_query(
-        "SELECT * FROM library_chapters WHERE book_id = $1 ORDER BY chapter_number",
+        "SELECT * FROM library_chapters WHERE book_id = $1 AND teacher_id IS NULL ORDER BY chapter_number",
         book_id
     )
 
     chapters = []
     for chapter in chapters_raw:
         chapter_dict = dict(chapter)
+        # Only get library topics (teacher_id IS NULL), not teacher-created topics
         topics_raw = await execute_query(
-            "SELECT * FROM library_topics WHERE chapter_id = $1 ORDER BY created_at",
+            "SELECT * FROM library_topics WHERE chapter_id = $1 AND teacher_id IS NULL ORDER BY created_at",
             chapter_dict["id"]
         )
         chapter_dict["topics"] = [_library_topic_for_book_detail(dict(t)) for t in topics_raw]
