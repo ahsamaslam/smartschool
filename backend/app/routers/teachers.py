@@ -1720,6 +1720,69 @@ async def list_my_lectures(
     return {"data": items, "total": total, "limit": lim, "offset": off}
 
 
+@router.get("/my-slides")
+async def list_my_slides(
+    q: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Paginated list of this teacher's created slides with full hierarchy metadata."""
+    await _ensure_teacher_content_table()
+    teacher_id = str(current_user["user_id"])
+    lim = max(1, min(int(limit or 50), 100))
+    off = max(0, int(offset or 0))
+    search = (q or "").strip() or None
+
+    rows = await execute_query(
+        """
+        SELECT
+            ttc.id              AS content_id,
+            ttc.library_topic_id AS topic_id,
+            lt.title            AS topic_title,
+            ttc.slides_json,
+            ttc.slide_theme,
+            ttc.updated_at      AS created_at,
+            ch.id               AS chapter_id,
+            ch.chapter_number,
+            ch.title            AS chapter_title,
+            b.id                AS book_id,
+            b.title             AS book_title,
+            lc.id               AS library_class_id,
+            lc.name             AS class_name,
+            s.id                AS subject_id,
+            s.name              AS subject_name,
+            COUNT(*) OVER()     AS total_count
+        FROM teacher_topic_content ttc
+        JOIN library_topics lt   ON lt.id = ttc.library_topic_id
+        LEFT JOIN library_chapters ch ON ch.id = lt.chapter_id
+        LEFT JOIN library_books b     ON b.id  = ch.book_id
+        LEFT JOIN library_classes lc  ON lc.id = b.class_id
+        LEFT JOIN library_subjects s  ON s.id  = b.subject_id
+        WHERE ttc.teacher_id = $1::uuid
+          AND ttc.slides_json IS NOT NULL
+          AND trim(ttc.slides_json::text) <> ''
+          AND trim(ttc.slides_json::text) <> 'null'
+          AND trim(ttc.slides_json::text) <> '[]'
+          AND ($2::text IS NULL
+               OR lt.title   ILIKE ('%' || $2 || '%')
+               OR COALESCE(ch.title, '') ILIKE ('%' || $2 || '%')
+               OR COALESCE(b.title,  '') ILIKE ('%' || $2 || '%')
+               OR COALESCE(s.name,   '') ILIKE ('%' || $2 || '%')
+               OR COALESCE(lc.name,  '') ILIKE ('%' || $2 || '%'))
+        ORDER BY ttc.updated_at DESC NULLS LAST
+        LIMIT $3 OFFSET $4
+        """,
+        teacher_id, search, lim, off,
+    )
+
+    total = int(rows[0]["total_count"]) if rows else 0
+    items = [_ttc_row_json(dict(r)) for r in rows]
+    for item in items:
+        item.pop("total_count", None)
+    return {"data": items, "total": total, "limit": lim, "offset": off}
+
+
 @router.get("/my-content-status/book/{book_id}")
 async def get_my_content_status_for_book(
     book_id: str,
