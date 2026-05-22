@@ -44,6 +44,8 @@ export default function BookDetail() {
   const [editingContent, setEditingContent] = useState(false);
   const [editedContent, setEditedContent] = useState("");
   const [savingContent, setSavingContent] = useState(false);
+  const [editingChapterId, setEditingChapterId] = useState(null);
+  const [editingChapterTitle, setEditingChapterTitle] = useState("");
 
   // passed via navigate state for breadcrumb
   const boardId = location.state?.boardId;
@@ -340,9 +342,37 @@ export default function BookDetail() {
                   <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full flex-shrink-0">
                     Ch {chapter.chapter_number}
                   </span>
-                  <span className="text-sm font-medium text-gray-800 flex-1 min-w-0 truncate">
-                    {chapter.title}
-                  </span>
+                  {editingChapterId === chapter.id ? (
+                    <input
+                      type="text"
+                      value={editingChapterTitle}
+                      onChange={(e) => setEditingChapterTitle(e.target.value)}
+                      onBlur={() => {
+                        if (editingChapterTitle && editingChapterTitle !== chapter.title) {
+                          teacherService.editChapter(chapter.id, { title: editingChapterTitle }).then(() => {
+                            toast.success("Chapter updated");
+                            load();
+                          }).catch(err => {
+                            toast.error(err?.response?.data?.detail || "Failed to update chapter");
+                          });
+                        }
+                        setEditingChapterId(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.currentTarget.blur();
+                        } else if (e.key === "Escape") {
+                          setEditingChapterId(null);
+                        }
+                      }}
+                      autoFocus
+                      className="flex-1 min-w-0 px-2 py-1 rounded-lg border border-blue-300 bg-blue-50 text-sm font-medium text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  ) : (
+                    <span className="text-sm font-medium text-gray-800 flex-1 min-w-0 truncate">
+                      {chapter.title}
+                    </span>
+                  )}
                   <div className="flex gap-2 flex-shrink-0 items-center">
                     {homeworkCounts[`chapter_${chapter.id}`] > 0 && (
                       <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700">
@@ -353,16 +383,8 @@ export default function BookDetail() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          // Edit approved chapter (triggers copy-on-edit)
-                          const newTitle = prompt("Edit chapter title:", chapter.title);
-                          if (newTitle && newTitle !== chapter.title) {
-                            teacherService.editChapter(chapter.id, { title: newTitle }).then(() => {
-                              toast.success("Chapter updated");
-                              load();
-                            }).catch(err => {
-                              toast.error(err?.response?.data?.detail || "Failed to update chapter");
-                            });
-                          }
+                          setEditingChapterId(chapter.id);
+                          setEditingChapterTitle(chapter.title);
                         }}
                         className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-600 text-xs font-semibold hover:bg-blue-100 transition-colors"
                         title="Edit chapter (creates your own copy)"
@@ -456,9 +478,37 @@ export default function BookDetail() {
                         <span className="text-xs font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full flex-shrink-0">
                           Ch {chapter.chapter_number}
                         </span>
-                        <span className="text-sm font-medium text-amber-900 flex-1 min-w-0 truncate">
-                          {chapter.title}
-                        </span>
+                        {editingChapterId === chapter.id ? (
+                          <input
+                            type="text"
+                            value={editingChapterTitle}
+                            onChange={(e) => setEditingChapterTitle(e.target.value)}
+                            onBlur={() => {
+                              if (editingChapterTitle && editingChapterTitle !== chapter.title) {
+                                teacherService.editChapter(chapter.id, { title: editingChapterTitle }).then(() => {
+                                  toast.success("Chapter updated");
+                                  load();
+                                }).catch(err => {
+                                  toast.error(err?.response?.data?.detail || "Failed to update chapter");
+                                });
+                              }
+                              setEditingChapterId(null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.currentTarget.blur();
+                              } else if (e.key === "Escape") {
+                                setEditingChapterId(null);
+                              }
+                            }}
+                            autoFocus
+                            className="flex-1 min-w-0 px-2 py-1 rounded-lg border border-amber-300 bg-amber-100 text-sm font-medium text-amber-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                          />
+                        ) : (
+                          <span className="text-sm font-medium text-amber-900 flex-1 min-w-0 truncate">
+                            {chapter.title}
+                          </span>
+                        )}
                         <div className="flex gap-2 flex-shrink-0 items-center">
                           {homeworkCounts[`chapter_${chapter.id}`] > 0 && (
                             <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700">
@@ -468,16 +518,8 @@ export default function BookDetail() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              // Edit custom chapter
-                              const newTitle = prompt("Edit chapter title:", chapter.title);
-                              if (newTitle && newTitle !== chapter.title) {
-                                teacherService.editChapter(chapter.id, { title: newTitle }).then(() => {
-                                  toast.success("Chapter updated");
-                                  load();
-                                }).catch(err => {
-                                  toast.error(err?.response?.data?.detail || "Failed to update chapter");
-                                });
-                              }
+                              setEditingChapterId(chapter.id);
+                              setEditingChapterTitle(chapter.title);
                             }}
                             className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-amber-100 border border-amber-300 text-amber-700 text-xs font-semibold hover:bg-amber-200 transition-colors"
                             title="Edit chapter"
