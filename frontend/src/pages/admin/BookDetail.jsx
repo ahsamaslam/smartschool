@@ -346,6 +346,27 @@ export default function BookDetail() {
                         📚 {homeworkCounts[`chapter_${chapter.id}`]}
                       </span>
                     )}
+                    {user?.role === "teacher" && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          // Edit approved chapter (triggers copy-on-edit)
+                          const newTitle = prompt("Edit chapter title:", chapter.title);
+                          if (newTitle && newTitle !== chapter.title) {
+                            teacherService.editChapter(chapter.id, { title: newTitle }).then(() => {
+                              toast.success("Chapter updated");
+                              load();
+                            }).catch(err => {
+                              toast.error(err?.response?.data?.detail || "Failed to update chapter");
+                            });
+                          }
+                        }}
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-600 text-xs font-semibold hover:bg-blue-100 transition-colors"
+                        title="Edit chapter (creates your own copy)"
+                      >
+                        <PencilSquareIcon className="h-3 w-3" />
+                      </button>
+                    )}
                     <span className="text-xs text-gray-400">
                       {(chapter.topics || []).length}
                     </span>
@@ -441,6 +462,42 @@ export default function BookDetail() {
                               📚 {homeworkCounts[`chapter_${chapter.id}`]}
                             </span>
                           )}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              // Edit custom chapter
+                              const newTitle = prompt("Edit chapter title:", chapter.title);
+                              if (newTitle && newTitle !== chapter.title) {
+                                teacherService.editChapter(chapter.id, { title: newTitle }).then(() => {
+                                  toast.success("Chapter updated");
+                                  load();
+                                }).catch(err => {
+                                  toast.error(err?.response?.data?.detail || "Failed to update chapter");
+                                });
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-amber-100 border border-amber-300 text-amber-700 text-xs font-semibold hover:bg-amber-200 transition-colors"
+                            title="Edit chapter"
+                          >
+                            <PencilSquareIcon className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (window.confirm("Delete this chapter and all its topics?")) {
+                                teacherService.deleteChapter(chapter.id).then(() => {
+                                  toast.success("Chapter deleted");
+                                  load();
+                                }).catch(err => {
+                                  toast.error(err?.response?.data?.detail || "Failed to delete chapter");
+                                });
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-red-50 border border-red-200 text-red-600 text-xs font-semibold hover:bg-red-100 transition-colors"
+                            title="Delete chapter"
+                          >
+                            <TrashIcon className="h-3 w-3" />
+                          </button>
                           <span className="text-xs text-amber-600">
                             {(chapter.topics || []).length}
                           </span>
