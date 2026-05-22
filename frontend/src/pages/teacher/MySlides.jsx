@@ -5,6 +5,13 @@ import teacherService from "../../services/teacherService";
 import { PageSpinner } from "../../components/common/Spinner";
 import Alert from "../../components/common/Alert";
 import Button from "../../components/common/Button";
+import Modal from "../../components/common/Modal";
+import toast from "react-hot-toast";
+import {
+  EyeIcon,
+  PencilIcon,
+  TrashIcon,
+} from "@heroicons/react/24/outline";
 
 const LIMIT = 25;
 
@@ -15,6 +22,8 @@ export default function MySlides() {
   const [error, setError] = useState("");
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(() => {
     if (!user?.id) return;
@@ -39,6 +48,21 @@ export default function MySlides() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const handleDelete = async () => {
+    if (!deleteConfirm) return;
+    setDeleting(true);
+    try {
+      await teacherService.deleteMyTopicSlides(deleteConfirm.topic_id);
+      toast.success("Slide deleted successfully");
+      setDeleteConfirm(null);
+      load();
+    } catch {
+      toast.error("Failed to delete slide");
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   if (loading && offset === 0) return <PageSpinner />;
 
@@ -96,7 +120,7 @@ export default function MySlides() {
                   {slide.chapter_title && <span>: {slide.chapter_title}</span>}
                 </p>
 
-                <div className="mt-auto flex items-center justify-between text-xs text-gray-400 pt-3 border-t border-gray-50">
+                <div className="mt-4 flex items-center justify-between text-xs text-gray-400 pt-3 border-t border-gray-50">
                   <span>
                     {slide.created_at
                       ? new Date(slide.created_at).toLocaleDateString()
@@ -105,6 +129,35 @@ export default function MySlides() {
                   <span className="text-gray-500 font-medium">
                     {slide.slide_theme || "Default"}
                   </span>
+                </div>
+
+                <div className="flex gap-2 pt-3 mt-auto">
+                  <button
+                    onClick={() =>
+                      window.open(`/teacher/slides?view=${slide.topic_id}`)
+                    }
+                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"
+                    title="View slide"
+                  >
+                    <EyeIcon className="h-4 w-4" />
+                    View
+                  </button>
+                  <Link
+                    to={`/teacher/slides?edit=${slide.topic_id}`}
+                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                    title="Edit slide"
+                  >
+                    <PencilIcon className="h-4 w-4" />
+                    Edit
+                  </Link>
+                  <button
+                    onClick={() => setDeleteConfirm(slide)}
+                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
+                    title="Delete slide"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                    Delete
+                  </button>
                 </div>
               </div>
             ))}
@@ -140,6 +193,34 @@ export default function MySlides() {
           Loading more slides…
         </div>
       )}
+
+      <Modal
+        isOpen={!!deleteConfirm}
+        onClose={() => setDeleteConfirm(null)}
+        title="Delete Slide"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Are you sure you want to delete "{deleteConfirm?.title}"? This action cannot be undone.
+          </p>
+          <div className="flex gap-3 justify-end">
+            <button
+              onClick={() => setDeleteConfirm(null)}
+              disabled={deleting}
+              className="px-4 py-2 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              className="px-4 py-2 rounded-lg bg-red-600 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              {deleting ? "Deleting..." : "Delete"}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
