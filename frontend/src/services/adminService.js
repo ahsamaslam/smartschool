@@ -281,13 +281,13 @@ const adminService = {
 
   // Admin chapter management (create, edit, delete approved chapters)
   addChapter: (bookId, data) =>
-    api.post(`${API_ROUTES.ADMINS}/chapters/${bookId}`, data),
+    api.post(`/library/admin/chapters/${bookId}`, data),
 
   editChapter: (chapterId, data) =>
-    api.put(`${API_ROUTES.ADMINS}/chapters/${chapterId}`, data),
+    api.put(`/library/admin/chapters/${chapterId}`, data),
 
   deleteChapter: (chapterId) =>
-    api.delete(`${API_ROUTES.ADMINS}/chapters/${chapterId}`),
+    api.delete(`/library/admin/chapters/${chapterId}`),
 };
 
 export default adminService;
