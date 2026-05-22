@@ -1240,10 +1240,11 @@ async def get_my_curriculum(current_user: dict = Depends(get_user_from_token)):
             ls.id as subject_id, ls.name as subject_name,
             lb.id as book_id, lb.title as book_title, lb.author as book_author,
             lbo.id as board_id, lbo.name as board_name,
-            (SELECT COUNT(*) FROM library_chapters lch WHERE lch.book_id = lb.id) as chapter_count,
+            (SELECT COUNT(*) FROM library_chapters lch
+             WHERE lch.book_id = lb.id AND (lch.teacher_id IS NULL OR lch.teacher_id = $1::uuid)) as chapter_count,
             (SELECT COUNT(*) FROM library_topics lt2
                 JOIN library_chapters lch2 ON lch2.id = lt2.chapter_id
-                WHERE lch2.book_id = lb.id) as topic_count
+                WHERE lch2.book_id = lb.id AND (lt2.teacher_id IS NULL OR lt2.teacher_id = $1::uuid)) as topic_count
         FROM teacher_class_subject_assignments tsa
         JOIN classes c ON c.id = tsa.class_id
         JOIN library_subjects ls ON ls.id = tsa.library_subject_id
@@ -1316,17 +1317,25 @@ async def get_teacher_book(book_id: str, current_user: dict = Depends(get_user_f
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
 
+    # Get chapters: library chapters (teacher_id IS NULL) + this teacher's custom chapters
     chapters = await execute_query(
-        """SELECT id, title, order_index FROM library_chapters WHERE book_id = $1 ORDER BY order_index""",
+        """SELECT id, title, order_index FROM library_chapters
+           WHERE book_id = $1 AND (teacher_id IS NULL OR teacher_id = $2::uuid)
+           ORDER BY order_index""",
         book_id,
+        teacher_id,
     )
     chapter_list = []
     for ch in chapters:
+        # Get topics: library topics (teacher_id IS NULL) + this teacher's custom topics
         topics = await execute_query(
             """SELECT id, title, order_index,
                       slides_json IS NOT NULL AND slides_json::text != 'null' as has_slides
-               FROM library_topics WHERE chapter_id = $1 ORDER BY order_index""",
+               FROM library_topics
+               WHERE chapter_id = $1 AND (teacher_id IS NULL OR teacher_id = $2::uuid)
+               ORDER BY order_index""",
             ch["id"],
+            teacher_id,
         )
         chapter_list.append({**dict(ch), "topics": [dict(t) for t in topics]})
 
@@ -1587,8 +1596,10 @@ async def get_my_topic_content(
     topic_id = (topic_id or "").strip()
 
     topic = await execute_one(
-        "SELECT id, title, content_body FROM library_topics WHERE id = $1::uuid",
+        """SELECT id, title, content_body FROM library_topics
+           WHERE id = $1::uuid AND (teacher_id IS NULL OR teacher_id = $2::uuid)""",
         topic_id,
+        teacher_id,
     )
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
@@ -1629,24 +1640,26 @@ async def update_topic_content(
     body: UpdateTopicContentRequest,
     current_user: dict = Depends(get_user_from_token),
 ):
-    """Update the content_body of a library topic (shared library update).
-    Only admins and teachers with permission can update."""
+    """Update the content_body of a teacher-created topic only.
+    Cannot edit shared library topics (teacher_id IS NULL)."""
+    teacher_id = str(current_user["user_id"])
     topic_id = (topic_id or "").strip()
 
-    # Update the topic's content_body in the library_topics table
+    # Only allow updating topics created by this teacher (not shared library topics)
     updated = await execute_one(
         """
         UPDATE library_topics
         SET content_body = $1
-        WHERE id = $2::uuid
+        WHERE id = $2::uuid AND teacher_id = $3::uuid
         RETURNING id, title, content_body
         """,
         body.content_body.strip() if body.content_body else "",
         topic_id,
+        teacher_id,
     )
 
     if not updated:
-        raise HTTPException(status_code=404, detail="Topic not found")
+        raise HTTPException(status_code=404, detail="Topic not found or you don't have permission to edit it")
 
     return {
         "data": {
@@ -1669,7 +1682,10 @@ async def save_my_topic_slides(
     topic_id = (topic_id or "").strip()
 
     topic = await execute_one(
-        "SELECT id FROM library_topics WHERE id = $1::uuid", topic_id
+        """SELECT id FROM library_topics
+           WHERE id = $1::uuid AND (teacher_id IS NULL OR teacher_id = $2::uuid)""",
+        topic_id,
+        teacher_id,
     )
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
@@ -1715,7 +1731,10 @@ async def upload_my_topic_lecture(
     topic_id = (topic_id or "").strip()
 
     topic = await execute_one(
-        "SELECT id FROM library_topics WHERE id = $1::uuid", topic_id
+        """SELECT id FROM library_topics
+           WHERE id = $1::uuid AND (teacher_id IS NULL OR teacher_id = $2::uuid)""",
+        topic_id,
+        teacher_id,
     )
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
