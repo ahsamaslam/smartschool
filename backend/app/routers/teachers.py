@@ -1319,6 +1319,152 @@ async def get_teacher_book(book_id: str, current_user: dict = Depends(get_user_f
     return {**dict(book), "chapters": chapter_list}
 
 
+# ============================================
+# TEACHER-SCOPED CHAPTER/TOPIC CREATION
+# ============================================
+
+@router.post("/books/{book_id}/chapters")
+async def create_teacher_chapter(
+    book_id: str,
+    body: CreateTeacherChapterRequest,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Create a teacher-scoped chapter under a book.
+    Only visible to this teacher, does not affect the shared library."""
+    from app.routers.library import ensure_library_tables
+    await ensure_library_tables()
+
+    teacher_id = str(current_user.get("user_id"))
+    book_id = (book_id or "").strip()
+
+    # Verify book exists
+    book = await execute_one(
+        "SELECT id FROM library_books WHERE id = $1::uuid",
+        book_id,
+    )
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    if not body.chapter_title or not body.chapter_title.strip():
+        raise HTTPException(status_code=400, detail="Chapter title is required")
+
+    # Create chapter with teacher_id for scoping
+    row = await execute_one(
+        """
+        INSERT INTO library_chapters (book_id, chapter_number, title, teacher_id)
+        VALUES ($1::uuid, $2, $3, $4::uuid)
+        RETURNING id, book_id, chapter_number, title, teacher_id, created_at
+        """,
+        book_id,
+        body.chapter_number,
+        body.chapter_title.strip()[:500],
+        teacher_id,
+    )
+
+    result = dict(row)
+    # Normalize UUIDs to strings
+    result["id"] = str(result["id"])
+    result["book_id"] = str(result["book_id"])
+    result["teacher_id"] = str(result["teacher_id"])
+    return {"data": result}
+
+
+@router.post("/chapters/{chapter_id}/topics")
+async def create_teacher_topic(
+    chapter_id: str,
+    body: CreateTeacherTopicRequest,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Create a teacher-scoped topic under a chapter.
+    Only visible to this teacher, does not affect the shared library."""
+    from app.routers.library import ensure_library_tables
+    await ensure_library_tables()
+
+    teacher_id = str(current_user.get("user_id"))
+    chapter_id = (chapter_id or "").strip()
+
+    # Verify chapter exists
+    ch = await execute_one(
+        "SELECT id, book_id FROM library_chapters WHERE id = $1::uuid",
+        chapter_id,
+    )
+    if not ch:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    if not body.title or not body.title.strip():
+        raise HTTPException(status_code=400, detail="Topic title is required")
+
+    # Create topic with teacher_id for scoping
+    row = await execute_one(
+        """
+        INSERT INTO library_topics (chapter_id, title, content_body, teacher_id)
+        VALUES ($1::uuid, $2, $3, $4::uuid)
+        RETURNING id, chapter_id, title, content_body, teacher_id, created_at
+        """,
+        chapter_id,
+        body.title.strip()[:500],
+        body.content_body or "",
+        teacher_id,
+    )
+
+    result = dict(row)
+    # Normalize UUIDs to strings
+    result["id"] = str(result["id"])
+    result["chapter_id"] = str(result["chapter_id"])
+    result["teacher_id"] = str(result["teacher_id"])
+    return {"data": result}
+
+
+@router.get("/books/{book_id}/my-chapters")
+async def get_my_chapters_for_book(
+    book_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Get chapters created by this teacher for a specific book (including shared library chapters)."""
+    from app.routers.library import ensure_library_tables
+    await ensure_library_tables()
+
+    teacher_id = str(current_user.get("user_id"))
+    book_id = (book_id or "").strip()
+
+    # Verify book exists
+    book = await execute_one(
+        "SELECT id FROM library_books WHERE id = $1::uuid",
+        book_id,
+    )
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    # Get both teacher-scoped and shared library chapters for this book
+    chapters = await execute_query(
+        """
+        SELECT
+            ch.id, ch.book_id, ch.chapter_number, ch.title,
+            ch.teacher_id, ch.created_at,
+            (SELECT COUNT(*) FROM library_topics t
+             WHERE t.chapter_id = ch.id AND (t.teacher_id = $1::uuid OR t.teacher_id IS NULL))
+            AS topic_count
+        FROM library_chapters ch
+        WHERE ch.book_id = $2::uuid
+          AND (ch.teacher_id = $1::uuid OR ch.teacher_id IS NULL)
+        ORDER BY ch.chapter_number ASC, ch.created_at ASC
+        """,
+        teacher_id,
+        book_id,
+    )
+
+    result = []
+    for ch in chapters:
+        item = dict(ch)
+        item["id"] = str(item["id"])
+        item["book_id"] = str(item["book_id"])
+        if item.get("teacher_id"):
+            item["teacher_id"] = str(item["teacher_id"])
+        result.append(item)
+
+    return {"data": result}
+
+
 # ── Slide Generation ──────────────────────────────────────────────────────────
 
 @router.post("/generate-slides")
@@ -1342,6 +1488,16 @@ class TeacherSlideSaveRequest(BaseModel):
     slides: List[Dict]
     slide_theme: Optional[str] = None
     content_body: Optional[str] = None
+
+
+class CreateTeacherChapterRequest(BaseModel):
+    chapter_number: int
+    chapter_title: str
+
+
+class CreateTeacherTopicRequest(BaseModel):
+    title: str
+    content_body: Optional[str] = ""
 
 
 def _ttc_row_json(row: dict) -> dict:

@@ -93,12 +93,8 @@ export function CreateTopicModal({
         title: topicName.trim(),
         content_body: "",
       };
-      if (user?.id) {
-        payload.teacher_id = user.id;
-      }
-      // Use library service with teacher_id for isolation
-      // Once backend implements dedicated teacher endpoints, this will switch automatically
-      const res = await libraryService.createTopic(chapterId, payload);
+      // Use teacher service for teacher-scoped topic creation
+      const res = await teacherService.createMyTopic(chapterId, payload);
       const newTopic = res.data?.data ?? res.data;
       if (!newTopic?.id) throw new Error("No topic id returned");
 

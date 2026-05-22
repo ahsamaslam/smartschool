@@ -78,12 +78,8 @@ export function CreateChapterModal({
         chapter_number: parseInt(chapterNumber, 10),
         chapter_title: chapterTitle.trim(),
       };
-      if (user?.id) {
-        payload.teacher_id = user.id;
-      }
-      // Use library service with teacher_id for isolation
-      // Once backend implements dedicated teacher endpoints, this will switch automatically
-      const res = await libraryService.createChapter(bookId, payload);
+      // Use teacher service for teacher-scoped chapter creation
+      const res = await teacherService.createMyChapter(bookId, payload);
       const newChapter = res.data?.data ?? res.data;
       if (!newChapter?.id) throw new Error("No chapter id returned");
 
