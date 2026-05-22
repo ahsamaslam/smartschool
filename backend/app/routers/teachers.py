@@ -1317,26 +1317,49 @@ async def get_teacher_book(book_id: str, current_user: dict = Depends(get_user_f
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    # Get chapters: library chapters (teacher_id IS NULL) + this teacher's custom chapters
-    chapters = await execute_query(
-        """SELECT id, title, order_index FROM library_chapters
-           WHERE book_id = $1 AND (teacher_id IS NULL OR teacher_id = $2::uuid)
-           ORDER BY order_index""",
-        book_id,
-        teacher_id,
-    )
-    chapter_list = []
-    for ch in chapters:
-        # Get topics: library topics (teacher_id IS NULL) + this teacher's custom topics
-        topics = await execute_query(
-            """SELECT id, title, order_index,
-                      slides_json IS NOT NULL AND slides_json::text != 'null' as has_slides
-               FROM library_topics
-               WHERE chapter_id = $1 AND (teacher_id IS NULL OR teacher_id = $2::uuid)
+    # Admins/super_admins see only library chapters (teacher_id IS NULL)
+    # Teachers see library chapters + their own custom chapters
+    if role in ("admin", "super_admin"):
+        # Admins only see library chapters
+        chapters = await execute_query(
+            """SELECT id, title, order_index FROM library_chapters
+               WHERE book_id = $1 AND teacher_id IS NULL
                ORDER BY order_index""",
-            ch["id"],
+            book_id,
+        )
+    else:
+        # Teachers see library chapters + their own chapters
+        chapters = await execute_query(
+            """SELECT id, title, order_index FROM library_chapters
+               WHERE book_id = $1 AND (teacher_id IS NULL OR teacher_id = $2::uuid)
+               ORDER BY order_index""",
+            book_id,
             teacher_id,
         )
+
+    chapter_list = []
+    for ch in chapters:
+        if role in ("admin", "super_admin"):
+            # Admins only see library topics
+            topics = await execute_query(
+                """SELECT id, title, order_index,
+                          slides_json IS NOT NULL AND slides_json::text != 'null' as has_slides
+                   FROM library_topics
+                   WHERE chapter_id = $1 AND teacher_id IS NULL
+                   ORDER BY order_index""",
+                ch["id"],
+            )
+        else:
+            # Teachers see library topics + their own topics
+            topics = await execute_query(
+                """SELECT id, title, order_index,
+                          slides_json IS NOT NULL AND slides_json::text != 'null' as has_slides
+                   FROM library_topics
+                   WHERE chapter_id = $1 AND (teacher_id IS NULL OR teacher_id = $2::uuid)
+                   ORDER BY order_index""",
+                ch["id"],
+                teacher_id,
+            )
         chapter_list.append({**dict(ch), "topics": [dict(t) for t in topics]})
 
     return {**dict(book), "chapters": chapter_list}
