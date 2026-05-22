@@ -53,8 +53,12 @@ export default function BookDetail() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      // Teachers use /teachers/books/{id} to see library + their custom chapters
+      // Admins use /library/books/{id} to see only library chapters
+      const bookEndpoint = user?.role === "teacher" ? teacherService.getTeacherBook(bookId) : libraryService.getBookDetails(bookId);
+
       const [bookRes, statusRes, homeworkRes] = await Promise.all([
-        libraryService.getBookDetails(bookId),
+        bookEndpoint,
         teacherService.getMyContentStatusForBook(bookId).catch(() => ({ data: {} })),
         teacherService.getHomeworkCounts(bookId).catch(() => ({ data: { data: [] } })),
       ]);
