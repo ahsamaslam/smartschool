@@ -67,13 +67,18 @@ export default function BookDetail() {
       // Handle both old format (chapters) and new format (approved_chapters + custom_chapters)
       let processedData = { ...data };
       if (data?.approved_chapters || data?.custom_chapters) {
-        // New format: preserve structure for separate display
+        // New format: preserve structure for separate display (from teacher endpoint)
         processedData.approved_chapters = data?.approved_chapters || [];
         processedData.custom_chapters = data?.custom_chapters || [];
         // Also create combined list for backward compatibility
         processedData.chapters = [...processedData.approved_chapters, ...processedData.custom_chapters];
-      } else if (!data?.chapters) {
-        // Ensure chapters exists
+      } else if (data?.chapters) {
+        // Old format (admin endpoint): treat chapters as approved chapters for display
+        processedData.approved_chapters = data.chapters;
+        processedData.custom_chapters = [];
+        processedData.chapters = data.chapters;
+      } else {
+        // Ensure fields exist
         processedData.chapters = [];
         processedData.approved_chapters = [];
         processedData.custom_chapters = [];
