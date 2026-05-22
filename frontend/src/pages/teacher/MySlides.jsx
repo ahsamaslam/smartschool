@@ -86,7 +86,7 @@ export default function MySlides() {
                 <p className="text-xs text-gray-500 mb-3">
                   {slide.book_title}
                   {slide.chapter_number && (
-                    <span> > Chapter {slide.chapter_number}</span>
+                    <span>{' >'} Chapter {slide.chapter_number}</span>
                   )}
                   {slide.chapter_title && <span>: {slide.chapter_title}</span>}
                 </p>
