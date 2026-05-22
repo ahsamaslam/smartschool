@@ -113,6 +113,9 @@ const teacherService = {
   listMyLectures: (params = {}) =>
     api.get(`${API_ROUTES.TEACHERS}/my-lectures`, { params }),
 
+  listMySlides: (params = {}) =>
+    api.get(`${API_ROUTES.TEACHERS}/my-slides`, { params }),
+
   getMyContentStatusForBook: (bookId) =>
     api.get(`${API_ROUTES.TEACHERS}/my-content-status/book/${bookId}`),
 

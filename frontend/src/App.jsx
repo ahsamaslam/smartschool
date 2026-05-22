@@ -67,6 +67,7 @@ const TeacherHomeworkSubmissions = lazy(
 const TeacherHomework = lazy(() => import("./pages/teacher/Homework"));
 const TeacherMyCurriculum = lazy(() => import("./pages/teacher/MyCurriculum"));
 const TeacherSlides = lazy(() => import("./pages/teacher/Slides"));
+const TeacherMySlides = lazy(() => import("./pages/teacher/MySlides"));
 const TeacherRecordLecture = lazy(() => import("./pages/teacher/TeacherRecordLecture"));
 const TeacherMyLectures = lazy(() => import("./pages/teacher/MyLectures"));
 const TeacherDailyDashboard = lazy(() => import("./pages/teacher/DailyDashboard"));
@@ -246,6 +247,7 @@ export default function App() {
                 element={<TeacherMyCurriculum />}
               />
               <Route path="/teacher/chat" element={<TeacherChat />} />
+              <Route path="/teacher/my-slides" element={<TeacherMySlides />} />
               <Route path="/teacher/slides" element={<TeacherSlides />} />
               <Route path="/teacher/record-lecture/:libraryTopicId" element={<TeacherRecordLecture />} />
               <Route path="/teacher/my-lectures" element={<TeacherMyLectures />} />

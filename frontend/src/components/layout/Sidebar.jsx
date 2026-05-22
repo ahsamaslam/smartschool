@@ -126,7 +126,7 @@ const NAV_BY_ROLE = {
     },
     {
       label: "Slides",
-      to: "/teacher/slides",
+      to: "/teacher/my-slides",
       icon: "PresentationChartBarIcon",
     },
     { label: "My Lectures", to: "/teacher/my-lectures", icon: "FilmIcon" },
