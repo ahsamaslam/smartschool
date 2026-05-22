@@ -142,10 +142,13 @@ export default function TeacherSlides() {
     if (!user?.id) return;
     setLoadingCurriculum(true);
     teacherService
-      .getMyCurriculum(user.id)
-      .then((res) => setCurriculum(res.data || []))
-      .catch(() => {
-        /* ignore */
+      .getMyCurriculum()
+      .then((res) => {
+        console.log("Curriculum loaded:", res.data);
+        setCurriculum(res.data || []);
+      })
+      .catch((err) => {
+        console.error("Failed to load curriculum:", err);
       })
       .finally(() => setLoadingCurriculum(false));
   }, [user?.id]);
@@ -156,16 +159,18 @@ export default function TeacherSlides() {
       cls.subjects?.forEach((subj) => {
         subj.books?.forEach((book) => {
           if (!bookDetailsCache[book.id]) {
+            console.log("Loading book details for:", book.id, book.title);
             libraryService
               .getBookDetails(book.id)
               .then((res) => {
+                console.log("Book details loaded:", book.id, res.data);
                 setBookDetailsCache((prev) => ({
                   ...prev,
                   [book.id]: res.data,
                 }));
               })
-              .catch(() => {
-                /* ignore */
+              .catch((err) => {
+                console.error("Failed to load book details:", book.id, err);
               });
           }
         });
