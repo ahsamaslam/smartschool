@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { useAuth } from "../../context/AuthContext";
@@ -84,6 +84,13 @@ export default function TeacherSlides() {
   const [deckEditorOpen, setDeckEditorOpen] = useState(false);
   const [postSavePrompt, setPostSavePrompt] = useState(null);
 
+  // Topic search
+  const [curriculumSearch, setCurriculumSearch] = useState("");
+  const [curriculum, setCurriculum] = useState([]);
+  const [bookDetailsCache, setBookDetailsCache] = useState({});
+  const [loadingCurriculum, setLoadingCurriculum] = useState(false);
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+
   const openDeckEditor = useCallback((slideIndex) => {
     if (slideIndex != null && slideIndex >= 0) setCurrentIndex(slideIndex);
     setDeckEditorOpen(true);
@@ -129,6 +136,116 @@ export default function TeacherSlides() {
     },
     [navigateBackToLibrary],
   );
+
+  // Load curriculum on mount
+  useEffect(() => {
+    if (!user?.id) return;
+    setLoadingCurriculum(true);
+    teacherService
+      .getMyCurriculum(user.id)
+      .then((res) => setCurriculum(res.data || []))
+      .catch(() => {
+        /* ignore */
+      })
+      .finally(() => setLoadingCurriculum(false));
+  }, [user?.id]);
+
+  // Lazy load book details
+  useEffect(() => {
+    curriculum.forEach((cls) => {
+      cls.subjects?.forEach((subj) => {
+        subj.books?.forEach((book) => {
+          if (!bookDetailsCache[book.id]) {
+            libraryService
+              .getBookDetails(book.id)
+              .then((res) => {
+                setBookDetailsCache((prev) => ({
+                  ...prev,
+                  [book.id]: res.data,
+                }));
+              })
+              .catch(() => {
+                /* ignore */
+              });
+          }
+        });
+      });
+    });
+  }, [curriculum, bookDetailsCache]);
+
+  // Flatten and filter topics (memoized)
+  const searchResults = useMemo(() => {
+    if (!curriculumSearch.trim()) return [];
+
+    const query = curriculumSearch.toLowerCase();
+    const results = [];
+    const maxResults = 10;
+
+    curriculum.forEach((cls) => {
+      if (results.length >= maxResults) return;
+      cls.subjects?.forEach((subj) => {
+        if (results.length >= maxResults) return;
+        subj.books?.forEach((book) => {
+          if (results.length >= maxResults) return;
+          const bookDetails = bookDetailsCache[book.id];
+          const chapters = bookDetails?.chapters || [];
+
+          chapters.forEach((ch) => {
+            if (results.length >= maxResults) return;
+            ch.topics?.forEach((topic) => {
+              if (results.length >= maxResults) return;
+
+              const matchesQuery =
+                topic.name?.toLowerCase().includes(query) ||
+                ch.title?.toLowerCase().includes(query) ||
+                ch.chapter_number?.toString().includes(query) ||
+                book.title?.toLowerCase().includes(query);
+
+              if (matchesQuery) {
+                results.push({
+                  id: topic.id,
+                  name: topic.name,
+                  chapterNum: ch.chapter_number || "—",
+                  chapterTitle: ch.title,
+                  bookTitle: book.title,
+                  className: cls.name,
+                  subjectName: subj.name,
+                  topicObj: topic,
+                  bookObj: book,
+                  chapterObj: ch,
+                });
+              }
+            });
+          });
+        });
+      });
+    });
+
+    return results;
+  }, [curriculumSearch, curriculum, bookDetailsCache]);
+
+  const handleSelectTopic = useCallback(
+    async (result) => {
+      try {
+        const content = await teacherService.getMyTopicContent(result.id);
+        setTopicInput(result.name);
+        setContentInput(content.data?.content_body || content.data?.content || "");
+      } catch {
+        /* ignore */
+      }
+    },
+    [],
+  );
+
+  // Dismiss dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (e.target.closest("[data-search-box]")) return;
+      setShowSearchDropdown(false);
+    };
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
+  }, []);
 
   const currentSlide = slides[currentIndex] || null;
 
@@ -534,6 +651,51 @@ export default function TeacherSlides() {
                   placeholder="e.g. Fractions — adding unlike denominators"
                   className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
                 />
+              </div>
+
+              <div data-search-box className="relative">
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+                  Search your curriculum
+                </label>
+                <input
+                  type="text"
+                  placeholder="Search topics, chapters, books…"
+                  value={curriculumSearch}
+                  onChange={(e) => {
+                    setCurriculumSearch(e.target.value);
+                    setShowSearchDropdown(true);
+                  }}
+                  onFocus={() => setShowSearchDropdown(true)}
+                  className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+                />
+                {showSearchDropdown && searchResults.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-10 max-h-64 overflow-y-auto">
+                    {searchResults.map((result) => (
+                      <button
+                        key={result.id}
+                        type="button"
+                        onClick={() => {
+                          handleSelectTopic(result);
+                          setCurriculumSearch("");
+                          setShowSearchDropdown(false);
+                        }}
+                        className="w-full text-left px-3 py-2.5 hover:bg-indigo-50 text-xs border-b border-gray-100 last:border-b-0 transition-colors"
+                      >
+                        <div className="text-gray-600 text-xs mb-0.5">
+                          {result.className} · {result.subjectName}
+                        </div>
+                        <div className="font-medium text-gray-900 truncate">
+                          {result.bookTitle} › Ch. {result.chapterNum}: {result.name}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {showSearchDropdown && curriculumSearch && searchResults.length === 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 px-3 py-2 text-xs text-gray-500">
+                    No matching topics found
+                  </div>
+                )}
               </div>
 
               <div>
