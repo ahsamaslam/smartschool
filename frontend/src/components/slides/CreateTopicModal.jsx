@@ -9,6 +9,7 @@ export function CreateTopicModal({
   onTopicCreated,
   boards = [],
   bookDetailsCache = {},
+  preselectedChapterId = null,
 }) {
   const [saving, setSaving] = useState(false);
   const [boardId, setBoardId] = useState("");
@@ -17,7 +18,7 @@ export function CreateTopicModal({
   const [books, setBooks] = useState([]);
   const [bookId, setBookId] = useState("");
   const [chapters, setChapters] = useState([]);
-  const [chapterId, setChapterId] = useState("");
+  const [chapterId, setChapterId] = useState(preselectedChapterId || "");
   const [topicName, setTopicName] = useState("");
 
   // Load subjects when board changes

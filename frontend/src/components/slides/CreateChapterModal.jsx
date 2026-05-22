@@ -8,13 +8,14 @@ export function CreateChapterModal({
   onClose,
   onChapterCreated,
   boards = [],
+  preselectedBookId = null,
 }) {
   const [saving, setSaving] = useState(false);
   const [boardId, setBoardId] = useState("");
   const [subjects, setSubjects] = useState([]);
   const [subjectId, setSubjectId] = useState("");
   const [books, setBooks] = useState([]);
-  const [bookId, setBookId] = useState("");
+  const [bookId, setBookId] = useState(preselectedBookId || "");
   const [chapterNumber, setChapterNumber] = useState("");
   const [chapterTitle, setChapterTitle] = useState("");
 

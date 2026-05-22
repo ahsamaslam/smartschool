@@ -360,16 +360,25 @@ export default function TeacherMyCurriculum() {
 
       <CreateTopicModal
         open={createTopicModalOpen}
-        onClose={() => setCreateTopicModalOpen(false)}
+        onClose={() => {
+          setCreateTopicModalOpen(false);
+          setSelectedBookId(null);
+          setSelectedChapterId(null);
+        }}
         onTopicCreated={handleTopicCreated}
         boards={boards}
+        preselectedChapterId={selectedChapterId}
       />
 
       <CreateChapterModal
         open={createChapterModalOpen}
-        onClose={() => setCreateChapterModalOpen(false)}
+        onClose={() => {
+          setCreateChapterModalOpen(false);
+          setSelectedBookId(null);
+        }}
         onChapterCreated={handleChapterCreated}
         boards={boards}
+        preselectedBookId={selectedBookId}
       />
     </div>
   );
