@@ -101,6 +101,9 @@ export default function BookDetail() {
       const firstChapter = processedData.approved_chapters?.[0] || processedData.chapters?.[0];
       if (firstChapter?.id) {
         setExpandedChapters({ [firstChapter.id]: true });
+        console.log("Expanded first chapter:", firstChapter.id, "Topics:", firstChapter.topics?.length || 0);
+      } else {
+        console.log("No chapters found. Approved:", processedData.approved_chapters?.length, "Custom:", processedData.custom_chapters?.length);
       }
     } catch {
       toast.error("Failed to load book.");
