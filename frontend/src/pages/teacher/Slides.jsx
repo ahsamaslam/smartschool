@@ -8,6 +8,8 @@ import { parseLibraryTopicSlidesJson } from "../../utils/libraryTopicSlides";
 import { SlideRenderer } from "../../components/slides/SlideRenderer";
 import { SlideThumbnail } from "../../components/slides/SlideThumbnail";
 import { SaveSlidesLibraryModal } from "../../components/slides/SaveSlidesLibraryModal";
+import { CreateTopicModal } from "../../components/slides/CreateTopicModal";
+import { CreateChapterModal } from "../../components/slides/CreateChapterModal";
 import {
   SLIDE_TEMPLATES,
   SLIDE_LAYOUTS,
@@ -90,6 +92,9 @@ export default function TeacherSlides() {
   const [bookDetailsCache, setBookDetailsCache] = useState({});
   const [loadingCurriculum, setLoadingCurriculum] = useState(false);
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const [createTopicModalOpen, setCreateTopicModalOpen] = useState(false);
+  const [createChapterModalOpen, setCreateChapterModalOpen] = useState(false);
+  const [boards, setBoards] = useState([]);
 
   const openDeckEditor = useCallback((slideIndex) => {
     if (slideIndex != null && slideIndex >= 0) setCurrentIndex(slideIndex);
@@ -149,6 +154,19 @@ export default function TeacherSlides() {
       })
       .finally(() => setLoadingCurriculum(false));
   }, [user?.id]);
+
+  // Load boards for create modals
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await libraryService.getBoards();
+        const list = res.data?.data ?? res.data ?? [];
+        setBoards(Array.isArray(list) ? list : []);
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, []);
 
   // Lazy load book details
   useEffect(() => {
@@ -241,6 +259,22 @@ export default function TeacherSlides() {
     },
     [],
   );
+
+  const handleTopicCreated = useCallback((newTopic) => {
+    setTopicInput(newTopic.title || newTopic.name || "");
+    setContentInput(newTopic.content_body || "");
+    // Refresh curriculum to show new topic
+    if (user?.id) {
+      teacherService.getMyCurriculum().then((res) => setCurriculum(res.data || []));
+    }
+  }, [user?.id]);
+
+  const handleChapterCreated = useCallback((newChapter) => {
+    // Refresh curriculum to show new chapter
+    if (user?.id) {
+      teacherService.getMyCurriculum().then((res) => setCurriculum(res.data || []));
+    }
+  }, [user?.id]);
 
   // Dismiss dropdown on outside click
   useEffect(() => {
@@ -708,6 +742,23 @@ export default function TeacherSlides() {
                     No matching topics found
                   </div>
                 )}
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCreateTopicModalOpen(true)}
+                  className="flex-1 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-semibold hover:bg-indigo-100 transition-colors"
+                >
+                  + New Topic
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreateChapterModalOpen(true)}
+                  className="flex-1 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-700 text-xs font-semibold hover:bg-amber-100 transition-colors"
+                >
+                  + New Chapter
+                </button>
               </div>
 
               <div>
@@ -1470,6 +1521,21 @@ export default function TeacherSlides() {
         topicHint={topicFromLibrary}
         onComplete={(loc) => setPostSavePrompt(loc)}
         userRole={user?.role}
+      />
+
+      <CreateTopicModal
+        open={createTopicModalOpen}
+        onClose={() => setCreateTopicModalOpen(false)}
+        onTopicCreated={handleTopicCreated}
+        boards={boards}
+        bookDetailsCache={bookDetailsCache}
+      />
+
+      <CreateChapterModal
+        open={createChapterModalOpen}
+        onClose={() => setCreateChapterModalOpen(false)}
+        onChapterCreated={handleChapterCreated}
+        boards={boards}
       />
 
       {postSavePrompt && (

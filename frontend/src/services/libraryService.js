@@ -92,6 +92,12 @@ const libraryService = {
   createChapterTopic: (chapterId, data) =>
     api.post(`/library/library/chapters/${chapterId}/topics`, data),
 
+  createTopic: (chapterId, data) =>
+    api.post(`/library/library/chapters/${chapterId}/topics`, data),
+
+  createChapter: (bookId, data) =>
+    api.post(`/library/library/books/${bookId}/chapters`, data),
+
   deleteTopic: (topicId) => api.delete(`/library/library/topics/${topicId}`),
 
   getLibraryStats: () => api.get("/library/stats"),
