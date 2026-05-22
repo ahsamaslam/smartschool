@@ -1737,7 +1737,7 @@ async def list_my_slides(
     rows = await execute_query(
         """
         SELECT
-            ttc.id              AS content_id,
+            ttc.id              AS id,
             ttc.library_topic_id AS topic_id,
             lt.title            AS topic_title,
             ttc.slides_json,
