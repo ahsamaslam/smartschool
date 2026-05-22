@@ -67,12 +67,16 @@ export default function BookDetail() {
       // Handle both old format (chapters) and new format (approved_chapters + custom_chapters)
       let processedData = { ...data };
       if (data?.approved_chapters || data?.custom_chapters) {
-        // New format: combine approved and custom for display
-        const allChapters = [...(data?.approved_chapters || []), ...(data?.custom_chapters || [])];
-        processedData.chapters = allChapters;
+        // New format: preserve structure for separate display
+        processedData.approved_chapters = data?.approved_chapters || [];
+        processedData.custom_chapters = data?.custom_chapters || [];
+        // Also create combined list for backward compatibility
+        processedData.chapters = [...processedData.approved_chapters, ...processedData.custom_chapters];
       } else if (!data?.chapters) {
         // Ensure chapters exists
         processedData.chapters = [];
+        processedData.approved_chapters = [];
+        processedData.custom_chapters = [];
       }
 
       setBook(processedData);
@@ -88,8 +92,10 @@ export default function BookDetail() {
       });
       setHomeworkCounts(counts);
 
-      if (processedData?.chapters?.length > 0) {
-        setExpandedChapters({ [processedData.chapters[0].id]: true });
+      // Expand first chapter in appropriate section
+      const firstChapter = processedData.approved_chapters?.[0] || processedData.chapters?.[0];
+      if (firstChapter?.id) {
+        setExpandedChapters({ [firstChapter.id]: true });
       }
     } catch {
       toast.error("Failed to load book.");
@@ -294,18 +300,15 @@ export default function BookDetail() {
       <div className="flex gap-6">
         {/* Left: Chapters & Topics tree */}
         <div className="w-80 flex-shrink-0">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Chapters</h2>
-            <button
-              onClick={() => setCreateChapterModalOpen(true)}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-semibold hover:bg-amber-100 transition-colors"
-              title="Add chapter"
-            >
-              <PlusIcon className="h-3 w-3" /> Add
-            </button>
-          </div>
-          <div className="space-y-2">
-            {(book.chapters || []).map((chapter) => (
+          <div className="space-y-6">
+            {/* Approved Chapters Section */}
+            {(book.approved_chapters || []).length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Approved Chapters</h2>
+                </div>
+                <div className="space-y-2">
+                  {(book.approved_chapters || []).map((chapter) => (
               <div key={chapter.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                 {/* Chapter row */}
                 <button
@@ -389,6 +392,113 @@ export default function BookDetail() {
                 )}
               </div>
             ))}
+                </div>
+              </div>
+            )}
+
+            {/* Custom Chapters Section */}
+            {user?.role === "teacher" && (book.custom_chapters || []).length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-semibold text-amber-700 uppercase tracking-wide">My Custom Chapters</h2>
+                </div>
+                <div className="space-y-2">
+                  {(book.custom_chapters || []).map((chapter) => (
+                    <div key={chapter.id} className="bg-amber-50 rounded-xl border border-amber-200 overflow-hidden">
+                      {/* Chapter row */}
+                      <button
+                        onClick={() => toggleChapter(chapter.id)}
+                        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-amber-100 transition-colors text-left"
+                      >
+                        {expandedChapters[chapter.id] ? (
+                          <ChevronDownIcon className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                        ) : (
+                          <ChevronRightIcon className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                        )}
+                        <span className="text-xs font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full flex-shrink-0">
+                          Ch {chapter.chapter_number}
+                        </span>
+                        <span className="text-sm font-medium text-amber-900 flex-1 min-w-0 truncate">
+                          {chapter.title}
+                        </span>
+                        <div className="flex gap-2 flex-shrink-0 items-center">
+                          {homeworkCounts[`chapter_${chapter.id}`] > 0 && (
+                            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+                              📚 {homeworkCounts[`chapter_${chapter.id}`]}
+                            </span>
+                          )}
+                          <span className="text-xs text-amber-600">
+                            {(chapter.topics || []).length}
+                          </span>
+                        </div>
+                      </button>
+
+                      {/* Topics list */}
+                      {expandedChapters[chapter.id] && (
+                        <div className="border-t border-amber-100 bg-amber-50/70">
+                          <div className="flex items-center justify-between px-4 py-2 border-b border-amber-100">
+                            <span className="text-xs font-semibold text-amber-700">Topics</span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedChapterForTopic(chapter.id);
+                                setCreateTopicModalOpen(true);
+                              }}
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-amber-100 border border-amber-300 text-amber-700 text-xs font-semibold hover:bg-amber-200 transition-colors"
+                              title="Add topic"
+                            >
+                              <PlusIcon className="h-3 w-3" /> Add
+                            </button>
+                          </div>
+                          {(chapter.topics || []).length === 0 ? (
+                            <p className="text-xs text-amber-600 px-4 py-2">No topics</p>
+                          ) : (
+                            (chapter.topics || []).map((topic, idx) => (
+                              <button
+                                key={topic.id}
+                                onClick={() => selectTopic(topic, chapter)}
+                                className={`w-full text-left flex items-start gap-2 px-4 py-2 text-sm transition-colors ${
+                                  selectedTopic?.id === topic.id
+                                    ? "bg-amber-200 text-amber-900 font-medium"
+                                    : "hover:bg-amber-100 text-amber-800"
+                                }`}
+                              >
+                                <span className="text-xs text-amber-700 font-semibold flex-shrink-0 mt-0.5">
+                                  {idx + 1}.
+                                </span>
+                                <span className="flex-1 truncate">{topic.title}</span>
+                                <span className="flex gap-1 flex-shrink-0 text-[10px]">
+                                  {topic.has_slides && (
+                                    <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">Slides</span>
+                                  )}
+                                  {contentStatus[topic.id]?.has_lecture && (
+                                    <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Lecture</span>
+                                  )}
+                                  {homeworkCounts[`topic_${topic.id}`] > 0 && (
+                                    <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-green-100 text-green-700">📚 {homeworkCounts[`topic_${topic.id}`]}</span>
+                                  )}
+                                </span>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Create Chapter Button */}
+            {user?.role === "teacher" && (
+              <button
+                onClick={() => setCreateChapterModalOpen(true)}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-amber-50 border border-amber-300 text-amber-700 text-sm font-semibold hover:bg-amber-100 transition-colors"
+                title="Create custom chapter"
+              >
+                <PlusIcon className="h-4 w-4" /> Create Custom Chapter
+              </button>
+            )}
           </div>
         </div>
 
