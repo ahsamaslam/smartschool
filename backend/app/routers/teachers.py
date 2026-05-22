@@ -1355,7 +1355,7 @@ async def get_teacher_book(book_id: str, current_user: dict = Depends(get_user_f
         if role in ("admin", "super_admin"):
             # Admins only see library topics
             topics = await execute_query(
-                """SELECT id, title,
+                """SELECT id, title, content_body,
                           slides_json IS NOT NULL AND slides_json::text != 'null' as has_slides
                    FROM library_topics
                    WHERE chapter_id = $1 AND teacher_id IS NULL
@@ -1365,7 +1365,7 @@ async def get_teacher_book(book_id: str, current_user: dict = Depends(get_user_f
         else:
             # Teachers see library topics + their own topics (for this chapter)
             topics = await execute_query(
-                """SELECT id, title,
+                """SELECT id, title, content_body,
                           slides_json IS NOT NULL AND slides_json::text != 'null' as has_slides
                    FROM library_topics
                    WHERE chapter_id = $1 AND (teacher_id IS NULL OR teacher_id = $2::uuid)
@@ -1379,7 +1379,7 @@ async def get_teacher_book(book_id: str, current_user: dict = Depends(get_user_f
     for ch in custom_chapters:
         # Teachers see their own topics
         topics = await execute_query(
-            """SELECT id, title,
+            """SELECT id, title, content_body,
                       slides_json IS NOT NULL AND slides_json::text != 'null' as has_slides
                FROM library_topics
                WHERE chapter_id = $1 AND teacher_id = $2::uuid
