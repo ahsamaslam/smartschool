@@ -355,21 +355,37 @@ export default function BookDetail() {
                       )}
                     </>
                   ) : (
-                    /* No slides yet — create */
-                    <button
-                      onClick={() =>
-                        navigate("/admin/slides", {
-                          state: {
-                            topic: selectedTopic,
-                            libraryContext: { book, chapter: selectedChapter },
-                          },
-                        })
-                      }
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors"
-                    >
-                      <SparklesIcon className="h-3.5 w-3.5" />
-                      Create Slides
-                    </button>
+                    /* No slides yet — create slides and add homework */
+                    <>
+                      <button
+                        onClick={() =>
+                          navigate("/teacher/slides", {
+                            state: {
+                              topic: selectedTopic,
+                              libraryContext: { book, chapter: selectedChapter },
+                            },
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors"
+                      >
+                        <SparklesIcon className="h-3.5 w-3.5" />
+                        Create Slides
+                      </button>
+                      <button
+                        onClick={() =>
+                          navigate("/teacher/homework", {
+                            state: {
+                              topic: selectedTopic,
+                              libraryContext: { book, chapter: selectedChapter },
+                            },
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors"
+                      >
+                        <DocumentTextIcon className="h-3.5 w-3.5" />
+                        Add Homework
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
