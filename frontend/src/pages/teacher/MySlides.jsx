@@ -54,6 +54,21 @@ export default function MySlides() {
     load();
   }, [load]);
 
+  // Refetch when page becomes visible (user returns from editing)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        console.log("MySlides: Page became visible, refetching slides...");
+        setOffset(0);
+        // Ensure load is called even if offset is already 0
+        setTimeout(() => load(), 0);
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [load]);
+
   const handleDelete = async () => {
     if (!deleteConfirm) return;
     setDeleting(true);
@@ -83,9 +98,21 @@ export default function MySlides() {
             View all slides you've created
           </p>
         </div>
-        <Link to="/teacher/slides">
-          <Button variant="primary">+ Create Slides</Button>
-        </Link>
+        <div className="flex gap-2">
+          <button
+            onClick={() => {
+              setOffset(0);
+              load();
+            }}
+            className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            title="Refresh to see latest changes"
+          >
+            ↻ Refresh
+          </button>
+          <Link to="/teacher/slides">
+            <Button variant="primary">+ Create Slides</Button>
+          </Link>
+        </div>
       </div>
 
       {error && <Alert type="error" message={error} className="mb-4" />}
@@ -138,9 +165,10 @@ export default function MySlides() {
 
                 <div className="flex gap-2 pt-3 mt-auto">
                   <button
-                    onClick={() =>
-                      navigate(`/teacher/slide-viewer?topic=${slide.topic_id}`)
-                    }
+                    onClick={() => {
+                      console.log("View button clicked, topic_id:", slide.topic_id);
+                      navigate(`/teacher/slide-viewer?topic=${slide.topic_id}`);
+                    }}
                     className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"
                     title="View slide"
                   >
@@ -148,7 +176,15 @@ export default function MySlides() {
                     View
                   </button>
                   <Link
-                    to={`/teacher/slides?topic=${slide.topic_id}`}
+                    to="/teacher/slides"
+                    state={{
+                      topic: {
+                        id: slide.topic_id,
+                        title: slide.title,
+                        content_body: slide.slides_json,
+                        slide_theme: slide.slide_theme,
+                      },
+                    }}
                     className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
                     title="Edit slide"
                   >

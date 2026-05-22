@@ -337,6 +337,13 @@ export default function TeacherSlides() {
   useEffect(() => {
     const tid = topicFromLibrary?.id;
     if (!tid) return;
+
+    // Set theme from state if available
+    if (topicFromLibrary?.slide_theme) {
+      const th = SLIDE_TEMPLATES.find((t) => t.id === topicFromLibrary.slide_theme);
+      if (th) setTemplate(th);
+    }
+
     let cancelled = false;
     (async () => {
       try {
@@ -364,7 +371,7 @@ export default function TeacherSlides() {
     return () => {
       cancelled = true;
     };
-  }, [topicFromLibrary?.id]);
+  }, [topicFromLibrary?.id, topicFromLibrary?.slide_theme]);
 
   const addSlide = (afterIndex) => {
     const newSlide = {

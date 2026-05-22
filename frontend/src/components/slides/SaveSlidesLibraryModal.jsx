@@ -165,6 +165,7 @@ export function SaveSlidesLibraryModal({
       }
       setSaving(true);
       try {
+        console.log("Saving slides with theme:", slideThemeId);
         await teacherService.saveMyTopicSlides(targetTopicId, {
           slides: payloadSlides,
           slide_theme: slideThemeId,
