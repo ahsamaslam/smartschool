@@ -24,10 +24,15 @@ export default function MySlides() {
     teacherService
       .listMySlides({ limit: LIMIT, offset })
       .then((res) => {
-        setSlides(Array.isArray(res.data) ? res.data : []);
-        setTotal(res.total || 0);
+        const slides = res.data?.data || [];
+        const total = res.data?.total || 0;
+        setSlides(Array.isArray(slides) ? slides : []);
+        setTotal(total);
       })
-      .catch(() => setError("Failed to load slides."))
+      .catch((err) => {
+        console.error("MySlides API Error:", err);
+        setError("Failed to load slides.");
+      })
       .finally(() => setLoading(false));
   }, [user?.id, offset]);
 
