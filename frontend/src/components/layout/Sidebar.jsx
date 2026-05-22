@@ -120,6 +120,11 @@ const NAV_BY_ROLE = {
     { label: "My Classes", to: "/teacher/classes", icon: "AcademicCapIcon" },
     { label: "My Curriculum", to: "/teacher/curriculum", icon: "BookOpenIcon" },
     {
+      label: "Lesson Planning",
+      to: "/teacher/lesson-planning",
+      icon: "CalendarDaysIcon",
+    },
+    {
       label: "Attendance",
       to: "/teacher/attendance",
       icon: "ClipboardDocumentCheckIcon",

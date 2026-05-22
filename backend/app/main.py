@@ -29,6 +29,7 @@ from app.routers import (
     library,
     exams,
     homework,
+    lessons,
     chat,
     metrics,
 )
@@ -159,6 +160,9 @@ app.include_router(exams.router, prefix="/api/exams", tags=["Exams"])
 
 # Homework (interactive + upload, topic-scoped)
 app.include_router(homework.router, prefix="/api/homework", tags=["Homework"])
+
+# Lesson Planning (teacher lesson scheduling and syllabus coverage)
+app.include_router(lessons.router, prefix="/api/teachers/lessons", tags=["Lesson Planning"])
 
 # Chat (academic communication, WebSocket + REST)
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])

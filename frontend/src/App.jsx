@@ -72,6 +72,7 @@ const TeacherSlideViewer = lazy(() => import("./pages/teacher/SlideViewer"));
 const TeacherRecordLecture = lazy(() => import("./pages/teacher/TeacherRecordLecture"));
 const TeacherMyLectures = lazy(() => import("./pages/teacher/MyLectures"));
 const TeacherDailyDashboard = lazy(() => import("./pages/teacher/DailyDashboard"));
+const TeacherLessonPlanning = lazy(() => import("./pages/teacher/LessonPlanning"));
 
 // Manager
 const ManagerDashboard = lazy(() => import("./pages/manager/Dashboard"));
@@ -246,6 +247,10 @@ export default function App() {
               <Route
                 path="/teacher/curriculum"
                 element={<TeacherMyCurriculum />}
+              />
+              <Route
+                path="/teacher/lesson-planning"
+                element={<TeacherLessonPlanning />}
               />
               <Route path="/teacher/chat" element={<TeacherChat />} />
               <Route path="/teacher/my-slides" element={<TeacherMySlides />} />

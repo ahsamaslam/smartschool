@@ -167,6 +167,89 @@ async def ensure_homework_schema():
     await execute_write(
         "CREATE INDEX IF NOT EXISTS idx_tcsa_class ON teacher_class_subject_assignments(class_id)"
     )
+    # Lesson planning tables
+    await execute_write(
+        """
+        CREATE TABLE IF NOT EXISTS lesson_plans (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            teacher_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            school_id UUID REFERENCES schools(id) ON DELETE SET NULL,
+            branch_id UUID REFERENCES branches(id) ON DELETE SET NULL,
+            class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+            library_class_id UUID REFERENCES library_classes(id) ON DELETE SET NULL,
+            library_board_id UUID REFERENCES library_boards(id) ON DELETE SET NULL,
+            library_subject_id UUID NOT NULL REFERENCES library_subjects(id) ON DELETE CASCADE,
+            library_book_id UUID NOT NULL REFERENCES library_books(id) ON DELETE CASCADE,
+            planned_date DATE NOT NULL,
+            duration_minutes INTEGER DEFAULT 45,
+            title VARCHAR(500),
+            description TEXT,
+            status VARCHAR(20) NOT NULL DEFAULT 'planned'
+                CHECK (status IN ('planned', 'in_progress', 'completed', 'postponed')),
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(teacher_id, planned_date, class_id, library_subject_id)
+        )
+        """
+    )
+    await execute_write(
+        "CREATE INDEX IF NOT EXISTS idx_lesson_plans_teacher_date ON lesson_plans(teacher_id, planned_date)"
+    )
+    await execute_write(
+        "CREATE INDEX IF NOT EXISTS idx_lesson_plans_class_date ON lesson_plans(class_id, planned_date)"
+    )
+    await execute_write(
+        """
+        CREATE TABLE IF NOT EXISTS lesson_plan_topics (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            lesson_plan_id UUID NOT NULL REFERENCES lesson_plans(id) ON DELETE CASCADE,
+            library_topic_id UUID NOT NULL REFERENCES library_topics(id) ON DELETE CASCADE,
+            chapter_number INTEGER,
+            topic_title VARCHAR(500),
+            sort_order INTEGER DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(lesson_plan_id, library_topic_id)
+        )
+        """
+    )
+    await execute_write(
+        "CREATE INDEX IF NOT EXISTS idx_lesson_plan_topics_lesson_id ON lesson_plan_topics(lesson_plan_id)"
+    )
+    await execute_write(
+        """
+        CREATE TABLE IF NOT EXISTS lesson_plan_classes (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            lesson_plan_id UUID NOT NULL REFERENCES lesson_plans(id) ON DELETE CASCADE,
+            class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(lesson_plan_id, class_id)
+        )
+        """
+    )
+    await execute_write(
+        "CREATE INDEX IF NOT EXISTS idx_lesson_plan_classes_lesson_id ON lesson_plan_classes(lesson_plan_id)"
+    )
+    await execute_write(
+        """
+        CREATE TABLE IF NOT EXISTS topic_coverage_tracking (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            teacher_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            library_topic_id UUID NOT NULL REFERENCES library_topics(id) ON DELETE CASCADE,
+            class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+            first_planned_date DATE,
+            last_covered_date DATE,
+            coverage_count INTEGER DEFAULT 1,
+            is_covered BOOLEAN DEFAULT false,
+            covered_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(teacher_id, library_topic_id, class_id)
+        )
+        """
+    )
+    await execute_write(
+        "CREATE INDEX IF NOT EXISTS idx_topic_coverage_teacher_id ON topic_coverage_tracking(teacher_id)"
+    )
 
 
 def _uuid_or_null(v: Optional[str]) -> Optional[str]:
