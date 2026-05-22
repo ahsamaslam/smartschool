@@ -311,6 +311,15 @@ export default function BookDetail() {
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Approved Chapters</h2>
+                  {user?.role === "admin" && (
+                    <button
+                      onClick={() => setCreateChapterModalOpen(true)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-semibold hover:bg-amber-100 transition-colors"
+                      title="Add chapter"
+                    >
+                      <PlusIcon className="h-3 w-3" /> Add
+                    </button>
+                  )}
                 </div>
                 <div className="space-y-2">
                   {(book.approved_chapters || []).map((chapter) => (
