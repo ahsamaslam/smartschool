@@ -148,7 +148,11 @@ export default function TeacherSlides() {
         setCurriculum(res.data || []);
       })
       .catch((err) => {
-        console.error("Failed to load curriculum:", err);
+        console.error("Failed to load curriculum:", {
+          status: err?.response?.status,
+          message: err?.response?.data?.detail || err?.message,
+          fullError: err,
+        });
       })
       .finally(() => setLoadingCurriculum(false));
   }, [user?.id]);
