@@ -1362,7 +1362,8 @@ async def get_teacher_book(book_id: str, current_user: dict = Depends(get_user_f
             )
         chapter_list.append({**dict(ch), "topics": [dict(t) for t in topics]})
 
-    return {**dict(book), "chapters": chapter_list}
+    result = {**dict(book), "chapters": chapter_list}
+    return {"data": result}
 
 
 # ============================================
