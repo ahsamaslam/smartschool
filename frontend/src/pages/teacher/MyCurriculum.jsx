@@ -1,8 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../../context/AuthContext";
 import teacherService from "../../services/teacherService";
-import libraryService from "../../services/libraryService";
 import toast from "react-hot-toast";
 import {
   BookOpenIcon,
@@ -10,118 +8,39 @@ import {
   ChevronRightIcon,
   AcademicCapIcon,
   MagnifyingGlassIcon,
-  PlusIcon,
 } from "@heroicons/react/24/outline";
-import { CreateTopicModal } from "../../components/slides/CreateTopicModal";
-import { CreateChapterModal } from "../../components/slides/CreateChapterModal";
 
-// ── Book Card with Chapters ───────────────────────────────────────────────────
-function BookCard({ book, onOpenBook, onAddChapter, onAddTopic }) {
-  const [expanded, setExpanded] = useState(false);
-  const [chapters, setChapters] = useState([]);
-  const [loadingChapters, setLoadingChapters] = useState(false);
-
-  const toggleExpanded = async (e) => {
-    e.stopPropagation();
-    if (!expanded && chapters.length === 0) {
-      setLoadingChapters(true);
-      try {
-        const res = await libraryService.getBookDetails(book.book_id);
-        const bookData = res.data?.data ?? res.data;
-        setChapters(Array.isArray(bookData?.chapters) ? bookData.chapters : []);
-      } catch {
-        toast.error("Failed to load chapters");
-      } finally {
-        setLoadingChapters(false);
-      }
-    }
-    setExpanded(!expanded);
-  };
-
+// ── Book Card ─────────────────────────────────────────────────────────────────
+function BookCard({ book, onOpenBook }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-      <button
-        type="button"
-        onClick={toggleExpanded}
-        className="text-left w-full p-4 hover:bg-gray-50 transition-colors group flex items-start gap-3"
-      >
-        {expanded ? (
-          <ChevronDownIcon className="h-4 w-4 text-gray-400 flex-shrink-0 mt-1" />
-        ) : (
-          <ChevronRightIcon className="h-4 w-4 text-gray-400 flex-shrink-0 mt-1" />
-        )}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-start gap-3">
-            <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-100">
-              <BookOpenIcon className="h-4 w-4 text-indigo-600" />
-            </div>
-            <div className="min-w-0">
-              <p className="font-semibold text-gray-800 truncate">{book.book_title}</p>
-              {book.book_author && (
-                <p className="text-xs text-gray-400 mt-0.5 truncate">{book.book_author}</p>
-              )}
-              <p className="text-xs text-gray-400 mt-1">
-                {book.chapter_count ?? 0} ch · {book.topic_count ?? 0} topics
-              </p>
-            </div>
-          </div>
+    <button
+      type="button"
+      onClick={onOpenBook}
+      className="text-left w-full p-4 bg-white border border-gray-200 rounded-xl hover:border-indigo-300 hover:shadow-sm transition-all group"
+    >
+      <div className="flex items-start gap-3">
+        <div className="w-9 h-9 rounded-lg bg-indigo-50 flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-100">
+          <BookOpenIcon className="h-5 w-5 text-indigo-600" />
         </div>
-      </button>
-
-      {expanded && (
-        <div className="border-t border-gray-100 bg-gray-50/30 p-4 space-y-3">
-          {loadingChapters ? (
-            <p className="text-xs text-gray-400 text-center py-4">Loading chapters…</p>
-          ) : chapters.length === 0 ? (
-            <p className="text-xs text-gray-400 text-center py-4">No chapters</p>
-          ) : (
-            <div className="space-y-2">
-              {chapters.map((chapter) => (
-                <div key={chapter.id} className="bg-white border border-gray-100 rounded-lg p-3 space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-gray-800">
-                        Ch {chapter.chapter_number}: {chapter.title}
-                      </p>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        {(chapter.topics || []).length} topic{(chapter.topics || []).length !== 1 ? "s" : ""}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddTopic(book.book_id, chapter.id);
-                    }}
-                    className="w-full py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-semibold hover:bg-indigo-100 transition-colors flex items-center justify-center gap-1"
-                    title="Add topic to this chapter"
-                  >
-                    <PlusIcon className="h-3.5 w-3.5" /> Add Topic
-                  </button>
-                </div>
-              ))}
-            </div>
+        <div className="min-w-0">
+          <p className="font-semibold text-gray-800 truncate">{book.book_title}</p>
+          {book.book_author && (
+            <p className="text-xs text-gray-400 mt-0.5 truncate">{book.book_author}</p>
           )}
-
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onAddChapter(book.book_id);
-            }}
-            className="w-full py-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 text-xs font-semibold hover:bg-amber-100 transition-colors flex items-center justify-center gap-1"
-          >
-            <PlusIcon className="h-3.5 w-3.5" /> Add Chapter
-          </button>
+          <p className="text-xs text-gray-400 mt-1">
+            {book.chapter_count ?? 0} ch · {book.topic_count ?? 0} topics
+          </p>
         </div>
-      )}
-    </div>
+      </div>
+      <p className="text-xs text-indigo-600 font-medium mt-3 group-hover:text-indigo-700">
+        Open Book →
+      </p>
+    </button>
   );
 }
 
 // ── Subject Section ───────────────────────────────────────────────────────────
-function SubjectSection({ subject, onBookClick, onAddChapter, onAddTopic }) {
+function SubjectSection({ subject, onBookClick }) {
   const [open, setOpen] = useState(true);
   return (
     <div className="mb-3">
@@ -148,8 +67,6 @@ function SubjectSection({ subject, onBookClick, onAddChapter, onAddTopic }) {
               key={book.book_id}
               book={book}
               onOpenBook={() => onBookClick(book.book_id)}
-              onAddChapter={onAddChapter}
-              onAddTopic={onAddTopic}
             />
           ))}
         </div>
@@ -159,7 +76,7 @@ function SubjectSection({ subject, onBookClick, onAddChapter, onAddTopic }) {
 }
 
 // ── Class Accordion ───────────────────────────────────────────────────────────
-function ClassAccordion({ cls, onBookClick, onAddChapter, onAddTopic, forceOpen }) {
+function ClassAccordion({ cls, onBookClick, forceOpen }) {
   const [open, setOpen] = useState(false);
   const isOpen = forceOpen || open;
   const label = cls.section
@@ -199,8 +116,6 @@ function ClassAccordion({ cls, onBookClick, onAddChapter, onAddTopic, forceOpen 
                 key={sub.subject_id}
                 subject={sub}
                 onBookClick={onBookClick}
-                onAddChapter={onAddChapter}
-                onAddTopic={onAddTopic}
               />
             ))
           )}
@@ -213,15 +128,9 @@ function ClassAccordion({ cls, onBookClick, onAddChapter, onAddTopic, forceOpen 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function TeacherMyCurriculum() {
   const navigate = useNavigate();
-  const { user } = useAuth();
   const [curriculum, setCurriculum] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [createTopicModalOpen, setCreateTopicModalOpen] = useState(false);
-  const [createChapterModalOpen, setCreateChapterModalOpen] = useState(false);
-  const [selectedBookId, setSelectedBookId] = useState(null);
-  const [selectedChapterId, setSelectedChapterId] = useState(null);
-  const [boards, setBoards] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -237,40 +146,8 @@ export default function TeacherMyCurriculum() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Load boards for modals
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await libraryService.getBoards();
-        const list = res.data?.data ?? res.data ?? [];
-        setBoards(Array.isArray(list) ? list : []);
-      } catch {
-        /* ignore */
-      }
-    })();
-  }, []);
-
   const handleBookClick = (bookId) => {
     navigate(`/admin/library/books/${bookId}`);
-  };
-
-  const handleAddChapter = (bookId) => {
-    setSelectedBookId(bookId);
-    setCreateChapterModalOpen(true);
-  };
-
-  const handleAddTopic = (bookId, chapterId) => {
-    setSelectedBookId(bookId);
-    setSelectedChapterId(chapterId);
-    setCreateTopicModalOpen(true);
-  };
-
-  const handleChapterCreated = () => {
-    load();
-  };
-
-  const handleTopicCreated = () => {
-    load();
   };
 
   const q = search.toLowerCase().trim();
@@ -352,38 +229,11 @@ export default function TeacherMyCurriculum() {
               key={cls.class_id}
               cls={cls}
               onBookClick={handleBookClick}
-              onAddChapter={handleAddChapter}
-              onAddTopic={handleAddTopic}
               forceOpen={q.length > 0}
             />
           ))}
         </div>
       )}
-
-      <CreateTopicModal
-        open={createTopicModalOpen}
-        onClose={() => {
-          setCreateTopicModalOpen(false);
-          setSelectedBookId(null);
-          setSelectedChapterId(null);
-        }}
-        onTopicCreated={handleTopicCreated}
-        boards={boards}
-        preselectedChapterId={selectedChapterId}
-        user={user}
-      />
-
-      <CreateChapterModal
-        open={createChapterModalOpen}
-        onClose={() => {
-          setCreateChapterModalOpen(false);
-          setSelectedBookId(null);
-        }}
-        onChapterCreated={handleChapterCreated}
-        boards={boards}
-        preselectedBookId={selectedBookId}
-        user={user}
-      />
     </div>
   );
 }
