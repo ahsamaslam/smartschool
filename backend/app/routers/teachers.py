@@ -69,6 +69,10 @@ class CreateTeacherTopicRequest(BaseModel):
     content_body: Optional[str] = ""
 
 
+class UpdateTopicContentRequest(BaseModel):
+    content_body: str
+
+
 # ============================================
 # TEACHER DASHBOARD
 # ============================================
@@ -1617,6 +1621,40 @@ async def get_my_topic_content(
     out = _ttc_row_json(dict(row))
     out["topic_title"] = topic["title"]
     return {"data": out}
+
+
+@router.put("/topics/{topic_id}/content")
+async def update_topic_content(
+    topic_id: str,
+    body: UpdateTopicContentRequest,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Update the content_body of a library topic (shared library update).
+    Only admins and teachers with permission can update."""
+    topic_id = (topic_id or "").strip()
+
+    # Update the topic's content_body in the library_topics table
+    updated = await execute_one(
+        """
+        UPDATE library_topics
+        SET content_body = $1
+        WHERE id = $2::uuid
+        RETURNING id, title, content_body
+        """,
+        body.content_body.strip() if body.content_body else "",
+        topic_id,
+    )
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    return {
+        "data": {
+            "id": str(updated["id"]),
+            "title": updated["title"],
+            "content_body": updated["content_body"],
+        }
+    }
 
 
 @router.put("/topics/{topic_id}/slides")

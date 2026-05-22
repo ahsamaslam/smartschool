@@ -41,6 +41,9 @@ export default function BookDetail() {
   const [createTopicModalOpen, setCreateTopicModalOpen] = useState(false);
   const [selectedChapterForTopic, setSelectedChapterForTopic] = useState(null);
   const [boards, setBoards] = useState([]);
+  const [editingContent, setEditingContent] = useState(false);
+  const [editedContent, setEditedContent] = useState("");
+  const [savingContent, setSavingContent] = useState(false);
 
   // passed via navigate state for breadcrumb
   const boardId = location.state?.boardId;
@@ -109,6 +112,50 @@ export default function BookDetail() {
     setSelectedTopic(topic);
     setSelectedChapter(chapter);
     setConfirmDelete(false);
+    setEditingContent(false);
+  };
+
+  const handleEditContent = () => {
+    setEditingContent(true);
+    setEditedContent(selectedTopic?.content_body || "");
+  };
+
+  const handleCancelEdit = () => {
+    setEditingContent(false);
+    setEditedContent("");
+  };
+
+  const handleSaveContent = async () => {
+    if (!selectedTopic) return;
+    setSavingContent(true);
+    try {
+      const response = await teacherService.updateTopicContent(selectedTopic.id, {
+        content_body: editedContent,
+      });
+      const updatedTopic = response?.data?.data;
+      if (updatedTopic) {
+        setSelectedTopic((prev) => ({
+          ...prev,
+          content_body: updatedTopic.content_body,
+        }));
+        setBook((prev) => ({
+          ...prev,
+          chapters: prev.chapters.map((ch) => ({
+            ...ch,
+            topics: ch.topics.map((t) =>
+              t.id === selectedTopic.id ? { ...t, content_body: updatedTopic.content_body } : t
+            ),
+          })),
+        }));
+      }
+      setEditingContent(false);
+      setEditedContent("");
+      toast.success("Content saved successfully!");
+    } catch {
+      toast.error("Failed to save content.");
+    } finally {
+      setSavingContent(false);
+    }
   };
 
   const handleDeleteSlides = async () => {
@@ -479,22 +526,44 @@ export default function BookDetail() {
               <div className="bg-white rounded-2xl border border-gray-200 p-6">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Content</h3>
-                  <button
-                    onClick={() =>
-                      navigate("/teacher/slides", {
-                        state: {
-                          topic: selectedTopic,
-                          libraryContext: { book, chapter: selectedChapter },
-                        },
-                      })
-                    }
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors"
-                    title="Create slides with AI"
-                  >
-                    <PlusIcon className="h-3.5 w-3.5" /> Add Content
-                  </button>
+                  {!editingContent && (
+                    <button
+                      onClick={handleEditContent}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors"
+                      title="Edit content"
+                    >
+                      <PlusIcon className="h-3.5 w-3.5" /> Add Content
+                    </button>
+                  )}
                 </div>
-                {selectedTopic.content_body ? (
+
+                {editingContent ? (
+                  <div className="space-y-3">
+                    <textarea
+                      value={editedContent}
+                      onChange={(e) => setEditedContent(e.target.value)}
+                      className="w-full h-64 rounded-lg border border-gray-200 p-4 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder="Enter topic content here..."
+                    />
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        onClick={handleCancelEdit}
+                        disabled={savingContent}
+                        className="px-4 py-2 rounded-lg border border-gray-200 text-gray-700 text-sm font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveContent}
+                        disabled={savingContent}
+                        className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50 inline-flex items-center gap-1"
+                      >
+                        {savingContent && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
+                        {savingContent ? "Saving..." : "Save Content"}
+                      </button>
+                    </div>
+                  </div>
+                ) : selectedTopic.content_body ? (
                   <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap leading-relaxed">
                     {selectedTopic.content_body}
                   </div>

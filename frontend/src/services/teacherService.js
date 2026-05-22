@@ -97,6 +97,9 @@ const teacherService = {
   getMyTopicContent: (topicId) =>
     api.get(`${API_ROUTES.TEACHERS}/topics/${topicId}/my-content`),
 
+  updateTopicContent: (topicId, data) =>
+    api.put(`${API_ROUTES.TEACHERS}/topics/${topicId}/content`, data),
+
   saveMyTopicSlides: (topicId, data) =>
     api.put(`${API_ROUTES.TEACHERS}/topics/${topicId}/slides`, data),
 
