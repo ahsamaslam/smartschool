@@ -135,21 +135,6 @@ const NAV_BY_ROLE = {
       icon: "PresentationChartBarIcon",
     },
     {
-      label: "Publish Video",
-      to: "/teacher/publish-video",
-      icon: "VideoCameraIcon",
-    },
-    {
-      label: "My Avatar Videos",
-      to: "/teacher/avatar-videos",
-      icon: "UserCircleIcon",
-    },
-    {
-      label: "Lecture Viewer",
-      to: "/teacher/lecture-viewer",
-      icon: "PlayCircleIcon",
-    },
-    {
       label: "Exam",
       to: "/teacher/exams",
       icon: "DocumentTextIcon",
