@@ -193,6 +193,13 @@ async def ensure_homework_schema():
         )
         """
     )
+    # Add planned_time column if it doesn't exist (migration for existing tables)
+    await execute_write(
+        """
+        ALTER TABLE lesson_plans
+        ADD COLUMN IF NOT EXISTS planned_time TIME DEFAULT '09:00'
+        """
+    )
     await execute_write(
         "CREATE INDEX IF NOT EXISTS idx_lesson_plans_teacher_date ON lesson_plans(teacher_id, planned_date)"
     )
