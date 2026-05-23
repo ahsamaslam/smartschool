@@ -490,7 +490,7 @@ async def get_class_students(class_id: str, teacher_id: Optional[str] = None):
                 + homework_avg * 0.40
                 + attendance_rate * 0.20
                 + behavioral_rate * 0.15
-            ), 2) AS shs_score,
+            ), 2) AS overall_score,
             RANK() OVER (
                 ORDER BY ROUND((
                     video_completion_rate * 0.25
@@ -500,7 +500,7 @@ async def get_class_students(class_id: str, teacher_id: Optional[str] = None):
                 ), 2) DESC
             ) AS ranking
         FROM base
-        ORDER BY shs_score DESC, full_name
+        ORDER BY overall_score DESC, full_name
     """
 
     students = await execute_query(query, class_id, teacher_id)
