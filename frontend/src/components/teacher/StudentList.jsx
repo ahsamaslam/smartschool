@@ -91,10 +91,13 @@ export default function StudentList({ students = [], classId }) {
                     {bar(s.attendance_rate)}
                   </div>
                 </td>
-                <td className="py-3 px-4 text-center text-xs font-medium text-gray-700">
-                  {s.homework_avg != null
-                    ? `${Math.round(s.homework_avg)}%`
-                    : "—"}
+                <td className="py-3 px-4">
+                  <div className="text-center text-xs font-medium text-gray-700">
+                    {s.homework_avg != null
+                      ? `${Math.round(s.homework_avg)}%`
+                      : "—"}
+                    {s.homework_avg != null && bar(s.homework_avg)}
+                  </div>
                 </td>
                 <td className="py-3 px-4 text-center">
                   <span
