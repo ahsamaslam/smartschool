@@ -618,7 +618,7 @@ async def get_syllabus_coverage(
     params = [teacher_id]
 
     if library_subject_id:
-        query += " AND lb.library_subject_id = $2::uuid"
+        query += " AND tcsa.library_subject_id = $2::uuid"
         params.append(library_subject_id)
 
     all_topics = await execute_query(query, *params)
