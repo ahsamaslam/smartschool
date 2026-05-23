@@ -607,7 +607,7 @@ async def get_syllabus_coverage(
 
     # Get all topics in assigned books
     query = """
-        SELECT DISTINCT lt.id, lt.title, lt.chapter_number
+        SELECT DISTINCT lt.id, lt.title, lc.chapter_number
         FROM library_topics lt
         JOIN library_chapters lc ON lt.chapter_id = lc.id
         JOIN library_books lb ON lc.book_id = lb.id
