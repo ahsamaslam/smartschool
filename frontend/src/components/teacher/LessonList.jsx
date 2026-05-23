@@ -70,6 +70,11 @@ export function LessonList({
     });
   };
 
+  const formatTime = (timeStr) => {
+    if (!timeStr) return "09:00";
+    return timeStr;
+  };
+
   if (loading) {
     return (
       <div className="text-center py-20 text-gray-500">
@@ -127,7 +132,7 @@ export function LessonList({
               <div className="flex items-start justify-between">
                 <div>
                   <p className="font-semibold text-sm">
-                    {formatDate(lesson.planned_date)}
+                    {formatDate(lesson.planned_date)} at {formatTime(lesson.planned_time)}
                   </p>
                   <p className="text-xs opacity-75">
                     {lesson.duration_minutes} minutes

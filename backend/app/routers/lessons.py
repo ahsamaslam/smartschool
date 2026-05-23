@@ -43,6 +43,7 @@ class UpdateLessonPlanRequest(BaseModel):
 class LessonPlanResponse(BaseModel):
     id: str
     planned_date: str
+    planned_time: str
     class_ids: List[str]
     class_names: List[str]
     library_subject_id: str
@@ -83,7 +84,7 @@ async def get_lesson_plan_details(lesson_id: str):
     """Fetch lesson plan with all related data."""
     lesson = await execute_one(
         """
-        SELECT id, teacher_id, planned_date, class_id, library_subject_id, library_book_id,
+        SELECT id, teacher_id, planned_date, planned_time, class_id, library_subject_id, library_book_id,
                title, description, status, duration_minutes, created_at, updated_at
         FROM lesson_plans
         WHERE id = $1::uuid
@@ -130,6 +131,7 @@ async def get_lesson_plan_details(lesson_id: str):
     return {
         "id": str(lesson["id"]),
         "planned_date": lesson["planned_date"].isoformat(),
+        "planned_time": str(lesson["planned_time"]) if lesson["planned_time"] else "09:00",
         "class_ids": [str(c["id"]) for c in class_ids],
         "class_names": [c["name"] for c in class_ids],
         "library_subject_id": str(lesson["library_subject_id"]),
