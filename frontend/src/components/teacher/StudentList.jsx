@@ -68,7 +68,7 @@ export default function StudentList({ students = [], classId }) {
         </thead>
         <tbody className="divide-y divide-gray-100">
           {students.map((s) => {
-            const overall = Math.round(s.overall_score || 0);
+            const overall = parseFloat(s.overall_score || 0).toFixed(1);
             return (
               <tr
                 key={s.id}
