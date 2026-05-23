@@ -36,46 +36,35 @@ def get_date_range(
 def calculate_daily_shs(
     video_completion_rate: float,   # 0-100
     focus_score: float,             # 0-100
-    quiz_score: float,              # 0-100
-    first_attempt_score: float,     # 0-100
-    questions_asked: int,           # raw count; normalised below
+    homework_score: float,          # 0-100  (marks_awarded/total_marks*100 or 75 for submission)
     attendance: bool,
-    study_duration_minutes: int,    # raw; normalised
-    homework_submitted: bool,
-    topic_revisits: int,            # raw count
-    test_retakes: int,              # raw count
+    study_duration_minutes: int,    # raw minutes; normalised to 0-100
+    topic_revisits: int,            # count of topics revisited
+    homework_retakes: int,          # count of homework resubmissions
 ) -> float:
     """
-    Weighted daily SHS:
-      video engagement  25%
-      comprehension     40%
-      consistency       20%
-      behavioral        15%
+    Weighted daily SHS (homework replaces quiz):
+      video engagement  25%  — watch completion + focus
+      homework          40%  — comprehension proxy
+      consistency       20%  — attendance + study time
+      behavioral        15%  — topic revisits + homework retakes
     """
-    # --- Video engagement sub-score (0-100) ---
+    # --- Video engagement (0-100) ---
     video_engagement = (video_completion_rate * 0.6) + (focus_score * 0.4)
 
-    # --- Comprehension sub-score (0-100) ---
-    # questions_asked is positive (curiosity); cap normalise to 20 questions = 100
-    question_quality = min(questions_asked / 20.0 * 100, 100)
-    comprehension = (quiz_score * 0.55) + (first_attempt_score * 0.35) + (question_quality * 0.10)
-
-    # --- Consistency sub-score (0-100) ---
+    # --- Consistency (0-100) ---
     attendance_score = 100.0 if attendance else 0.0
-    # 60 min of study = full score; cap at 120 min
     study_score = min(study_duration_minutes / 60.0 * 100, 100)
-    homework_score = 100.0 if homework_submitted else 0.0
-    consistency = (attendance_score * 0.40) + (study_score * 0.35) + (homework_score * 0.25)
+    consistency = (attendance_score * 0.60) + (study_score * 0.40)
 
-    # --- Behavioral health sub-score (0-100) ---
-    # revisits and retakes indicate engagement; cap at 5 each = 100
+    # --- Behavioral (0-100): revisits cap 5=100, retakes cap 3=100 ---
     revisit_score = min(topic_revisits / 5.0 * 100, 100)
-    retake_score = min(test_retakes / 3.0 * 100, 100)
+    retake_score = min(homework_retakes / 3.0 * 100, 100)
     behavioral = (revisit_score * 0.50) + (retake_score * 0.50)
 
     shs = (
         video_engagement * 0.25
-        + comprehension * 0.40
+        + homework_score * 0.40
         + consistency * 0.20
         + behavioral * 0.15
     )
@@ -83,53 +72,32 @@ def calculate_daily_shs(
 
 
 def calculate_live_shs(
-    video_rate: float,
-    homework_rate: float,
-    attendance_rate: float,
-    homework_submission_rate: float,
-    homework_retakes_avg: float = 0,
-    topic_revisits_avg: float = 0,
-    study_duration_minutes: float = 0,
-) -> tuple[float, float, float]:
+    video_rate: float,              # 0-100: Video watch completion
+    homework_grade: float,          # 0-100: Homework marks (replaces quiz)
+    attendance_rate: float,         # 0-100: Attendance percentage
+    behavioral_score: float = 0.0,  # 0-100: topic revisits + homework retakes
+) -> float:
     """
-    Live (current cumulative) SHS using available data:
-    - Video Engagement: 25% (lectures watched ≥75%)
-    - Homework Comprehension: 40% (marks_awarded/total_marks)
-    - Consistency: 20% (attendance + submission rate)
-    - Behavioral Health: 15% (retakes + revisits + study duration)
+    SHS formula — 4 components (homework replaces quiz):
+      Video       25%  — lecture watch completion
+      Homework    40%  — comprehension / academic work
+      Attendance  20%  — consistency
+      Behavioral  15%  — topic revisits + homework retakes
 
-    Returns: (shs_score, consistency_score, behavioral_score)
+    Returns: shs_score (0-100)
     """
-    # Video engagement (0-100)
-    video_engagement = video_rate
+    video_rate = max(0, min(video_rate, 100))
+    homework_grade = max(0, min(homework_grade, 100))
+    attendance_rate = max(0, min(attendance_rate, 100))
+    behavioral_score = max(0, min(behavioral_score, 100))
 
-    # Homework comprehension via marks (0-100)
-    homework_comprehension = homework_rate
-
-    # Consistency: average of attendance and submission rates
-    consistency = (attendance_rate + homework_submission_rate) / 2.0
-
-    # Behavioral health: weighted average of 3 factors
-    # Retakes: fewer attempts = higher score. Baseline: 1.5 attempts = 85
-    retakes_score = max(0, 100 - (homework_retakes_avg * 15))
-
-    # Revisits: more topic revisits = higher score. Baseline: 1 revisit per topic = 80
-    revisits_score = min(100, topic_revisits_avg * 40)
-
-    # Duration: more study time = higher score. Baseline: 300 min/month = 100
-    duration_score = min(100, (study_duration_minutes / 300.0) * 100) if study_duration_minutes > 0 else 50
-
-    behavioral = (retakes_score + revisits_score + duration_score) / 3.0
-
-    # Final SHS: 25% video + 40% homework + 20% consistency + 15% behavioral
     shs = (
-        video_engagement * 0.25
-        + homework_comprehension * 0.40
-        + consistency * 0.20
-        + behavioral * 0.15
+        video_rate * 0.25
+        + homework_grade * 0.40
+        + attendance_rate * 0.20
+        + behavioral_score * 0.15
     )
-
-    return round(min(max(shs, 0), 100), 2), round(consistency, 2), round(behavioral, 2)
+    return round(min(max(shs, 0), 100), 2)
 
 
 def get_risk_level(shs: float) -> str:

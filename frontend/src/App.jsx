@@ -82,6 +82,7 @@ const BranchView = lazy(() => import("./pages/manager/BranchDetail"));
 const StudentReports = lazy(() => import("./pages/manager/StudentReports"));
 const ClassReports = lazy(() => import("./pages/manager/ClassReports"));
 const TeacherReportsMgr = lazy(() => import("./pages/manager/TeacherReports"));
+const ManagerReports = lazy(() => import("./pages/manager/ManagerReports"));
 const ManagerTeachers = lazy(() => import("./pages/manager/Teachers"));
 const ManagerStudents = lazy(() => import("./pages/manager/Students"));
 const ManagerSettings = lazy(() => import("./pages/manager/Settings"));
@@ -284,6 +285,7 @@ export default function App() {
               path="/manager/library/topics/:topicId/present"
               element={<AdminLibraryTopicPresent />}
             />
+            <Route path="/manager/reports" element={<ManagerReports />} />
             <Route
               path="/manager/student-reports"
               element={<StudentReports />}

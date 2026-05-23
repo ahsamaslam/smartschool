@@ -25,6 +25,7 @@ from app.routers import (
     qa,
     attendance,
     analytics,
+    cron_endpoints,
     classes as classes_router,
     library,
     exams,
@@ -148,6 +149,9 @@ app.include_router(attendance.router, prefix="/api/attendance", tags=["Attendanc
 
 # Analytics & Reports
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
+
+# Cron Jobs
+app.include_router(cron_endpoints.router, prefix="/api/cron", tags=["Cron Jobs"])
 
 # Classes management
 app.include_router(classes_router.router, prefix="/api/classes", tags=["Classes"])

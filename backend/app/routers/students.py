@@ -195,16 +195,90 @@ async def get_student_dashboard(student_id: str):
         except Exception:
             subjects = []
 
+    # Fetch per-subject homework scores for this student (best submission per hw)
+    # and class average for the same subject in the same class
+    hw_scores_query = """
+        WITH subject_homeworks AS (
+            -- All published homeworks for each subject+class with valid marks
+            SELECT id AS homework_id, class_id, library_subject_id, total_marks
+            FROM homeworks
+            WHERE library_subject_id IS NOT NULL
+              AND status = 'published'
+              AND total_marks > 0
+        ),
+        best_subs AS (
+            -- Best submission per (homework, student) — retakes only improve score
+            SELECT DISTINCT ON (homework_id, student_id)
+                homework_id, student_id, marks_awarded
+            FROM homework_submissions
+            ORDER BY homework_id, student_id,
+                     marks_awarded DESC NULLS LAST, submitted_at DESC
+        ),
+        all_scores AS (
+            -- Every enrolled student × every homework for their class/subject
+            -- Non-submitters get 0
+            SELECT
+                sh.library_subject_id,
+                sh.class_id,
+                e.student_id,
+                sh.homework_id,
+                COALESCE(
+                    ROUND((bs.marks_awarded / sh.total_marks * 100)::numeric, 2),
+                    0
+                ) AS pct
+            FROM subject_homeworks sh
+            JOIN enrollments e
+                ON e.class_id = sh.class_id AND e.is_active = true
+            LEFT JOIN best_subs bs
+                ON bs.homework_id = sh.homework_id AND bs.student_id = e.student_id
+        )
+        SELECT
+            library_subject_id,
+            class_id,
+            -- Student's own best single homework score
+            MAX(CASE WHEN student_id = $1::uuid THEN pct END)                          AS my_best,
+            -- Student's own average across all homeworks (0 for ones not submitted)
+            AVG(CASE WHEN student_id = $1::uuid THEN pct END)                          AS my_avg,
+            -- True class average: ALL enrolled students, non-submitters count as 0
+            AVG(pct)                                                                    AS class_avg,
+            -- How many homeworks this student actually submitted (pct > 0)
+            COUNT(DISTINCT CASE WHEN student_id = $1::uuid AND pct > 0 THEN homework_id END) AS my_attempts
+        FROM all_scores
+        GROUP BY library_subject_id, class_id
+    """
+    hw_rows = []
+    try:
+        hw_rows = await execute_query(hw_scores_query, student_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("hw_scores_query failed: %s", e)
+        hw_rows = []
+
+    # Build lookup: (subject_id, class_id) → scores
+    hw_map = {}
+    for r in hw_rows:
+        key = (str(r["library_subject_id"]), str(r["class_id"]))
+        hw_map[key] = {
+            "highest_score": float(r["my_best"] or 0),
+            "average_score": float(r["my_avg"] or 0),
+            "class_avg": float(r["class_avg"] or 0),
+            "total_attempts": int(r["my_attempts"] or 0),
+        }
+
     result = []
     for subject in subjects:
+        sid = str(subject["subject_id"])
+        cid = str(subject["class_id"])
+        scores = hw_map.get((sid, cid), {})
         result.append({
-            "subject_id": str(subject["subject_id"]),
+            "subject_id": sid,
             "subject_name": subject["subject_name"],
             "description": subject.get("description") or "",
             "class_name": subject["class_name"],
-            "highest_score": 0.0,
-            "average_score": 0.0,
-            "total_attempts": 0,
+            "highest_score": scores.get("highest_score", 0.0),
+            "average_score": scores.get("class_avg", 0.0),  # chart: class average
+            "my_avg_score": scores.get("average_score", 0.0),  # student's own average
+            "total_attempts": scores.get("total_attempts", 0),
         })
 
     return {

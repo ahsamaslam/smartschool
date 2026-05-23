@@ -130,6 +130,9 @@ const managerService = {
       params: { period, ...(start && { start }), ...(end && { end }) },
     }),
 
+  getStudentsAnalytics: () =>
+    api.get(`${API_ROUTES.MANAGERS}/analytics/students`),
+
   getStudentAnalytics: (studentId, period = "last_month", start, end) =>
     api.get(`${API_ROUTES.MANAGERS}/analytics/student/${studentId}`, {
       params: { period, ...(start && { start }), ...(end && { end }) },

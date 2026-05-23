@@ -104,15 +104,11 @@ async def capture_daily_student_metrics(student_id: str, class_id: str) -> Dict:
         topic_revisits_avg = float(behav_data["topic_revisits_avg"] or 0)
         study_duration_minutes = float(behav_data["study_duration_minutes"] or 0)
 
-        # Calculate SHS using updated formula
-        shs, consistency_score, behavioral_score = calculate_live_shs(
+        # Calculate SHS using simplified formula (Video 25% + Homework 40% + Attendance 20% + Homework 15%)
+        shs = calculate_live_shs(
             video_rate=video_rate,
-            homework_rate=homework_rate,
-            attendance_rate=attendance_today,
-            homework_submission_rate=homework_submission_rate,
-            homework_retakes_avg=homework_retakes_avg,
-            topic_revisits_avg=topic_revisits_avg,
-            study_duration_minutes=study_duration_minutes
+            homework_grade=homework_rate,
+            attendance_rate=100 if att_data and att_data["is_present"] else 0
         )
 
         risk_level = get_risk_level(shs)
@@ -121,26 +117,26 @@ async def capture_daily_student_metrics(student_id: str, class_id: str) -> Dict:
         await execute_write(
             """
             INSERT INTO daily_student_metrics
-            (student_id, class_id, date, video_completion_rate, homework_submission_rate,
-             attendance_rate, homework_retakes_avg, topic_revisits_avg, study_duration_minutes,
-             daily_shs, risk_level, consistency_score, behavioral_score)
-            VALUES ($1::uuid, $2::uuid, CURRENT_DATE, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            (student_id, class_id, date, video_completion_rate, attendance,
+             homework_submitted, study_duration_minutes, topic_revisits, test_retakes, daily_shs)
+            VALUES ($1::uuid, $2::uuid, CURRENT_DATE, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (student_id, class_id, date) DO UPDATE SET
                 video_completion_rate = $3,
-                homework_submission_rate = $4,
-                attendance_rate = $5,
-                homework_retakes_avg = $6,
-                topic_revisits_avg = $7,
-                study_duration_minutes = $8,
+                attendance = $4,
+                homework_submitted = $5,
+                study_duration_minutes = $6,
+                topic_revisits = $7,
+                test_retakes = $8,
                 daily_shs = $9,
-                risk_level = $10,
-                consistency_score = $11,
-                behavioral_score = $12,
                 updated_at = NOW()
             """,
-            student_id, class_id, video_rate, homework_submission_rate,
-            attendance_today, homework_retakes_avg, topic_revisits_avg, study_duration_minutes,
-            shs, risk_level, consistency_score, behavioral_score
+            student_id, class_id, video_rate,
+            att_data and att_data["is_present"] or False,
+            homework_submitted > 0,
+            int(study_duration_minutes),
+            int(topic_revisits_avg),
+            int(homework_retakes_avg),
+            shs
         )
 
         return {
@@ -151,8 +147,8 @@ async def capture_daily_student_metrics(student_id: str, class_id: str) -> Dict:
             "risk_level": risk_level,
             "video_rate": video_rate,
             "homework_rate": homework_rate,
-            "consistency_score": consistency_score,
-            "behavioral_score": behavioral_score
+            "attendance_present": att_data and att_data["is_present"] or False,
+            "homework_submitted": homework_submitted > 0
         }
     except Exception as e:
         logger.error(f"Error capturing metrics for student {student_id}: {str(e)}")

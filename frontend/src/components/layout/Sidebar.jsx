@@ -153,18 +153,8 @@ const NAV_BY_ROLE = {
     { label: "Messages", to: "/manager/chat", icon: "ChatBubbleLeftIcon" },
     { divider: true, label: "Reports" },
     {
-      label: "Student Reports",
-      to: "/manager/student-reports",
-      icon: "ChartBarIcon",
-    },
-    {
-      label: "Class Reports",
-      to: "/manager/class-reports",
-      icon: "TableCellsIcon",
-    },
-    {
-      label: "Teacher Reports",
-      to: "/manager/teacher-reports",
+      label: "Reports",
+      to: "/manager/reports",
       icon: "PresentationChartLineIcon",
     },
     {
