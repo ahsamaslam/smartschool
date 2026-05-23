@@ -19,6 +19,7 @@ class TopicSelection(BaseModel):
 
 class CreateLessonPlanRequest(BaseModel):
     planned_date: date
+    planned_time: str = "09:00"
     class_ids: List[str]
     library_book_id: str
     library_subject_id: str
@@ -173,27 +174,28 @@ async def create_lesson_plan(
             SELECT id FROM lesson_plans
             WHERE teacher_id = $1::uuid
               AND planned_date = $2
-              AND class_id = $3::uuid
-              AND library_subject_id = $4::uuid
+              AND planned_time = $3
+              AND class_id = $4::uuid
+              AND library_subject_id = $5::uuid
             """,
-            teacher_id, request.planned_date, class_id, request.library_subject_id
+            teacher_id, request.planned_date, request.planned_time, class_id, request.library_subject_id
         )
         if existing:
             raise HTTPException(
                 status_code=400,
-                detail=f"Lesson already planned for this date, class, and subject"
+                detail=f"Lesson already planned for this date, time, class, and subject"
             )
 
     # Create lesson plan (use first class_id as primary, will link all in junction table)
     lesson_id = await execute_scalar(
         """
         INSERT INTO lesson_plans (
-            teacher_id, planned_date, class_id, library_subject_id,
+            teacher_id, planned_date, planned_time, class_id, library_subject_id,
             library_board_id, library_book_id, title, description, status, duration_minutes
-        ) VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7, $8, 'planned', $9)
+        ) VALUES ($1::uuid, $2, $3, $4::uuid, $5::uuid, $6::uuid, $7::uuid, $8, $9, 'planned', $10)
         RETURNING id
         """,
-        teacher_id, request.planned_date, request.class_ids[0],
+        teacher_id, request.planned_date, request.planned_time, request.class_ids[0],
         request.library_subject_id, request.library_board_id, request.library_book_id,
         request.title, request.description, request.duration_minutes
     )

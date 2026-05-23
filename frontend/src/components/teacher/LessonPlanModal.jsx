@@ -23,6 +23,7 @@ export function LessonPlanModal({
     subjectId: "",
     topics: [],
     date: "",
+    time: "09:00",
     classIds: [],
     title: "",
     description: "",
@@ -105,8 +106,8 @@ export function LessonPlanModal({
       toast.error("Please select at least one topic");
       return;
     }
-    if (step === 3 && !formData.date) {
-      toast.error("Please select a date");
+    if (step === 3 && (!formData.date || !formData.time)) {
+      toast.error("Please select both date and time");
       return;
     }
     if (step === 4 && formData.classIds.length === 0) {
@@ -134,6 +135,7 @@ export function LessonPlanModal({
     try {
       const payload = {
         planned_date: formData.date,
+        planned_time: formData.time,
         class_ids: formData.classIds,
         library_book_id: formData.bookId,
         library_subject_id: formData.subjectId,
@@ -272,7 +274,7 @@ export function LessonPlanModal({
             </div>
           )}
 
-          {/* Step 3: Select Date */}
+          {/* Step 3: Select Date & Time */}
           {step === 3 && (
             <div className="space-y-3">
               <label className="block">
@@ -284,6 +286,19 @@ export function LessonPlanModal({
                   value={formData.date}
                   onChange={(e) => {
                     setFormData((prev) => ({ ...prev, date: e.target.value }));
+                  }}
+                  className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  Lesson Time
+                </span>
+                <input
+                  type="time"
+                  value={formData.time}
+                  onChange={(e) => {
+                    setFormData((prev) => ({ ...prev, time: e.target.value }));
                   }}
                   className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2"
                 />
@@ -351,14 +366,15 @@ export function LessonPlanModal({
                   <span className="text-gray-700">{formData.topics.length} selected</span>
                 </p>
                 <p>
-                  <span className="font-semibold text-gray-900">Date:</span>{" "}
+                  <span className="font-semibold text-gray-900">Date & Time:</span>{" "}
                   <span className="text-gray-700">
                     {new Date(formData.date).toLocaleDateString("en-US", {
                       weekday: "short",
                       month: "short",
                       day: "numeric",
                       year: "numeric",
-                    })}
+                    })}{" "}
+                    at {formData.time}
                   </span>
                 </p>
                 <p>

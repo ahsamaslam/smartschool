@@ -181,6 +181,7 @@ async def ensure_homework_schema():
             library_subject_id UUID NOT NULL REFERENCES library_subjects(id) ON DELETE CASCADE,
             library_book_id UUID NOT NULL REFERENCES library_books(id) ON DELETE CASCADE,
             planned_date DATE NOT NULL,
+            planned_time TIME DEFAULT '09:00',
             duration_minutes INTEGER DEFAULT 45,
             title VARCHAR(500),
             description TEXT,
@@ -188,7 +189,7 @@ async def ensure_homework_schema():
                 CHECK (status IN ('planned', 'in_progress', 'completed', 'postponed')),
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW(),
-            UNIQUE(teacher_id, planned_date, class_id, library_subject_id)
+            UNIQUE(teacher_id, planned_date, planned_time, class_id, library_subject_id)
         )
         """
     )
