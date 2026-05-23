@@ -142,17 +142,17 @@ export default function StudentDetail() {
             <ComponentCard
               title="Consistency"
               weight="20%"
-              rate={consistency.rate || 0}
+              rate={consistency.attendance_rate || 0}
               barColor="bg-cyan-500"
-              detail={`Attend: ${consistency.attendance?.toFixed(0)}% · Submit: ${consistency.submission?.toFixed(0)}%`}
+              detail={`Attend: ${consistency.attendance_rate?.toFixed(0)}% · Submit: ${consistency.submission_rate?.toFixed(1)}%`}
               tip="Consistency in attendance and submission matters."
             />
             <ComponentCard
               title="Behavioral Health"
               weight="15%"
-              rate={behavioral.rate || 0}
+              rate={behavioral.score || 0}
               barColor="bg-orange-500"
-              detail={`Retakes: ${behavioral.homework_retakes_avg?.toFixed(1)} · Revisits: ${behavioral.topic_revisits_avg?.toFixed(1)}`}
+              detail={`Retakes: ${behavioral.retakes || 0} · Revisits: ${behavioral.revisits || 0}`}
               tip="Study habits and engagement patterns."
             />
           </div>
@@ -164,8 +164,8 @@ export default function StudentDetail() {
               {[
                 { label: "Video (×0.25)", value: (video.rate || 0) * 0.25, max: 25, color: "bg-indigo-400" },
                 { label: "Homework (×0.40)", value: (homework.rate || 0) * 0.40, max: 40, color: "bg-violet-400" },
-                { label: "Consistency (×0.20)", value: (consistency.rate || 0) * 0.20, max: 20, color: "bg-cyan-400" },
-                { label: "Behavioral (×0.15)", value: (behavioral.rate || 0) * 0.15, max: 15, color: "bg-orange-400" },
+                { label: "Consistency (×0.20)", value: (consistency.attendance_rate || 0) * 0.20, max: 20, color: "bg-cyan-400" },
+                { label: "Behavioral (×0.15)", value: (behavioral.score || 0) * 0.15, max: 15, color: "bg-orange-400" },
               ].map((item) => (
                 <div key={item.label} className="flex items-center gap-3">
                   <p className="text-xs text-gray-500 w-40 shrink-0">{item.label}</p>
