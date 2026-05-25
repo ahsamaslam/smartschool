@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { XMarkIcon, ChevronLeftIcon, ChevronRightIcon } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import lessonService from "../../services/lessonService";
@@ -15,6 +15,7 @@ export function LessonPlanModal({
 }) {
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [loadingTopics, setLoadingTopics] = useState(false);
 
   // Form state
@@ -23,7 +24,8 @@ export function LessonPlanModal({
     subjectId: "",
     topics: [],
     date: "",
-    time: "09:00",
+    startTime: "09:00",
+    endTime: "10:00",
     classIds: [],
     title: "",
     description: "",
@@ -106,8 +108,12 @@ export function LessonPlanModal({
       toast.error("Please select at least one topic");
       return;
     }
-    if (step === 3 && (!formData.date || !formData.time)) {
-      toast.error("Please select both date and time");
+    if (step === 3 && (!formData.date || !formData.startTime || !formData.endTime)) {
+      toast.error("Please select date, start time, and end time");
+      return;
+    }
+    if (step === 3 && formData.startTime >= formData.endTime) {
+      toast.error("End time must be after start time");
       return;
     }
     if (step === 4 && formData.classIds.length === 0) {
@@ -126,16 +132,19 @@ export function LessonPlanModal({
   };
 
   const handleCreate = async () => {
+    if (savingRef.current) return;
     if (!formData.date || formData.classIds.length === 0 || formData.topics.length === 0) {
       toast.error("Please fill in all required fields");
       return;
     }
 
+    savingRef.current = true;
     setSaving(true);
     try {
       const payload = {
         planned_date: formData.date,
-        planned_time: formData.time,
+        planned_time: formData.startTime,
+        end_time: formData.endTime,
         class_ids: formData.classIds,
         library_book_id: formData.bookId,
         library_subject_id: formData.subjectId,
@@ -159,6 +168,8 @@ export function LessonPlanModal({
         subjectId: "",
         topics: [],
         date: "",
+        startTime: "09:00",
+        endTime: "10:00",
         classIds: [],
         title: "",
         description: "",
@@ -167,6 +178,7 @@ export function LessonPlanModal({
     } catch (error) {
       toast.error(error?.response?.data?.detail || error?.message || "Failed to create lesson");
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -276,7 +288,7 @@ export function LessonPlanModal({
 
           {/* Step 3: Select Date & Time */}
           {step === 3 && (
-            <div className="space-y-3">
+            <div className="space-y-4">
               <label className="block">
                 <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                   Lesson Date
@@ -284,28 +296,54 @@ export function LessonPlanModal({
                 <input
                   type="date"
                   value={formData.date}
-                  onChange={(e) => {
-                    setFormData((prev) => ({ ...prev, date: e.target.value }));
-                  }}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, date: e.target.value }))}
                   className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2"
                 />
               </label>
-              <label className="block">
-                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  Lesson Time
-                </span>
-                <input
-                  type="time"
-                  value={formData.time}
-                  onChange={(e) => {
-                    setFormData((prev) => ({ ...prev, time: e.target.value }));
-                  }}
-                  className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2"
-                />
-              </label>
-              {formData.date && new Date(formData.date) < new Date() && (
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    Start Time
+                  </span>
+                  <input
+                    type="time"
+                    value={formData.startTime}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, startTime: e.target.value }))}
+                    className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    End Time
+                  </span>
+                  <input
+                    type="time"
+                    value={formData.endTime}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, endTime: e.target.value }))}
+                    className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2"
+                  />
+                </label>
+              </div>
+
+              {formData.startTime && formData.endTime && formData.startTime < formData.endTime && (
+                <p className="text-xs text-indigo-600 font-medium">
+                  Duration: {(() => {
+                    const [sh, sm] = formData.startTime.split(":").map(Number);
+                    const [eh, em] = formData.endTime.split(":").map(Number);
+                    const mins = (eh * 60 + em) - (sh * 60 + sm);
+                    return mins >= 60 ? `${Math.floor(mins/60)}h ${mins%60 > 0 ? mins%60+"m" : ""}` : `${mins}m`;
+                  })()}
+                </p>
+              )}
+
+              {formData.startTime >= formData.endTime && formData.endTime && (
+                <p className="text-xs text-red-500">End time must be after start time</p>
+              )}
+
+              {formData.date && new Date(formData.date) < new Date(new Date().toDateString()) && (
                 <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-800">
-                  ⚠️ This date is in the past. You can still create the lesson, but it won't appear in future planning.
+                  ⚠️ This date is in the past.
                 </div>
               )}
             </div>
@@ -374,7 +412,7 @@ export function LessonPlanModal({
                       day: "numeric",
                       year: "numeric",
                     })}{" "}
-                    at {formData.time}
+                    {formData.startTime} – {formData.endTime}
                   </span>
                 </p>
                 <p>

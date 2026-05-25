@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from uuid import UUID
 from typing import Optional, List
 from pydantic import BaseModel
@@ -20,6 +20,7 @@ class TopicSelection(BaseModel):
 class CreateLessonPlanRequest(BaseModel):
     planned_date: date
     planned_time: str = "09:00"
+    end_time: Optional[str] = None
     class_ids: List[str]
     library_book_id: str
     library_subject_id: str
@@ -32,6 +33,8 @@ class CreateLessonPlanRequest(BaseModel):
 
 class UpdateLessonPlanRequest(BaseModel):
     planned_date: Optional[date] = None
+    planned_time: Optional[str] = None
+    end_time: Optional[str] = None
     class_ids: Optional[List[str]] = None
     topics: Optional[List[TopicSelection]] = None
     title: Optional[str] = None
@@ -84,7 +87,7 @@ async def get_lesson_plan_details(lesson_id: str):
     """Fetch lesson plan with all related data."""
     lesson = await execute_one(
         """
-        SELECT id, teacher_id, planned_date, planned_time, class_id, library_subject_id, library_book_id,
+        SELECT id, teacher_id, planned_date, planned_time, end_time, class_id, library_subject_id, library_book_id,
                title, description, status, duration_minutes, created_at, updated_at
         FROM lesson_plans
         WHERE id = $1::uuid
@@ -132,6 +135,7 @@ async def get_lesson_plan_details(lesson_id: str):
         "id": str(lesson["id"]),
         "planned_date": lesson["planned_date"].isoformat(),
         "planned_time": str(lesson["planned_time"]) if lesson["planned_time"] else "09:00",
+        "end_time": str(lesson["end_time"]) if lesson["end_time"] else None,
         "class_ids": [str(c["id"]) for c in class_ids],
         "class_names": [c["name"] for c in class_ids],
         "library_subject_id": str(lesson["library_subject_id"]),
@@ -169,37 +173,68 @@ async def create_lesson_plan(
     for class_id in request.class_ids:
         await validate_teacher_assignment(str(teacher_id), class_id, request.library_subject_id, request.library_book_id)
 
-    # Check for duplicate lesson plan (same teacher, date, class, subject)
+    # Parse start and end times into time objects for asyncpg
+    try:
+        planned_time = time.fromisoformat(request.planned_time)
+    except (ValueError, AttributeError):
+        planned_time = time(9, 0)
+
+    if request.end_time:
+        try:
+            end_time = time.fromisoformat(request.end_time)
+        except (ValueError, AttributeError):
+            end_time = None
+    else:
+        end_time = None
+
+    # Derive duration from start/end if both provided
+    if end_time and end_time > planned_time:
+        from datetime import datetime as dt
+        delta = dt.combine(request.planned_date, end_time) - dt.combine(request.planned_date, planned_time)
+        duration_minutes = int(delta.total_seconds() / 60)
+    else:
+        duration_minutes = request.duration_minutes
+        if end_time is None:
+            from datetime import timedelta
+            end_time = (datetime.combine(request.planned_date, planned_time) + timedelta(minutes=duration_minutes)).time()
+
+    # Check for time-overlap conflicts (same teacher, date, class — overlapping time slot)
     for class_id in request.class_ids:
         existing = await execute_one(
             """
-            SELECT id FROM lesson_plans
-            WHERE teacher_id = $1::uuid
-              AND planned_date = $2
-              AND planned_time = $3
-              AND class_id = $4::uuid
-              AND library_subject_id = $5::uuid
+            SELECT lp.id FROM lesson_plans lp
+            WHERE lp.teacher_id = $1::uuid
+              AND lp.planned_date = $2
+              AND (
+                lp.class_id = $3::uuid
+                OR EXISTS (
+                  SELECT 1 FROM lesson_plan_classes lpc
+                  WHERE lpc.lesson_plan_id = lp.id AND lpc.class_id = $3::uuid
+                )
+              )
+              AND lp.planned_time < $5
+              AND lp.end_time   > $4
             """,
-            teacher_id, request.planned_date, request.planned_time, class_id, request.library_subject_id
+            teacher_id, request.planned_date, class_id, planned_time, end_time
         )
         if existing:
             raise HTTPException(
                 status_code=400,
-                detail=f"Lesson already planned for this date, time, class, and subject"
+                detail=f"Time slot {request.planned_time}–{request.end_time} overlaps with an existing lesson for this class"
             )
 
     # Create lesson plan (use first class_id as primary, will link all in junction table)
     lesson_id = await execute_scalar(
         """
         INSERT INTO lesson_plans (
-            teacher_id, planned_date, planned_time, class_id, library_subject_id,
+            teacher_id, planned_date, planned_time, end_time, class_id, library_subject_id,
             library_board_id, library_book_id, title, description, status, duration_minutes
-        ) VALUES ($1::uuid, $2, $3, $4::uuid, $5::uuid, $6::uuid, $7::uuid, $8, $9, 'planned', $10)
+        ) VALUES ($1::uuid, $2, $3, $4, $5::uuid, $6::uuid, $7::uuid, $8::uuid, $9, $10, 'planned', $11)
         RETURNING id
         """,
-        teacher_id, request.planned_date, request.planned_time, request.class_ids[0],
+        teacher_id, request.planned_date, planned_time, end_time, request.class_ids[0],
         request.library_subject_id, request.library_board_id, request.library_book_id,
-        request.title, request.description, request.duration_minutes
+        request.title, request.description, duration_minutes
     )
 
     # Link all classes to lesson plan
@@ -215,7 +250,7 @@ async def create_lesson_plan(
     # Link all topics to lesson plan
     for idx, topic in enumerate(request.topics):
         topic_data = await execute_one(
-            "SELECT title, chapter_number FROM library_topics WHERE id = $1::uuid",
+            "SELECT title FROM library_topics WHERE id = $1::uuid",
             topic.library_topic_id
         )
 
@@ -226,7 +261,7 @@ async def create_lesson_plan(
             ) VALUES ($1::uuid, $2::uuid, $3, $4, $5)
             """,
             lesson_id, topic.library_topic_id,
-            topic_data["chapter_number"] if topic_data else topic.chapter_number,
+            topic.chapter_number,
             topic_data["title"] if topic_data else topic.topic_title,
             idx
         )
@@ -241,7 +276,7 @@ async def create_lesson_plan(
             ON CONFLICT (teacher_id, library_topic_id, class_id)
             DO UPDATE SET
                 first_planned_date = COALESCE(topic_coverage_tracking.first_planned_date, $4),
-                coverage_count = coverage_count + 1
+                coverage_count = topic_coverage_tracking.coverage_count + 1
             """,
             teacher_id, topic.library_topic_id, request.class_ids[0], request.planned_date
         )
@@ -437,6 +472,25 @@ async def update_lesson_plan(
         updates.append(f"planned_date = ${param_count}")
         params.append(request.planned_date)
 
+    if request.planned_time:
+        try:
+            pt = time.fromisoformat(request.planned_time)
+        except (ValueError, AttributeError):
+            pt = time(9, 0)
+        param_count += 1
+        updates.append(f"planned_time = ${param_count}")
+        params.append(pt)
+
+    if request.end_time:
+        try:
+            et = time.fromisoformat(request.end_time)
+        except (ValueError, AttributeError):
+            et = None
+        if et:
+            param_count += 1
+            updates.append(f"end_time = ${param_count}")
+            params.append(et)
+
     if request.title is not None:
         param_count += 1
         updates.append(f"title = ${param_count}")
@@ -468,7 +522,7 @@ async def update_lesson_plan(
         # Validate teacher has assignment for all new classes
         for class_id in request.class_ids:
             await validate_teacher_assignment(
-                db, str(current_user["user_id"]), class_id,
+                str(current_user["user_id"]), class_id,
                 str(lesson["library_subject_id"]), str(lesson["library_book_id"])
             )
 
@@ -499,7 +553,7 @@ async def update_lesson_plan(
         # Add new topic links
         for idx, topic in enumerate(request.topics):
             topic_data = await execute_one(
-                "SELECT title, chapter_number FROM library_topics WHERE id = $1::uuid",
+                "SELECT title FROM library_topics WHERE id = $1::uuid",
                 topic.library_topic_id
             )
 
@@ -510,7 +564,7 @@ async def update_lesson_plan(
                 ) VALUES ($1::uuid, $2::uuid, $3, $4, $5)
                 """,
                 lesson_id, topic.library_topic_id,
-                topic_data["chapter_number"] if topic_data else topic.chapter_number,
+                topic.chapter_number,
                 topic_data["title"] if topic_data else topic.topic_title,
                 idx
             )
@@ -572,6 +626,7 @@ async def mark_lesson_complete(
     )
 
     # Update topic_coverage_tracking for all topics in this lesson
+    # Also fetch all associated class_ids (from junction table + primary class_id)
     topics = await execute_query(
         """
         SELECT library_topic_id FROM lesson_plan_topics WHERE lesson_plan_id = $1::uuid
@@ -579,17 +634,34 @@ async def mark_lesson_complete(
         lesson_id
     )
 
+    # Get all class IDs for this lesson (primary + junction table)
+    lesson_class_ids = await execute_query(
+        """
+        SELECT DISTINCT class_id FROM lesson_plan_classes WHERE lesson_plan_id = $1::uuid
+        """,
+        lesson_id
+    )
+    all_class_ids = {str(row["class_id"]) for row in lesson_class_ids}
+    all_class_ids.add(str(lesson["class_id"]))
+
     for topic in topics:
-        await execute_write(
-            """
-            UPDATE topic_coverage_tracking
-            SET is_covered = true, covered_at = NOW(), last_covered_date = NOW()::date
-            WHERE teacher_id = $1::uuid
-              AND library_topic_id = $2::uuid
-              AND class_id = $3::uuid
-            """,
-            current_user["user_id"], topic["library_topic_id"], lesson["class_id"]
-        )
+        for class_id in all_class_ids:
+            await execute_write(
+                """
+                INSERT INTO topic_coverage_tracking (
+                    teacher_id, library_topic_id, class_id,
+                    first_planned_date, is_covered, covered_at, last_covered_date, coverage_count
+                ) VALUES ($1::uuid, $2::uuid, $3::uuid, NOW()::date, true, NOW(), NOW()::date, 1)
+                ON CONFLICT (teacher_id, library_topic_id, class_id)
+                DO UPDATE SET
+                    is_covered = true,
+                    covered_at = NOW(),
+                    last_covered_date = NOW()::date,
+                    coverage_count = topic_coverage_tracking.coverage_count + 1,
+                    updated_at = NOW()
+                """,
+                current_user["user_id"], topic["library_topic_id"], class_id
+            )
 
     return await get_lesson_plan_details(lesson_id)
 

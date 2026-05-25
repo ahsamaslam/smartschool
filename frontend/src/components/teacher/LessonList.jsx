@@ -1,7 +1,41 @@
 import { useState } from "react";
-import { TrashIcon, CheckCircleIcon, PencilIcon } from "@heroicons/react/24/outline";
+import { TrashIcon, CheckCircleIcon, PencilIcon, ExclamationTriangleIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import lessonService from "../../services/lessonService";
+
+function DeleteConfirmModal({ onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+            <ExclamationTriangleIcon className="h-5 w-5 text-red-600" />
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-gray-900">Delete Lesson</h3>
+            <p className="text-sm text-gray-500 mt-1">Are you sure you want to delete this lesson? This action cannot be undone.</p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-700"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function LessonList({
   lessons = [],
@@ -12,6 +46,7 @@ export function LessonList({
 }) {
   const [sortBy, setSortBy] = useState("date");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [deletingLessonId, setDeletingLessonId] = useState(null);
 
   // Sort lessons
   let sortedLessons = [...lessons];
@@ -132,7 +167,7 @@ export function LessonList({
               <div className="flex items-start justify-between">
                 <div>
                   <p className="font-semibold text-sm">
-                    {formatDate(lesson.planned_date)} at {formatTime(lesson.planned_time)}
+                    {formatDate(lesson.planned_date)} · {formatTime(lesson.planned_time)}{lesson.end_time ? ` – ${formatTime(lesson.end_time)}` : ""}
                   </p>
                   <p className="text-xs opacity-75">
                     {lesson.duration_minutes} minutes
@@ -169,14 +204,7 @@ export function LessonList({
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (
-                          onDelete &&
-                          window.confirm("Are you sure you want to delete this lesson?")
-                        ) {
-                          onDelete(lesson.id);
-                        }
-                      }}
+                      onClick={() => setDeletingLessonId(lesson.id)}
                       className="p-2 rounded-lg hover:bg-white/20 text-current"
                       title="Delete lesson"
                     >
@@ -244,6 +272,16 @@ export function LessonList({
             </div>
           ))}
         </div>
+      )}
+
+      {deletingLessonId && (
+        <DeleteConfirmModal
+          onConfirm={() => {
+            if (onDelete) onDelete(deletingLessonId);
+            setDeletingLessonId(null);
+          }}
+          onCancel={() => setDeletingLessonId(null)}
+        />
       )}
     </div>
   );

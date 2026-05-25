@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { ChevronLeftIcon, ChevronRightIcon } from "@heroicons/react/24/outline";
 import lessonService from "../../services/lessonService";
 
-export function LessonCalendar({ teacherId, onDateSelect, onDayClick }) {
+export function LessonCalendar({ teacherId, onDateSelect, onDayClick, selectedDate }) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [calendarData, setCalendarData] = useState({});
   const [loading, setLoading] = useState(false);
@@ -129,43 +129,33 @@ export function LessonCalendar({ teacherId, onDateSelect, onDayClick }) {
 
             const dayData = calendarData[dateStr];
             const hasLessons = dayData && dayData.lesson_count > 0;
+            const isSelected = selectedDate === dateStr;
+            const isToday = dateStr === new Date().toISOString().split("T")[0];
 
             return (
               <button
                 key={day}
-                onClick={() => {
-                  if (onDayClick) {
-                    onDayClick(dateStr);
-                  }
-                }}
+                onClick={() => onDayClick && onDayClick(dateStr)}
                 className={`aspect-square rounded-lg border p-1 text-sm transition ${
-                  hasLessons
+                  isSelected
+                    ? "bg-indigo-600 border-indigo-600 ring-2 ring-indigo-300"
+                    : hasLessons
                     ? "bg-blue-50 border-blue-300 hover:bg-blue-100"
                     : "border-gray-200 hover:bg-gray-50"
                 }`}
               >
                 <div className="h-full flex flex-col justify-between">
-                  <span
-                    className={`font-semibold ${
-                      hasLessons ? "text-blue-900" : "text-gray-900"
-                    }`}
-                  >
+                  <span className={`font-semibold ${
+                    isSelected ? "text-white" : isToday ? "text-indigo-600" : hasLessons ? "text-blue-900" : "text-gray-900"
+                  }`}>
                     {day}
                   </span>
                   {hasLessons && (
                     <div className="text-xs space-y-0.5">
-                      <div
-                        className="bg-blue-500 text-white rounded px-1 py-0.5 truncate"
-                        title={`${dayData.lesson_count} lesson(s)`}
-                      >
+                      <div className={`rounded px-1 py-0.5 truncate ${isSelected ? "bg-white/30 text-white" : "bg-blue-500 text-white"}`}
+                        title={`${dayData.lesson_count} lesson(s)`}>
                         {dayData.lesson_count} lesson{dayData.lesson_count !== 1 ? "s" : ""}
                       </div>
-                      {dayData.classes && dayData.classes.length > 0 && (
-                        <div className="text-xs text-blue-700 truncate" title={dayData.classes.join(", ")}>
-                          {dayData.classes.slice(0, 2).join(", ")}
-                          {dayData.classes.length > 2 && "..."}
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>
