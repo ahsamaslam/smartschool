@@ -1707,23 +1707,58 @@ async def get_my_chapters_for_book(
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    # Get both teacher-scoped and shared library chapters for this book
-    chapters = await execute_query(
-        """
-        SELECT
-            ch.id, ch.book_id, ch.chapter_number, ch.title,
-            ch.teacher_id, ch.created_at,
-            (SELECT COUNT(*) FROM library_topics t
-             WHERE t.chapter_id = ch.id AND (t.teacher_id = $1::uuid OR t.teacher_id IS NULL))
-            AS topic_count
-        FROM library_chapters ch
-        WHERE ch.book_id = $2::uuid
-          AND (ch.teacher_id = $1::uuid OR ch.teacher_id IS NULL)
-        ORDER BY ch.chapter_number ASC, ch.created_at ASC
-        """,
-        teacher_id,
-        book_id,
-    )
+    tenant_id = current_user.get("tenant_id")
+
+    # Teacher sees:
+    # 1. Their own personal chapters (teacher_id = me)
+    # 2. Admin-approved chapters scoped to their school tenant (tenant_id = my_tenant, teacher_id IS NULL)
+    # 3. New super-admin master chapters not yet copied to their tenant
+    #    (tenant_id IS NULL, teacher_id IS NULL, and no local tenant copy exists)
+    if tenant_id:
+        chapters = await execute_query(
+            """
+            SELECT
+                ch.id, ch.book_id, ch.chapter_number, ch.title,
+                ch.teacher_id, ch.created_at,
+                (SELECT COUNT(*) FROM library_topics t
+                 WHERE t.chapter_id = ch.id AND (t.teacher_id = $1::uuid OR t.teacher_id IS NULL))
+                AS topic_count
+            FROM library_chapters ch
+            WHERE ch.book_id = $2::uuid
+              AND (
+                ch.teacher_id = $1::uuid
+                OR (ch.teacher_id IS NULL AND (
+                    ch.tenant_id = $3::uuid
+                    OR (ch.tenant_id IS NULL AND NOT EXISTS (
+                        SELECT 1 FROM library_chapters c2
+                        WHERE c2.source_id = ch.id AND c2.tenant_id = $3::uuid
+                    ))
+                ))
+              )
+            ORDER BY ch.chapter_number ASC, ch.created_at ASC
+            """,
+            teacher_id,
+            book_id,
+            tenant_id,
+        )
+    else:
+        # Fallback for users without a tenant (super_admin browsing as teacher, etc.)
+        chapters = await execute_query(
+            """
+            SELECT
+                ch.id, ch.book_id, ch.chapter_number, ch.title,
+                ch.teacher_id, ch.created_at,
+                (SELECT COUNT(*) FROM library_topics t
+                 WHERE t.chapter_id = ch.id AND (t.teacher_id = $1::uuid OR t.teacher_id IS NULL))
+                AS topic_count
+            FROM library_chapters ch
+            WHERE ch.book_id = $2::uuid
+              AND (ch.teacher_id = $1::uuid OR (ch.teacher_id IS NULL AND ch.tenant_id IS NULL))
+            ORDER BY ch.chapter_number ASC, ch.created_at ASC
+            """,
+            teacher_id,
+            book_id,
+        )
 
     result = []
     for ch in chapters:

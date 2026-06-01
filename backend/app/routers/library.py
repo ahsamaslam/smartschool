@@ -479,6 +479,89 @@ async def ensure_library_tables():
         "CREATE INDEX IF NOT EXISTS idx_ttc_topic_id ON teacher_topic_content(library_topic_id)"
     )
 
+    # Tenant-scoped library: tenant_id = NULL → super admin master library
+    #                        tenant_id = X    → school/tenant copy
+    await execute_write(
+        "ALTER TABLE library_books ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE"
+    )
+    await execute_write(
+        "ALTER TABLE library_books ADD COLUMN IF NOT EXISTS source_id UUID REFERENCES library_books(id) ON DELETE SET NULL"
+    )
+    await execute_write(
+        "ALTER TABLE library_chapters ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE"
+    )
+    await execute_write(
+        "ALTER TABLE library_chapters ADD COLUMN IF NOT EXISTS source_id UUID REFERENCES library_chapters(id) ON DELETE SET NULL"
+    )
+    await execute_write(
+        "ALTER TABLE library_topics ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE"
+    )
+    await execute_write(
+        "ALTER TABLE library_topics ADD COLUMN IF NOT EXISTS source_id UUID REFERENCES library_topics(id) ON DELETE SET NULL"
+    )
+    await execute_write(
+        "CREATE INDEX IF NOT EXISTS idx_library_books_tenant ON library_books(tenant_id)"
+    )
+    await execute_write(
+        "CREATE INDEX IF NOT EXISTS idx_library_chapters_tenant ON library_chapters(tenant_id)"
+    )
+    await execute_write(
+        "CREATE INDEX IF NOT EXISTS idx_library_topics_tenant ON library_topics(tenant_id)"
+    )
+
+
+async def copy_super_admin_library_to_tenant(tenant_id: str) -> None:
+    """Deep-copies the entire master library (tenant_id IS NULL) into a new tenant's scope."""
+    await ensure_library_tables()
+    master_books = await execute_query(
+        "SELECT * FROM library_books WHERE tenant_id IS NULL"
+    )
+    for book in master_books:
+        new_book = await execute_one(
+            """
+            INSERT INTO library_books
+              (class_id, subject_id, title, author, board_name, edition_year, pdf_url, tenant_id, source_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid, $9::uuid)
+            RETURNING id
+            """,
+            book["class_id"], book["subject_id"], book["title"], book["author"],
+            book["board_name"], book["edition_year"], book["pdf_url"],
+            tenant_id, str(book["id"]),
+        )
+        master_chapters = await execute_query(
+            "SELECT * FROM library_chapters WHERE book_id = $1::uuid AND tenant_id IS NULL AND teacher_id IS NULL",
+            str(book["id"]),
+        )
+        for ch in master_chapters:
+            new_ch = await execute_one(
+                """
+                INSERT INTO library_chapters (book_id, chapter_number, title, tenant_id, source_id)
+                VALUES ($1::uuid, $2, $3, $4::uuid, $5::uuid)
+                RETURNING id
+                """,
+                str(new_book["id"]), ch["chapter_number"], ch["title"],
+                tenant_id, str(ch["id"]),
+            )
+            master_topics = await execute_query(
+                "SELECT * FROM library_topics WHERE chapter_id = $1::uuid AND tenant_id IS NULL AND teacher_id IS NULL",
+                str(ch["id"]),
+            )
+            for tp in master_topics:
+                await execute_write(
+                    """
+                    INSERT INTO library_topics
+                      (chapter_id, title, content_body, slides_json, slide_theme,
+                       lecture_video_url, lecture_metadata_json,
+                       lecture_saved_at, lecture_duration_seconds, tenant_id, source_id)
+                    VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10::uuid, $11::uuid)
+                    """,
+                    str(new_ch["id"]), tp["title"], tp.get("content_body"),
+                    tp.get("slides_json"), tp.get("slide_theme"),
+                    tp.get("lecture_video_url"), tp.get("lecture_metadata_json"),
+                    tp.get("lecture_saved_at"), tp.get("lecture_duration_seconds"),
+                    tenant_id, str(tp["id"]),
+                )
+
 
 # ============================================
 # LIBRARY CLASSES
@@ -1039,35 +1122,78 @@ async def remove_subject_from_class(class_id: str, subject_id: str, current_user
 # BOOKS
 # ============================================
 
+def _tenant_book_filter(user_role: str, tenant_id, param_offset: int = 0) -> tuple[str, list]:
+    """Return (sql_fragment, extra_params) for tenant-scoped book visibility.
+    param_offset: number of positional params already in the query before this filter."""
+    p = param_offset + 1
+    if user_role == "super_admin" or not tenant_id:
+        return "AND b.tenant_id IS NULL", []
+    return (
+        f"AND (b.tenant_id = ${p}::uuid "
+        f"OR (b.tenant_id IS NULL AND NOT EXISTS ("
+        f"SELECT 1 FROM library_books _b2 WHERE _b2.source_id = b.id AND _b2.tenant_id = ${p}::uuid"
+        f")))",
+        [tenant_id],
+    )
+
+
+def _tenant_chapter_filter(user_role: str, tenant_id, param_offset: int = 0) -> tuple[str, list]:
+    p = param_offset + 1
+    if user_role == "super_admin" or not tenant_id:
+        return "AND ch.tenant_id IS NULL", []
+    return (
+        f"AND (ch.tenant_id = ${p}::uuid "
+        f"OR (ch.tenant_id IS NULL AND NOT EXISTS ("
+        f"SELECT 1 FROM library_chapters _c2 WHERE _c2.source_id = ch.id AND _c2.tenant_id = ${p}::uuid"
+        f")))",
+        [tenant_id],
+    )
+
+
 @router.get("/library/{class_id}/{subject_id}/books")
-async def get_books(class_id: str, subject_id: str):
+async def get_books(
+    class_id: str,
+    subject_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
     """Get books for class + subject"""
     await ensure_library_tables()
-    
+    user_role = current_user.get("role", "")
+    tenant_id = current_user.get("tenant_id")
+    tenant_sql, tenant_params = _tenant_book_filter(user_role, tenant_id, param_offset=2)
     books = await execute_query(
-        """
+        f"""
         SELECT b.*, lc.name as class_name, s.name as subject_name
         FROM library_books b
         JOIN library_classes lc ON b.class_id = lc.id
         JOIN library_subjects s ON b.subject_id = s.id
         WHERE b.class_id = $1 AND b.subject_id = $2
+        {tenant_sql}
         ORDER BY b.title
         """,
-        class_id, subject_id
+        class_id, subject_id, *tenant_params
     )
     return {"data": [dict(b) for b in books]}
 
 
 @router.get("/boards/{board_id}/subjects/{subject_id}/books")
-async def get_board_subject_books(board_id: str, subject_id: str):
+async def get_board_subject_books(
+    board_id: str,
+    subject_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
     """Get books for a specific board + subject."""
     await ensure_library_tables()
     board = await execute_one("SELECT id, name FROM library_boards WHERE id = $1::uuid", board_id)
     if not board:
         raise HTTPException(status_code=404, detail="Board not found")
 
+    user_role = current_user.get("role", "")
+    tenant_id = current_user.get("tenant_id")
+    tenant_sql, tenant_params = _tenant_book_filter(user_role, tenant_id, param_offset=0)
+
     rows = await execute_query(
-        """
+        f"""
         SELECT
             b.*,
             s.name AS subject_name,
@@ -1084,8 +1210,10 @@ async def get_board_subject_books(board_id: str, subject_id: str):
             ) AS topic_count
         FROM library_books b
         JOIN library_subjects s ON s.id = b.subject_id
+        WHERE 1=1 {tenant_sql}
         ORDER BY b.created_at DESC, b.title
-        """
+        """,
+        *tenant_params
     )
     board_name = (board["name"] or "").strip().lower()
     sid = (subject_id or "").strip()
@@ -1129,32 +1257,40 @@ async def create_book(req: CreateBookRequest, current_user: dict = Depends(get_u
             detail=f"Please add '{subject_name}' to '{class_name}' first before uploading books."
         )
     
-    # Check if book already exists
+    user_role = current_user.get("role", "")
+    book_tenant_id = None if user_role == "super_admin" else current_user.get("tenant_id")
+
+    # Check if book already exists within the same tenant scope
     existing = await execute_one(
         """
-        SELECT id FROM library_books 
-        WHERE class_id = $1 AND subject_id = $2 
+        SELECT id FROM library_books
+        WHERE class_id = $1 AND subject_id = $2
         AND LOWER(title) = LOWER($3) AND LOWER(COALESCE(author, '')) = LOWER($4)
+        AND (($5::uuid IS NULL AND tenant_id IS NULL) OR tenant_id = $5::uuid)
         """,
-        req.class_id, req.subject_id, req.title, req.author or ""
+        req.class_id, req.subject_id, req.title, req.author or "", book_tenant_id
     )
-    
+
     if existing:
         raise HTTPException(status_code=400, detail="Book with same title and author already exists for this class and subject")
-    
+
     result = await execute_one(
         """
-        INSERT INTO library_books (class_id, subject_id, title, author, board_name, edition_year, pdf_url)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO library_books (class_id, subject_id, title, author, board_name, edition_year, pdf_url, tenant_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid)
         RETURNING *
         """,
-        req.class_id, req.subject_id, req.title, req.author, req.board_name, req.edition_year, req.pdf_url
+        req.class_id, req.subject_id, req.title, req.author, req.board_name, req.edition_year, req.pdf_url,
+        book_tenant_id
     )
     return {"data": dict(result)}
 
 
 @router.get("/library/books/{book_id}")
-async def get_book_details(book_id: str):
+async def get_book_details(
+    book_id: str,
+    current_user: dict = Depends(get_user_from_token),
+):
     """Get book with chapters and topics (library only, excluding teacher-created chapters)"""
     book = await execute_one(
         """
@@ -1170,16 +1306,18 @@ async def get_book_details(book_id: str):
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    # Only get library chapters (teacher_id IS NULL), not teacher-created chapters
+    user_role = current_user.get("role", "")
+    tenant_id = current_user.get("tenant_id")
+    ch_tenant_sql, ch_tenant_params = _tenant_chapter_filter(user_role, tenant_id, param_offset=1)
+
     chapters_raw = await execute_query(
-        "SELECT * FROM library_chapters WHERE book_id = $1 AND teacher_id IS NULL ORDER BY chapter_number",
-        book_id
+        f"SELECT * FROM library_chapters ch WHERE ch.book_id = $1 AND ch.teacher_id IS NULL {ch_tenant_sql} ORDER BY ch.chapter_number",
+        book_id, *ch_tenant_params
     )
 
     chapters = []
     for chapter in chapters_raw:
         chapter_dict = dict(chapter)
-        # Only get library topics (teacher_id IS NULL), not teacher-created topics
         topics_raw = await execute_query(
             "SELECT * FROM library_topics WHERE chapter_id = $1 AND teacher_id IS NULL ORDER BY created_at",
             chapter_dict["id"]
@@ -1194,8 +1332,19 @@ async def get_book_details(book_id: str):
 
 @router.delete("/library/books/{book_id}")
 async def delete_book(book_id: str, current_user: dict = Depends(get_user_from_token)):
-    """Delete a book"""
-    await execute_write("DELETE FROM library_books WHERE id = $1", book_id)
+    """Delete a book — super admin deletes master items; admin/manager deletes their tenant's items."""
+    user_role = current_user.get("role", "")
+    tenant_id = current_user.get("tenant_id")
+    book = await execute_one("SELECT id, tenant_id FROM library_books WHERE id = $1::uuid", book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if user_role == "super_admin":
+        if book["tenant_id"] is not None:
+            raise HTTPException(status_code=403, detail="Super admin can only delete master library books")
+    else:
+        if str(book["tenant_id"] or "") != str(tenant_id or ""):
+            raise HTTPException(status_code=403, detail="You can only delete your school's books")
+    await execute_write("DELETE FROM library_books WHERE id = $1::uuid", book_id)
     return {"message": "Book deleted"}
 
 
@@ -1302,11 +1451,14 @@ async def save_parsed_book(req: SaveParsedBookRequest, current_user: dict = Depe
         if existing:
             raise HTTPException(status_code=400, detail=f"Book '{req.title}' already exists for this class and subject")
         
+        parse_user_role = current_user.get("role", "")
+        parse_tenant_id = None if parse_user_role == "super_admin" else current_user.get("tenant_id")
+
         # Create book
         book = await execute_one(
             """
-            INSERT INTO library_books (class_id, subject_id, title, author, board_name, edition_year, pdf_url)
-            VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7)
+            INSERT INTO library_books (class_id, subject_id, title, author, board_name, edition_year, pdf_url, tenant_id)
+            VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::uuid)
             RETURNING id, title
             """,
             req.class_id,
@@ -1316,23 +1468,24 @@ async def save_parsed_book(req: SaveParsedBookRequest, current_user: dict = Depe
             board_name,
             req.edition_year,
             req.pdf_url,
+            parse_tenant_id,
         )
-        
+
         chapters_created = 0
         topics_created = 0
-        
+
         # Create chapters and topics
         for chapter_data in req.chapters:
             chapter = await execute_one(
-                "INSERT INTO library_chapters (book_id, chapter_number, title) VALUES ($1, $2, $3) RETURNING id",
-                book["id"], chapter_data.chapter_number, chapter_data.title
+                "INSERT INTO library_chapters (book_id, chapter_number, title, tenant_id) VALUES ($1, $2, $3, $4::uuid) RETURNING id",
+                book["id"], chapter_data.chapter_number, chapter_data.title, parse_tenant_id
             )
             chapters_created += 1
-            
+
             for topic_data in chapter_data.topics:
                 await execute_write(
-                    "INSERT INTO library_topics (chapter_id, title, content_body) VALUES ($1, $2, $3)",
-                    chapter["id"], topic_data.get("title", "Untitled"), topic_data.get("content_body", "")
+                    "INSERT INTO library_topics (chapter_id, title, content_body, tenant_id) VALUES ($1, $2, $3, $4::uuid)",
+                    chapter["id"], topic_data.get("title", "Untitled"), topic_data.get("content_body", ""), parse_tenant_id
                 )
                 topics_created += 1
         
@@ -1845,11 +1998,13 @@ async def create_library_topic(
 
     slides_str = _serialize_slides(body.slides) if body.slides is not None else None
     theme = (body.slide_theme or "")[:160] or None
+    topic_user_role = current_user.get("role", "")
+    topic_tenant_id = None if topic_user_role == "super_admin" else current_user.get("tenant_id")
 
     row = await execute_one(
         """
-        INSERT INTO library_topics (chapter_id, title, content_body, slides_json, slide_theme)
-        VALUES ($1::uuid, $2, $3, $4, $5)
+        INSERT INTO library_topics (chapter_id, title, content_body, slides_json, slide_theme, tenant_id)
+        VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid)
         RETURNING *
         """,
         chapter_id,
@@ -1857,6 +2012,7 @@ async def create_library_topic(
         body.content_body or "",
         slides_str,
         theme,
+        topic_tenant_id,
     )
     return {"data": _library_topic_row_json(dict(row))}
 
@@ -1881,18 +2037,18 @@ async def admin_add_chapter(
     body: CreateChapterRequest,
     current_user: dict = Depends(get_user_from_token),
 ):
-    """Admin adds a new approved chapter to an existing book.
-    Chapter has teacher_id = NULL (visible to all teachers)."""
+    """Admin/Manager adds a new approved chapter to an existing book (teacher_id = NULL).
+    super_admin chapters are master library (tenant_id = NULL);
+    admin/manager chapters are scoped to their tenant."""
     await ensure_library_tables()
 
-    # Verify user is admin
     user_role = current_user.get("role")
-    if user_role not in ("admin", "super_admin"):
-        raise HTTPException(status_code=403, detail="Only admin can add chapters")
+    if user_role not in ("admin", "super_admin", "manager"):
+        raise HTTPException(status_code=403, detail="Only admin or manager can add chapters")
 
     book_id = (book_id or "").strip()
+    chapter_tenant_id = None if user_role == "super_admin" else current_user.get("tenant_id")
 
-    # Verify book exists
     book = await execute_one(
         "SELECT id FROM library_books WHERE id = $1::uuid",
         book_id,
@@ -1903,17 +2059,17 @@ async def admin_add_chapter(
     if not body.title or not body.title.strip():
         raise HTTPException(status_code=400, detail="Chapter title is required")
 
-    # Create chapter with teacher_id = NULL (approved/shared)
     try:
         row = await execute_one(
             """
-            INSERT INTO library_chapters (book_id, chapter_number, title, teacher_id)
-            VALUES ($1::uuid, $2, $3, NULL)
-            RETURNING id, book_id, chapter_number, title, teacher_id, created_at
+            INSERT INTO library_chapters (book_id, chapter_number, title, teacher_id, tenant_id)
+            VALUES ($1::uuid, $2, $3, NULL, $4::uuid)
+            RETURNING id, book_id, chapter_number, title, teacher_id, tenant_id, created_at
             """,
             book_id,
             body.chapter_number,
             body.title.strip()[:500],
+            chapter_tenant_id,
         )
     except Exception as e:
         if "duplicate key" in str(e).lower() or "unique" in str(e).lower():
@@ -1932,39 +2088,44 @@ async def admin_edit_chapter(
     body: UpdateChapterRequest,
     current_user: dict = Depends(get_user_from_token),
 ):
-    """Admin edits an approved chapter (must have teacher_id = NULL)."""
+    """Admin/Manager edits an approved chapter (teacher_id = NULL).
+    super_admin can only edit master chapters (tenant_id IS NULL);
+    admin/manager can only edit their school's chapters."""
     await ensure_library_tables()
 
-    # Verify user is admin
     user_role = current_user.get("role")
-    if user_role not in ("admin", "super_admin"):
-        raise HTTPException(status_code=403, detail="Only admin can edit chapters")
+    if user_role not in ("admin", "super_admin", "manager"):
+        raise HTTPException(status_code=403, detail="Only admin or manager can edit chapters")
 
     chapter_id = (chapter_id or "").strip()
 
-    # Get the chapter
     chapter = await execute_one(
-        "SELECT id, teacher_id FROM library_chapters WHERE id = $1::uuid",
+        "SELECT id, teacher_id, tenant_id FROM library_chapters WHERE id = $1::uuid",
         chapter_id,
     )
-
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
 
-    # Only allow editing approved chapters (teacher_id IS NULL)
     if chapter["teacher_id"] is not None:
-        raise HTTPException(status_code=403, detail="Only approved chapters can be edited by admin")
+        raise HTTPException(status_code=403, detail="Only approved chapters can be edited here")
+
+    # Enforce tenant ownership
+    if user_role == "super_admin":
+        if chapter["tenant_id"] is not None:
+            raise HTTPException(status_code=403, detail="Super admin can only edit master library chapters")
+    else:
+        if str(chapter["tenant_id"] or "") != str(current_user.get("tenant_id") or ""):
+            raise HTTPException(status_code=403, detail="You can only edit your school's chapters")
 
     if not body.title or not body.title.strip():
         raise HTTPException(status_code=400, detail="Chapter title is required")
 
-    # Update chapter
     updated = await execute_one(
         """
         UPDATE library_chapters
         SET title = $1, chapter_number = $2
         WHERE id = $3::uuid AND teacher_id IS NULL
-        RETURNING id, book_id, chapter_number, title, teacher_id, created_at
+        RETURNING id, book_id, chapter_number, title, teacher_id, tenant_id, created_at
         """,
         body.title.strip()[:500],
         body.chapter_number,
@@ -1985,31 +2146,35 @@ async def admin_delete_chapter(
     chapter_id: str,
     current_user: dict = Depends(get_user_from_token),
 ):
-    """Admin deletes an approved chapter (must have teacher_id = NULL).
-    Does not affect teacher's custom copies of this chapter."""
+    """Admin/Manager deletes an approved chapter (teacher_id = NULL).
+    super_admin can only delete master chapters; admin/manager can only delete their school's chapters.
+    Does not affect teachers' personal copies."""
     await ensure_library_tables()
 
-    # Verify user is admin
     user_role = current_user.get("role")
-    if user_role not in ("admin", "super_admin"):
-        raise HTTPException(status_code=403, detail="Only admin can delete chapters")
+    if user_role not in ("admin", "super_admin", "manager"):
+        raise HTTPException(status_code=403, detail="Only admin or manager can delete chapters")
 
     chapter_id = (chapter_id or "").strip()
 
-    # Get the chapter
     chapter = await execute_one(
-        "SELECT id, teacher_id FROM library_chapters WHERE id = $1::uuid",
+        "SELECT id, teacher_id, tenant_id FROM library_chapters WHERE id = $1::uuid",
         chapter_id,
     )
-
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
 
-    # Only allow deleting approved chapters (teacher_id IS NULL)
     if chapter["teacher_id"] is not None:
-        raise HTTPException(status_code=403, detail="Only approved chapters can be deleted by admin")
+        raise HTTPException(status_code=403, detail="Only approved chapters can be deleted here")
 
-    # Delete chapter (cascade deletes approved topics)
+    # Enforce tenant ownership
+    if user_role == "super_admin":
+        if chapter["tenant_id"] is not None:
+            raise HTTPException(status_code=403, detail="Super admin can only delete master library chapters")
+    else:
+        if str(chapter["tenant_id"] or "") != str(current_user.get("tenant_id") or ""):
+            raise HTTPException(status_code=403, detail="You can only delete your school's chapters")
+
     await execute_write(
         "DELETE FROM library_chapters WHERE id = $1::uuid AND teacher_id IS NULL",
         chapter_id,

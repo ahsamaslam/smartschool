@@ -630,6 +630,16 @@ async def startup_event():
             );""",
             "CREATE INDEX IF NOT EXISTS idx_insights_entity ON ai_performance_insights(entity_type, entity_id);",
             "CREATE INDEX IF NOT EXISTS idx_insights_date ON ai_performance_insights(analysis_date);",
+            # Tenant-scoped library hierarchy (super admin master vs school copies)
+            "ALTER TABLE library_books ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;",
+            "ALTER TABLE library_books ADD COLUMN IF NOT EXISTS source_id UUID REFERENCES library_books(id) ON DELETE SET NULL;",
+            "ALTER TABLE library_chapters ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;",
+            "ALTER TABLE library_chapters ADD COLUMN IF NOT EXISTS source_id UUID REFERENCES library_chapters(id) ON DELETE SET NULL;",
+            "ALTER TABLE library_topics ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;",
+            "ALTER TABLE library_topics ADD COLUMN IF NOT EXISTS source_id UUID REFERENCES library_topics(id) ON DELETE SET NULL;",
+            "CREATE INDEX IF NOT EXISTS idx_library_books_tenant ON library_books(tenant_id);",
+            "CREATE INDEX IF NOT EXISTS idx_library_chapters_tenant ON library_chapters(tenant_id);",
+            "CREATE INDEX IF NOT EXISTS idx_library_topics_tenant ON library_topics(tenant_id);",
         ]
         for sql in migrations:
             try:

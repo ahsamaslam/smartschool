@@ -2071,6 +2071,13 @@ async def create_tenant(payload: CreateTenantRequest, current_user: dict = Depen
             raise HTTPException(status_code=400, detail="Admin email already exists")
         raise
 
+    # Copy master library (super admin's content) into the new tenant's scope
+    try:
+        from app.routers.library import copy_super_admin_library_to_tenant
+        await copy_super_admin_library_to_tenant(str(tenant["id"]))
+    except Exception:
+        pass  # Library copy is best-effort; tenant + admin user are already created
+
     return {
         "message": "Tenant and default admin created successfully",
         "tenant": dict(tenant),
