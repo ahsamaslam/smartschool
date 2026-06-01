@@ -35,8 +35,8 @@ def require_admin(current_user: dict = Depends(get_user_from_token)):
 
 
 def require_super_admin(current_user: dict = Depends(get_user_from_token)):
-    if current_user.get("role") not in ("admin", "super_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    if current_user.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
     return current_user
 
 
@@ -3540,29 +3540,52 @@ async def get_model_configuration():
     }
 
 
-@router.get("/stats/system", dependencies=[Depends(require_super_admin)])
-async def get_system_stats():
-    """Get overall system statistics"""
-    
-    stats_query = """
-        SELECT 
-            (SELECT COUNT(*) FROM users WHERE role = 'student' AND is_active = true) as total_students,
-            (SELECT COUNT(*) FROM users WHERE role = 'teacher' AND is_active = true) as total_teachers,
-            (SELECT COUNT(*) FROM users WHERE role = 'manager' AND is_active = true) as total_managers,
-            (SELECT COUNT(*) FROM schools) as total_schools,
-            (SELECT COUNT(*) FROM branches) as total_branches,
-            (SELECT COUNT(*) FROM classes) as total_classes,
-            (SELECT COUNT(*) FROM subjects) as total_subjects,
-            (SELECT COUNT(*) FROM topics) as total_topics,
-            (SELECT COUNT(*) FROM video_templates) as total_video_templates,
-            (SELECT COUNT(*) FROM published_videos) as total_published_videos,
-            (SELECT COUNT(*) FROM quiz_banks) as total_questions,
-            (SELECT COUNT(*) FROM quiz_attempts WHERE is_completed = true) as total_completed_quizzes,
-            (SELECT COUNT(*) FROM student_questions) as total_student_questions
+@router.get("/stats/system")
+async def get_system_stats(current_user: dict = Depends(require_admin)):
     """
-    
-    stats = await execute_one(stats_query)
-    
+    System statistics.
+    - super_admin: all tenants combined
+    - admin/manager: scoped to their own tenant
+    """
+    role = current_user.get("role")
+    tenant_id = current_user.get("tenant_id")
+
+    if role == "super_admin":
+        stats = await execute_one("""
+            SELECT
+                (SELECT COUNT(*) FROM users WHERE role = 'student' AND is_active = true) AS total_students,
+                (SELECT COUNT(*) FROM users WHERE role = 'teacher' AND is_active = true) AS total_teachers,
+                (SELECT COUNT(*) FROM users WHERE role = 'manager' AND is_active = true) AS total_managers,
+                (SELECT COUNT(*) FROM schools) AS total_schools,
+                (SELECT COUNT(*) FROM branches) AS total_branches,
+                (SELECT COUNT(*) FROM classes) AS total_classes,
+                (SELECT COUNT(*) FROM subjects) AS total_subjects,
+                (SELECT COUNT(*) FROM topics) AS total_topics,
+                (SELECT COUNT(*) FROM video_templates) AS total_video_templates,
+                (SELECT COUNT(*) FROM published_videos) AS total_published_videos,
+                (SELECT COUNT(*) FROM quiz_banks) AS total_questions,
+                (SELECT COUNT(*) FROM quiz_attempts WHERE is_completed = true) AS total_completed_quizzes,
+                (SELECT COUNT(*) FROM student_questions) AS total_student_questions
+        """)
+    else:
+        # Scope everything to the caller's tenant
+        stats = await execute_one("""
+            SELECT
+                (SELECT COUNT(*) FROM users WHERE role = 'student' AND is_active = true AND tenant_id = $1::uuid) AS total_students,
+                (SELECT COUNT(*) FROM users WHERE role = 'teacher' AND is_active = true AND tenant_id = $1::uuid) AS total_teachers,
+                (SELECT COUNT(*) FROM users WHERE role = 'manager' AND is_active = true AND tenant_id = $1::uuid) AS total_managers,
+                (SELECT COUNT(*) FROM schools WHERE tenant_id = $1::uuid) AS total_schools,
+                (SELECT COUNT(*) FROM branches WHERE tenant_id = $1::uuid) AS total_branches,
+                (SELECT COUNT(*) FROM classes WHERE tenant_id = $1::uuid) AS total_classes,
+                (SELECT COUNT(*) FROM class_subjects cs JOIN classes c ON c.id = cs.class_id WHERE c.tenant_id = $1::uuid) AS total_subjects,
+                (SELECT COUNT(*) FROM topics t JOIN subjects s ON s.id = t.subject_id JOIN class_subjects cs ON cs.subject_id = s.id JOIN classes c ON c.id = cs.class_id WHERE c.tenant_id = $1::uuid) AS total_topics,
+                (SELECT COUNT(*) FROM video_templates vt JOIN topics t ON t.id = vt.topic_id JOIN subjects s ON s.id = t.subject_id JOIN class_subjects cs ON cs.subject_id = s.id JOIN classes c ON c.id = cs.class_id WHERE c.tenant_id = $1::uuid) AS total_video_templates,
+                (SELECT COUNT(*) FROM published_videos pv JOIN class_subjects cs ON cs.id = pv.class_subject_id JOIN classes c ON c.id = cs.class_id WHERE c.tenant_id = $1::uuid) AS total_published_videos,
+                (SELECT COUNT(*) FROM quiz_banks) AS total_questions,
+                (SELECT COUNT(*) FROM quiz_attempts qa JOIN quiz_instances qi ON qi.id = qa.quiz_instance_id JOIN published_videos pv ON pv.id = qi.published_video_id JOIN class_subjects cs ON cs.id = pv.class_subject_id JOIN classes c ON c.id = cs.class_id WHERE c.tenant_id = $1::uuid AND qa.is_completed = true) AS total_completed_quizzes,
+                (SELECT COUNT(*) FROM student_questions sq JOIN users u ON u.id = sq.student_id WHERE u.tenant_id = $1::uuid) AS total_student_questions
+        """, tenant_id)
+
     return dict(stats) if stats else {}
 
 
