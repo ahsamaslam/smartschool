@@ -91,15 +91,17 @@ export default function MainTabs() {
         name="MoreTab"
         component={MoreStack}
         options={{
-          title: "More",
+          title: "My Exams",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons
-              name="ellipsis-horizontal-outline"
-              color={color}
-              size={size}
-            />
+            <Ionicons name="calendar-outline" color={color} size={size} />
           ),
         }}
+        listeners={({ navigation }) => ({
+          tabPress: (e) => {
+            e.preventDefault();
+            navigation.navigate("MoreTab", { screen: "Exams" });
+          },
+        })}
       />
     </Tab.Navigator>
   );

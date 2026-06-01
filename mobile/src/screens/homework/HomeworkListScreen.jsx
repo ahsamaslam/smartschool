@@ -13,7 +13,15 @@ const STATUS_COLORS = {
   pending: "#F59E0B",
   submitted: "#10B981",
   graded: "#4F46E5",
+  reviewed: "#4F46E5",
+  returned: "#4F46E5",
   overdue: "#EF4444",
+  overdue_not_submitted: "#EF4444",
+  late_open: "#F59E0B",
+  in_progress: "#F59E0B",
+  submitted_awaiting: "#10B981",
+  late_awaiting: "#10B981",
+  missing: "#EF4444",
 };
 
 export default function HomeworkListScreen({ navigation }) {
@@ -24,7 +32,9 @@ export default function HomeworkListScreen({ navigation }) {
   const fetchList = async () => {
     try {
       const { data } = await homeworkService.studentList();
-      setHomework(data);
+      // API returns { data: [...], summary: {...} } or a flat array
+      const list = Array.isArray(data) ? data : (data?.data ?? []);
+      setHomework(list);
     } catch {
       setHomework([]);
     }
@@ -66,7 +76,7 @@ export default function HomeworkListScreen({ navigation }) {
         </View>
       }
       renderItem={({ item }) => {
-        const status = item.status ?? "pending";
+        const status = item.ui_bucket ?? item.submission_status ?? item.status ?? "pending";
         const color = STATUS_COLORS[status] ?? "#9CA3AF";
         return (
           <TouchableOpacity
@@ -132,9 +142,14 @@ export default function HomeworkListScreen({ navigation }) {
                 {item.subject_name}
               </Text>
             )}
-            {item.due_date && (
+            {(item.due_at ?? item.due_date) && (
               <Text style={{ color: "#9CA3AF", fontSize: 12, marginTop: 4 }}>
-                Due: {new Date(item.due_date).toLocaleDateString()}
+                Due: {new Date(item.due_at ?? item.due_date).toLocaleDateString()}
+              </Text>
+            )}
+            {item.marks_awarded != null && (
+              <Text style={{ color: "#10B981", fontSize: 12, marginTop: 2 }}>
+                Grade: {item.marks_awarded}/{item.total_marks}
               </Text>
             )}
           </TouchableOpacity>

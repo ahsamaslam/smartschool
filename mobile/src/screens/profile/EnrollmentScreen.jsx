@@ -36,7 +36,7 @@ export default function EnrollmentScreen() {
     );
   }
 
-  if (!enrollment) {
+  if (!enrollment || enrollment.enrolled === false) {
     return (
       <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
         <Text style={{ color: "#6B7280" }}>No enrollment data found.</Text>
@@ -136,13 +136,13 @@ export default function EnrollmentScreen() {
         )}
 
         {/* Dates */}
-        {(enrollment.enrollment_date || enrollment.start_date) && (
+        {(enrollment.enrollment_date || enrollment.enrolled_at || enrollment.start_date) && (
           <InfoCard title="Enrollment Details">
-            {enrollment.enrollment_date && (
+            {(enrollment.enrollment_date || enrollment.enrolled_at) && (
               <DetailRow
                 label="Enrolled"
                 value={new Date(
-                  enrollment.enrollment_date,
+                  enrollment.enrollment_date ?? enrollment.enrolled_at,
                 ).toLocaleDateString()}
               />
             )}

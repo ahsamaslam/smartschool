@@ -39,11 +39,12 @@
         {
           "iCloudContainerEnvironment": "Production"
         }
-      ]
+      ],
+      "expo-font"
     ],
     "extra": {
-      "apiUrl": "http://192.168.10.3:8000/api",
-      "socketUrl": "http://192.168.10.3:8000"
+      "apiUrl": "http://192.168.100.4:8000/api",
+      "socketUrl": "http://192.168.100.4:8000"
     }
   }
 }

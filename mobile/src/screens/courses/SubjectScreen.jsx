@@ -1,143 +1,146 @@
-import { useEffect, useState } from "react";
 import {
   View,
   Text,
-  FlatList,
   TouchableOpacity,
-  ActivityIndicator,
-  RefreshControl,
+  SectionList,
 } from "react-native";
-import { useAuth } from "../../context/AuthContext";
-import studentService from "../../services/studentService";
 
 export default function SubjectScreen({ route, navigation }) {
-  const { subjectId, subjectName } = route.params;
-  const { user } = useAuth();
-  const [topics, setTopics] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const { subjectName, books = [] } = route.params;
 
-  const fetchTopics = async () => {
-    try {
-      const { data } = await studentService.getSubjectTopics(
-        subjectId,
-        user.id,
-      );
-      setTopics(data);
-    } catch {
-      setTopics([]);
+  // Build sections per book: book title as a group header, chapters as section headers
+  const sections = [];
+  for (const book of books) {
+    for (const chapter of book.chapters ?? []) {
+      const topics = chapter.topics ?? [];
+      if (topics.length > 0) {
+        sections.push({
+          bookTitle: book.title,
+          title: `Ch ${chapter.chapter_number}: ${chapter.title}`,
+          topicCount: topics.length,
+          data: topics,
+          isFirstChapterOfBook:
+            sections.length === 0 ||
+            sections[sections.length - 1].bookTitle !== book.title,
+        });
+      }
     }
-  };
+  }
 
-  useEffect(() => {
-    fetchTopics().finally(() => setLoading(false));
-  }, [subjectId]);
-
-  if (loading) {
+  if (sections.length === 0) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator size="large" color="#4F46E5" />
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#F9FAFB" }}>
+        <Text style={{ fontSize: 40, marginBottom: 12 }}>📚</Text>
+        <Text style={{ color: "#6B7280", fontSize: 16 }}>No topics found.</Text>
       </View>
     );
   }
 
   return (
-    <FlatList
-      data={topics}
-      keyExtractor={(item) => String(item.topic_id ?? item.id)}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={async () => {
-            setRefreshing(true);
-            await fetchTopics();
-            setRefreshing(false);
-          }}
-        />
-      }
-      contentContainerStyle={{ padding: 16, gap: 10 }}
-      ListEmptyComponent={
-        <View style={{ alignItems: "center", marginTop: 64 }}>
-          <Text style={{ color: "#6B7280" }}>No topics found.</Text>
-        </View>
-      }
-      renderItem={({ item }) => {
-        const isLocked = item.locked ?? false;
-        return (
-          <TouchableOpacity
-            disabled={isLocked}
-            onPress={() =>
-              navigation.navigate("TopicLearn", {
-                topicId: item.topic_id ?? item.id,
-                topicName: item.topic_name ?? item.name,
-              })
-            }
-            style={{
-              backgroundColor: isLocked ? "#F3F4F6" : "#fff",
-              borderRadius: 12,
-              padding: 14,
-              flexDirection: "row",
-              alignItems: "center",
-              shadowColor: "#000",
-              shadowOpacity: isLocked ? 0 : 0.06,
-              shadowRadius: 4,
-              elevation: isLocked ? 0 : 2,
-            }}
-          >
+    <SectionList
+      sections={sections}
+      keyExtractor={(item) => String(item.id ?? item.topic_id)}
+      style={{ backgroundColor: "#F9FAFB" }}
+      contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
+      stickySectionHeadersEnabled={false}
+      renderSectionHeader={({ section }) => (
+        <View style={{ marginTop: section.isFirstChapterOfBook ? 0 : 4 }}>
+          {/* Book title — shown once per book */}
+          {section.isFirstChapterOfBook && (
             <View
               style={{
-                width: 36,
-                height: 36,
-                borderRadius: 8,
-                backgroundColor: isLocked ? "#E5E7EB" : "#EEF2FF",
-                justifyContent: "center",
+                backgroundColor: "#4F46E5",
+                borderRadius: 10,
+                padding: 12,
+                marginBottom: 10,
+                flexDirection: "row",
                 alignItems: "center",
-                marginRight: 12,
               }}
             >
-              <Text style={{ fontSize: 16 }}>{isLocked ? "🔒" : "📝"}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 18, marginRight: 8 }}>📖</Text>
               <Text
-                style={{
-                  fontWeight: "600",
-                  color: isLocked ? "#9CA3AF" : "#111827",
-                }}
+                style={{ color: "#fff", fontWeight: "700", fontSize: 14, flex: 1 }}
+                numberOfLines={2}
               >
-                {item.topic_name ?? item.name}
+                {section.bookTitle}
               </Text>
-              {item.progress != null && (
-                <View style={{ marginTop: 6 }}>
-                  <View
-                    style={{
-                      height: 4,
-                      backgroundColor: "#E5E7EB",
-                      borderRadius: 2,
-                    }}
-                  >
-                    <View
-                      style={{
-                        height: 4,
-                        width: `${item.progress}%`,
-                        backgroundColor: "#4F46E5",
-                        borderRadius: 2,
-                      }}
-                    />
-                  </View>
-                  <Text
-                    style={{ color: "#9CA3AF", fontSize: 11, marginTop: 2 }}
-                  >
-                    {item.progress}% complete
-                  </Text>
-                </View>
+            </View>
+          )}
+          {/* Chapter header */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 8,
+              marginTop: 8,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 13,
+                fontWeight: "700",
+                color: "#374151",
+                flex: 1,
+              }}
+            >
+              {section.title}
+            </Text>
+            <View
+              style={{
+                backgroundColor: "#EEF2FF",
+                borderRadius: 8,
+                paddingHorizontal: 8,
+                paddingVertical: 2,
+              }}
+            >
+              <Text style={{ color: "#4F46E5", fontSize: 11, fontWeight: "600" }}>
+                {section.topicCount} {section.topicCount === 1 ? "topic" : "topics"}
+              </Text>
+            </View>
+          </View>
+        </View>
+      )}
+      renderItem={({ item }) => (
+        <TouchableOpacity
+          onPress={() =>
+            navigation.navigate("TopicLearn", {
+              topicId: item.id ?? item.topic_id,
+              topicName: item.title ?? item.topic_name ?? item.name,
+            })
+          }
+          style={{
+            backgroundColor: "#fff",
+            borderRadius: 10,
+            padding: 14,
+            flexDirection: "row",
+            alignItems: "center",
+            marginBottom: 6,
+            shadowColor: "#000",
+            shadowOpacity: 0.05,
+            shadowRadius: 3,
+            elevation: 1,
+          }}
+        >
+          <View style={{ flex: 1, flexDirection: "row", alignItems: "center" }}>
+            <View style={{ marginRight: 10 }}>
+              {item.has_lecture && (
+                <Text style={{ fontSize: 13 }}>🎬</Text>
+              )}
+              {item.has_slides && !item.has_lecture && (
+                <Text style={{ fontSize: 13 }}>📊</Text>
+              )}
+              {!item.has_lecture && !item.has_slides && (
+                <Text style={{ fontSize: 13 }}>📝</Text>
               )}
             </View>
-            {!isLocked && (
-              <Text style={{ color: "#9CA3AF", fontSize: 20 }}>›</Text>
-            )}
-          </TouchableOpacity>
-        );
-      }}
+            <Text style={{ fontWeight: "500", color: "#111827", fontSize: 14, flex: 1 }}>
+              {item.title ?? item.topic_name ?? item.name}
+            </Text>
+          </View>
+          <Text style={{ color: "#9CA3AF", fontSize: 20 }}>›</Text>
+        </TouchableOpacity>
+      )}
     />
   );
 }

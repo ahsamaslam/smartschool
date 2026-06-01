@@ -25,7 +25,8 @@ export function ChatProvider({ children }) {
   const refreshUnreadCount = useCallback(async () => {
     try {
       const { data } = await chatService.getUnreadCount();
-      setUnreadCount(data.unread_messages ?? 0);
+      // API returns { message_count, total } or { unread_messages, pending_requests }
+      setUnreadCount(data.unread_messages ?? data.message_count ?? data.total ?? 0);
       setPendingRequestCount(data.pending_requests ?? 0);
     } catch {
       // Best-effort — badge will self-heal on next refresh
@@ -100,8 +101,27 @@ export function ChatProvider({ children }) {
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
 }
 
+const FALLBACK_CONTEXT = {
+  unreadCount: 0,
+  setUnreadCount: () => {},
+  pendingRequestCount: 0,
+  setPendingRequestCount: () => {},
+  incomingMessage: null,
+  setIncomingMessage: () => {},
+  typingState: {},
+  wsConnected: false,
+  refreshUnreadCount: async () => {},
+  send: () => {},
+  sendTypingStart: () => {},
+  sendTypingStop: () => {},
+  markMessageRead: () => {},
+};
+
 export const useChatContext = () => {
   const ctx = useContext(ChatContext);
-  if (!ctx) throw new Error("useChatContext must be used within ChatProvider");
+  if (!ctx) {
+    console.warn("useChatContext called outside ChatProvider — using fallback");
+    return FALLBACK_CONTEXT;
+  }
   return ctx;
 };

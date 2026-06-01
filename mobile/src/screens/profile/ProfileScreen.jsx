@@ -19,24 +19,24 @@ export default function ProfileScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: "", phone: "", bio: "" });
+  const [form, setForm] = useState({ name: "", phone: "" });
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchProfile = async () => {
     try {
       const { data } = await studentService.getProfile(user.id);
-      setProfile(data);
+      // Backend returns full_name, not name
+      const normalized = { ...data, name: data.full_name ?? data.name };
+      setProfile(normalized);
       setForm({
-        name: data.name ?? "",
-        phone: data.phone ?? "",
-        bio: data.bio ?? "",
+        name: normalized.name ?? "",
+        phone: normalized.phone_number ?? normalized.phone ?? "",
       });
     } catch {
       setProfile(user);
       setForm({
-        name: user.name ?? "",
-        phone: user.phone ?? "",
-        bio: user.bio ?? "",
+        name: user.name ?? user.full_name ?? "",
+        phone: user.phone_number ?? user.phone ?? "",
       });
     }
   };
@@ -48,9 +48,13 @@ export default function ProfileScreen({ navigation }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const { data } = await studentService.updateProfile(user.id, form);
-      await updateUser(data);
-      setProfile(data);
+      const { data } = await studentService.updateProfile(user.id, {
+        full_name: form.name,
+        phone_number: form.phone || null,
+      });
+      const normalized = { ...data, name: data.full_name ?? data.name };
+      await updateUser(normalized);
+      setProfile(normalized);
       setEditing(false);
       Alert.alert("Saved", "Profile updated successfully.");
     } catch (err) {
@@ -162,9 +166,8 @@ export default function ProfileScreen({ navigation }) {
             <View style={{ gap: 12 }}>
               {[
                 { label: "Full Name", key: "name" },
-                { label: "Phone", key: "phone" },
-                { label: "Bio", key: "bio", multiline: true },
-              ].map(({ label, key, multiline }) => (
+                { label: "Phone Number", key: "phone", keyboardType: "phone-pad" },
+              ].map(({ label, key, multiline, keyboardType }) => (
                 <View key={key}>
                   <Text
                     style={{ color: "#6B7280", fontSize: 13, marginBottom: 4 }}
@@ -178,6 +181,7 @@ export default function ProfileScreen({ navigation }) {
                     placeholderTextColor="#9CA3AF"
                     multiline={multiline}
                     numberOfLines={multiline ? 3 : 1}
+                    keyboardType={keyboardType ?? "default"}
                     style={{
                       borderWidth: 1,
                       borderColor: "#D1D5DB",
@@ -217,8 +221,7 @@ export default function ProfileScreen({ navigation }) {
             <View style={{ gap: 10 }}>
               <InfoRow label="Name" value={profile?.name ?? "—"} />
               <InfoRow label="Email" value={user?.email ?? "—"} />
-              <InfoRow label="Phone" value={profile?.phone ?? "—"} />
-              {profile?.bio && <InfoRow label="Bio" value={profile.bio} />}
+              <InfoRow label="Phone" value={profile?.phone_number ?? profile?.phone ?? "—"} />
             </View>
           )}
         </View>
@@ -246,7 +249,7 @@ export default function ProfileScreen({ navigation }) {
           </TouchableOpacity>
 
           <TouchableOpacity
-            onPress={() => navigation.navigate("Exams")}
+            onPress={() => navigation.navigate("Attendance")}
             style={{
               backgroundColor: "#fff",
               borderRadius: 12,
@@ -260,10 +263,11 @@ export default function ProfileScreen({ navigation }) {
             }}
           >
             <Text style={{ flex: 1, fontWeight: "600", color: "#111827" }}>
-              My Exams
+              My Attendance
             </Text>
             <Text style={{ color: "#9CA3AF", fontSize: 18 }}>›</Text>
           </TouchableOpacity>
+
         </View>
 
         {/* Logout */}

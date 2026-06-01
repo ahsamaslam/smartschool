@@ -1,7 +1,7 @@
 import api from "../api";
 
 const examService = {
-  // Student-facing endpoints
+  // Student-facing endpoints — returns { today, upcoming, past } with full details
   getMyScheduledExams: () => api.get(`/exams/student/my-exams`),
 
   // Student exam from learning module (enrolled scope)

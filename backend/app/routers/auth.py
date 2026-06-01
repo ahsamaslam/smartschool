@@ -60,6 +60,7 @@ class ChangePasswordRequest(BaseModel):
 class UpdateProfileRequest(BaseModel):
     full_name: Optional[str] = None
     profile_picture_url: Optional[str] = None
+    phone_number: Optional[str] = None
 
 
 # ============================================
@@ -250,7 +251,7 @@ async def change_password(request: ChangePasswordRequest):
 async def get_current_user(user_id: str):
     """Return profile for *user_id* (passed as query param by the frontend)."""
     query = """
-        SELECT id, email, full_name, role, profile_picture_url, created_at
+        SELECT id, email, full_name, role, profile_picture_url, phone_number, created_at
         FROM users
         WHERE id = $1 AND is_active = true
     """
@@ -283,6 +284,11 @@ async def update_profile(user_id: str, profile: UpdateProfileRequest):
         params.append(profile.profile_picture_url)
         idx += 1
 
+    if profile.phone_number is not None:
+        updates.append(f"phone_number = ${idx}")
+        params.append(profile.phone_number)
+        idx += 1
+
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updates provided")
 
@@ -291,7 +297,7 @@ async def update_profile(user_id: str, profile: UpdateProfileRequest):
         UPDATE users
         SET {', '.join(updates)}, updated_at = NOW()
         WHERE id = ${idx}
-        RETURNING id, email, full_name, profile_picture_url
+        RETURNING id, email, full_name, profile_picture_url, phone_number
     """
     updated = await execute_one(query, *params)
 

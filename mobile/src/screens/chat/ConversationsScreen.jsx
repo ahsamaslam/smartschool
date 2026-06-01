@@ -32,7 +32,6 @@ export default function ConversationsScreen({ navigation }) {
     useCallback(() => {
       setLoading(true);
       fetchConversations().finally(() => setLoading(false));
-      // Reset badge on entering chat tab
       setUnreadCount(0);
     }, []),
   );

@@ -1,6 +1,5 @@
 import axios from "axios";
 import * as SecureStore from "expo-secure-store";
-import { navigationRef } from "../navigation/navigationRef";
 import { API_URL } from "../config";
 
 const API_BASE_URL = API_URL;
@@ -12,6 +11,10 @@ const api = axios.create({
     "Content-Type": "application/json",
   },
 });
+
+// Logout callback set by AuthProvider — called on 401 to clear auth state.
+let _onUnauthorized = null;
+export const setUnauthorizedHandler = (fn) => { _onUnauthorized = fn; };
 
 // ── Request interceptor: attach stored JWT ──────────────────────────────────
 api.interceptors.request.use(
@@ -32,13 +35,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       await SecureStore.deleteItemAsync("smart_school_token");
       await SecureStore.deleteItemAsync("smart_school_user");
-      // Reset navigation to Login screen
-      if (navigationRef.current?.isReady()) {
-        navigationRef.current.reset({
-          index: 0,
-          routes: [{ name: "Login" }],
-        });
-      }
+      _onUnauthorized?.();
     }
     return Promise.reject(error);
   },

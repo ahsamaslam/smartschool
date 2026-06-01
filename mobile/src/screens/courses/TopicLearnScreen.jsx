@@ -22,8 +22,21 @@ export default function TopicLearnScreen({ route, navigation }) {
     (async () => {
       try {
         const { data } = await learningService.getStudentTopic(topicId);
-        setTopic(data);
-        // Mark as in-progress
+        // API returns { data: {...topic row...}, progress: {...} }
+        const topicRow = data?.data ?? data;
+        // Normalize field names from DB columns to what the screen uses
+        const normalized = {
+          ...topicRow,
+          topic_name: topicRow.title ?? topicRow.topic_name ?? topicRow.name,
+          slides: (() => {
+            const raw = topicRow.slides_json;
+            if (!raw) return [];
+            try { return JSON.parse(raw); } catch { return []; }
+          })(),
+          video_url: topicRow.lecture_video_url ?? topicRow.video_url,
+          quiz_instance_id: topicRow.quiz_instance_id ?? null,
+        };
+        setTopic(normalized);
         await learningService.updateProgress({
           topic_id: topicId,
           status: "in_progress",

@@ -21,7 +21,13 @@ export default function NewChatScreen({ navigation }) {
     chatService
       .getEligibleContacts()
       .then(({ data }) => {
-        const list = data.contacts ?? data;
+        // API returns { groups: [{ label, members: [...] }] } or { contacts: [...] }
+        let list = data.contacts ?? [];
+        if (!list.length && data.groups) {
+          list = data.groups.flatMap((g) => g.members ?? []);
+        }
+        // Normalize full_name → name
+        list = list.map((c) => ({ ...c, name: c.name ?? c.full_name }));
         setContacts(list);
         setFiltered(list);
       })

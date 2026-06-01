@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import * as SecureStore from "expo-secure-store";
-import api from "../api";
+import api, { setUnauthorizedHandler } from "../api";
 
 const AuthContext = createContext(null);
 
@@ -69,6 +69,13 @@ export function AuthProvider({ children }) {
       setUser(null);
     }
   };
+
+  // Register logout as the 401 handler so the API interceptor doesn't try
+  // to navigate directly (it doesn't know the route structure).
+  useEffect(() => {
+    setUnauthorizedHandler(() => logout());
+    return () => setUnauthorizedHandler(null);
+  }, [logout]);
 
   // ── Update local user state (e.g. after profile edit) ───────────────────
   const updateUser = async (updates) => {

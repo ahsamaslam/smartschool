@@ -26,58 +26,62 @@ export const useChat = (onMessage, onTyping, onDelivery) => {
   const connect = useCallback(() => {
     if (!authToken) return;
 
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-      socketRef.current = null;
-    }
-
-    const socket = io(SOCKET_URL, {
-      auth: { token: authToken },
-      transports: ["websocket", "polling"],
-      autoConnect: false,
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 2000,
-      reconnectionDelayMax: 30000,
-    });
-
-    socket.on("connect", () => {
-      console.log("✅ Socket.IO connected:", socket.id);
-      setIsConnected(true);
-    });
-
-    socket.on("disconnect", (reason) => {
-      console.log("❌ Socket.IO disconnected:", reason);
-      setIsConnected(false);
-    });
-
-    socket.on("connect_error", (err) => {
-      console.error("Socket.IO connect error:", err.message);
-      setIsConnected(false);
-      if (err.message === "auth_failed") {
-        console.warn("Socket.IO auth rejected — session expired.");
-        socket.disconnect();
+    try {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
       }
-    });
 
-    socket.on("new_message", (data) => {
-      onMessageRef.current?.(data);
-    });
+      const socket = io(SOCKET_URL, {
+        auth: { token: authToken },
+        transports: ["websocket", "polling"],
+        autoConnect: false,
+        reconnection: true,
+        reconnectionAttempts: 10,
+        reconnectionDelay: 2000,
+        reconnectionDelayMax: 30000,
+      });
 
-    socket.on("typing", (data) => {
-      onTypingRef.current?.({ ...data, type: "typing" });
-    });
+      socket.on("connect", () => {
+        console.log("✅ Socket.IO connected:", socket.id);
+        setIsConnected(true);
+      });
 
-    socket.on("typing_stop", (data) => {
-      onTypingRef.current?.({ ...data, type: "typing_stop" });
-    });
+      socket.on("disconnect", (reason) => {
+        console.log("❌ Socket.IO disconnected:", reason);
+        setIsConnected(false);
+      });
 
-    socket.on("delivery_receipt", (data) => {
-      onDeliveryRef.current?.(data);
-    });
+      socket.on("connect_error", (err) => {
+        console.error("Socket.IO connect error:", err.message);
+        setIsConnected(false);
+        if (err.message === "auth_failed") {
+          console.warn("Socket.IO auth rejected — session expired.");
+          socket.disconnect();
+        }
+      });
 
-    socketRef.current = socket;
-    socket.connect();
+      socket.on("new_message", (data) => {
+        onMessageRef.current?.(data);
+      });
+
+      socket.on("typing", (data) => {
+        onTypingRef.current?.({ ...data, type: "typing" });
+      });
+
+      socket.on("typing_stop", (data) => {
+        onTypingRef.current?.({ ...data, type: "typing_stop" });
+      });
+
+      socket.on("delivery_receipt", (data) => {
+        onDeliveryRef.current?.(data);
+      });
+
+      socketRef.current = socket;
+      socket.connect();
+    } catch (err) {
+      console.error("Socket.IO init failed:", err?.message ?? err);
+    }
   }, [authToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

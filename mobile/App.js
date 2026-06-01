@@ -1,4 +1,3 @@
-import "react-native-url-polyfill/auto";
 import "react-native-gesture-handler";
 import { NavigationContainer } from "@react-navigation/native";
 import { QueryClient } from "@tanstack/react-query";

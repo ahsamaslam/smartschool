@@ -126,8 +126,9 @@ export default function ChatScreen({ route }) {
       if (newId) seenIdsRef.current.add(newId);
       // Inverted list: prepend so sent message appears at bottom
       setMessages((prev) => [msgObj, ...prev]);
-    } catch {
-      Alert.alert("Error", "Message failed to send.");
+    } catch (err) {
+      const detail = err?.response?.data?.detail ?? "Message failed to send.";
+      Alert.alert("Error", detail);
       setText(content); // Restore
     } finally {
       setSending(false);

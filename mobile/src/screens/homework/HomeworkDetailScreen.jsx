@@ -23,10 +23,34 @@ export default function HomeworkDetailScreen({ route, navigation }) {
     (async () => {
       try {
         const { data } = await homeworkService.studentGet(homeworkId);
-        setHw(data);
-        // Restore saved progress
-        if (data.saved_progress) {
-          setAnswers(data.saved_progress);
+        // API returns { homework, submission, questions, answers } nested
+        const hw = data?.homework ?? data;
+        const submission = data?.submission ?? {};
+        const questions = (data?.questions ?? hw.questions ?? []).map((q) => ({
+          ...q,
+          options: q.options_json
+            ? (() => { try { return JSON.parse(q.options_json); } catch { return []; } })()
+            : q.options ?? [],
+        }));
+        const savedAnswers = {};
+        for (const ans of data?.answers ?? []) {
+          savedAnswers[ans.homework_question_id] = ans.answer_text ?? "";
+        }
+        const normalized = {
+          ...hw,
+          submission_type: hw.homework_type ?? hw.submission_type,
+          status: submission.submission_status ?? hw.submission_status ?? hw.status,
+          due_date: hw.due_at ?? hw.due_date,
+          grade: submission.marks_awarded ?? hw.marks_awarded,
+          max_grade: hw.total_marks ?? hw.max_grade,
+          feedback: submission.teacher_feedback ?? hw.teacher_feedback,
+          questions,
+        };
+        setHw(normalized);
+        if (Object.keys(savedAnswers).length > 0) {
+          setAnswers(savedAnswers);
+        } else if (hw.saved_progress) {
+          setAnswers(hw.saved_progress);
         }
       } catch {
         Alert.alert("Error", "Could not load homework.");
@@ -39,7 +63,11 @@ export default function HomeworkDetailScreen({ route, navigation }) {
 
   const handleSaveProgress = async () => {
     try {
-      await homeworkService.saveProgress(homeworkId, answers);
+      const answersList = Object.entries(answers).map(([homework_question_id, answer_text]) => ({
+        homework_question_id,
+        answer_text: String(answer_text ?? ""),
+      }));
+      await homeworkService.saveProgress(homeworkId, answersList);
       Alert.alert("Saved", "Progress saved.");
     } catch {
       Alert.alert("Error", "Could not save progress.");
@@ -49,12 +77,18 @@ export default function HomeworkDetailScreen({ route, navigation }) {
   const handleSubmitInteractive = async () => {
     setSubmitting(true);
     try {
-      await homeworkService.submitInteractive(homeworkId, answers);
+      const answersList = Object.entries(answers).map(([homework_question_id, answer_text]) => ({
+        homework_question_id,
+        answer_text: String(answer_text ?? ""),
+      }));
+      await homeworkService.submitInteractive(homeworkId, answersList);
       Alert.alert("Submitted!", "Homework submitted successfully.", [
         { text: "OK", onPress: () => navigation.goBack() },
       ]);
     } catch (err) {
-      Alert.alert("Error", err?.response?.data?.detail ?? "Submission failed.");
+      const detail = err?.response?.data?.detail;
+      const msg = Array.isArray(detail) ? detail.map((d) => d.msg ?? d).join(", ") : detail ?? "Submission failed.";
+      Alert.alert("Error", String(msg));
     } finally {
       setSubmitting(false);
     }
@@ -79,7 +113,9 @@ export default function HomeworkDetailScreen({ route, navigation }) {
         { text: "OK", onPress: () => navigation.goBack() },
       ]);
     } catch (err) {
-      Alert.alert("Error", err?.response?.data?.detail ?? "Upload failed.");
+      const detail = err?.response?.data?.detail;
+      const msg = Array.isArray(detail) ? detail.map((d) => d.msg ?? d).join(", ") : detail ?? "Upload failed.";
+      Alert.alert("Error", String(msg));
     } finally {
       setSubmitting(false);
     }
@@ -96,7 +132,8 @@ export default function HomeworkDetailScreen({ route, navigation }) {
   if (!hw) return null;
 
   const isUploadType = hw.submission_type === "upload";
-  const isSubmitted = ["submitted", "graded"].includes(hw.status);
+  const isSubmitted = ["submitted", "graded", "reviewed",
+    "submitted_awaiting", "late_awaiting"].includes(hw.status);
 
   return (
     <ScrollView
@@ -122,6 +159,22 @@ export default function HomeworkDetailScreen({ route, navigation }) {
       </View>
 
       <View style={{ padding: 16, gap: 16 }}>
+        {/* Returned banner */}
+        {hw.status === "returned" && (
+          <View style={{
+            backgroundColor: "#FEF3C7", borderRadius: 10, padding: 14,
+            borderWidth: 1, borderColor: "#FCD34D", flexDirection: "row", alignItems: "center",
+          }}>
+            <Text style={{ fontSize: 18, marginRight: 10 }}>↩️</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontWeight: "700", color: "#92400E", fontSize: 13 }}>Returned for Revision</Text>
+              <Text style={{ color: "#78350F", fontSize: 12, marginTop: 2 }}>
+                Your teacher returned this homework. Review the feedback below and resubmit.
+              </Text>
+            </View>
+          </View>
+        )}
+
         {/* Instructions */}
         {hw.instructions && (
           <View
@@ -147,7 +200,7 @@ export default function HomeworkDetailScreen({ route, navigation }) {
         )}
 
         {/* Grade (if graded) */}
-        {hw.grade != null && (
+        {(hw.grade != null || hw.marks_awarded != null) && (
           <View
             style={{
               backgroundColor: "#ECFDF5",
@@ -158,7 +211,7 @@ export default function HomeworkDetailScreen({ route, navigation }) {
             }}
           >
             <Text style={{ fontWeight: "600", color: "#065F46" }}>
-              Grade: {hw.grade} / {hw.max_grade ?? 100}
+              Grade: {hw.grade ?? hw.marks_awarded} / {hw.max_grade ?? hw.total_marks ?? 100}
             </Text>
             {hw.feedback && (
               <Text style={{ color: "#047857", marginTop: 4 }}>
@@ -318,42 +371,24 @@ export default function HomeworkDetailScreen({ route, navigation }) {
               </View>
             ))}
 
-            <View style={{ flexDirection: "row", gap: 12 }}>
-              <TouchableOpacity
-                onPress={handleSaveProgress}
-                style={{
-                  flex: 1,
-                  borderWidth: 1,
-                  borderColor: "#4F46E5",
-                  borderRadius: 8,
-                  paddingVertical: 12,
-                  alignItems: "center",
-                }}
-              >
-                <Text style={{ color: "#4F46E5", fontWeight: "600" }}>
-                  Save Draft
+            <TouchableOpacity
+              onPress={handleSubmitInteractive}
+              disabled={submitting}
+              style={{
+                backgroundColor: submitting ? "#9CA3AF" : "#4F46E5",
+                borderRadius: 8,
+                paddingVertical: 14,
+                alignItems: "center",
+              }}
+            >
+              {submitting ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={{ color: "#fff", fontWeight: "600", fontSize: 15 }}>
+                  Submit Homework
                 </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleSubmitInteractive}
-                disabled={submitting}
-                style={{
-                  flex: 1,
-                  backgroundColor: submitting ? "#9CA3AF" : "#4F46E5",
-                  borderRadius: 8,
-                  paddingVertical: 12,
-                  alignItems: "center",
-                }}
-              >
-                {submitting ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={{ color: "#fff", fontWeight: "600" }}>
-                    Submit
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
+              )}
+            </TouchableOpacity>
           </View>
         )}
 

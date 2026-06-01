@@ -28,7 +28,15 @@ export default function QuizScreen({ route, navigation }) {
           quizService.getInstance(quizInstanceId),
           quizService.startAttempt(user.id, quizInstanceId),
         ]);
-        setQuiz(instance);
+        // Normalize: map quiz_question_id → id for questions
+        const normalized = {
+          ...instance,
+          questions: (instance.questions ?? []).map((q) => ({
+            ...q,
+            id: q.id ?? q.quiz_question_id,
+          })),
+        };
+        setQuiz(normalized);
         setAttemptId(attempt.attempt_id ?? attempt.id);
       } catch (err) {
         Alert.alert(
