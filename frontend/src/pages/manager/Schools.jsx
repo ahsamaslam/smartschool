@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import managerService from "../../services/managerService";
+import libraryService from "../../services/libraryService";
 import toast from "react-hot-toast";
 import { PageSpinner } from "../../components/common/Spinner";
 import {
@@ -15,6 +17,7 @@ import {
   XMarkIcon,
   PencilSquareIcon,
   TrashIcon,
+  BookOpenIcon,
 } from "@heroicons/react/24/outline";
 
 const ALPHA = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
@@ -138,11 +141,268 @@ function SectionPicker({ value, onChange }) {
   );
 }
 
-function ClassRow({ cls, onEdit, onDelete, branchName }) {
-  const label = cls.section ? `Sec ${cls.section}` : "Main Section";
+function LinkSectionSubjectsModal({ isOpen, onClose, section, allSections, onSaved }) {
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [catalog, setCatalog] = useState(null);
+  const [selectedBoardId, setSelectedBoardId] = useState("");
+  const [selectedSubjectIds, setSelectedSubjectIds] = useState([]);
+  const [selectedBookIds, setSelectedBookIds] = useState([]);
+  const [subjectBooks, setSubjectBooks] = useState({});
+  const [loadingBooks, setLoadingBooks] = useState(false);
+  const [applyToAll, setApplyToAll] = useState(false);
+  const [bookSearch, setBookSearch] = useState("");
+  const [expandedSubjects, setExpandedSubjects] = useState({});
+
+  const boards = Array.isArray(catalog?.boards) ? catalog.boards : [];
+  const linkedByBoard = catalog?.linked_subjects_by_board || {};
+  const activeBoard = boards.find((b) => b.id === selectedBoardId);
+  const subjects = Array.isArray(activeBoard?.subjects) ? activeBoard.subjects : [];
+
+  const sectionLabel = section
+    ? section.section
+      ? `Class ${section.grade_level} — Section ${section.section}`
+      : `Class ${section.grade_level}`
+    : "Section";
+
+  useEffect(() => {
+    if (!isOpen || !section?.id) return;
+    let mounted = true;
+    setLoading(true);
+    setSubjectBooks({});
+    setSelectedBookIds([]);
+    libraryService.getSectionSubjectCatalog(section.id)
+      .then((res) => {
+        if (!mounted) return;
+        const data = res?.data?.data || res?.data || {};
+        setCatalog(data);
+        const firstBoardId = data?.boards?.[0]?.id || "";
+        setSelectedBoardId(firstBoardId);
+        setSelectedSubjectIds(firstBoardId ? (data?.linked_subjects_by_board?.[firstBoardId] || []) : []);
+      })
+      .catch(() => toast.error("Failed to load curriculum catalog."))
+      .finally(() => mounted && setLoading(false));
+    libraryService.getSectionCurriculum(section.id)
+      .then((res) => {
+        if (!mounted) return;
+        const cur = res?.data?.data || {};
+        setSelectedBookIds((cur.books || []).map((b) => b.id));
+      })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, [isOpen, section?.id]);
+
+  useEffect(() => {
+    if (!selectedBoardId) return;
+    setSelectedSubjectIds(linkedByBoard[selectedBoardId] || []);
+    setSelectedBookIds([]);
+    setSubjectBooks({});
+    setBookSearch("");
+    setExpandedSubjects({});
+  }, [selectedBoardId]); // eslint-disable-line
+
+  useEffect(() => {
+    if (!selectedBoardId || selectedSubjectIds.length === 0) {
+      setSubjectBooks({});
+      setExpandedSubjects({});
+      return;
+    }
+    let mounted = true;
+    setLoadingBooks(true);
+    Promise.all(
+      selectedSubjectIds.map((sid) =>
+        libraryService.getBoardSubjectBooks(selectedBoardId, sid)
+          .then((res) => ({ sid, books: res?.data?.data || [] }))
+          .catch(() => ({ sid, books: [] }))
+      )
+    ).then((results) => {
+      if (!mounted) return;
+      const map = {};
+      const expanded = {};
+      results.forEach(({ sid, books }) => { map[sid] = books; expanded[sid] = true; });
+      setSubjectBooks(map);
+      setExpandedSubjects(expanded);
+    }).finally(() => mounted && setLoadingBooks(false));
+    return () => { mounted = false; };
+  }, [selectedBoardId, selectedSubjectIds.join(",")]); // eslint-disable-line
+
+  const toggleSubject = (id) =>
+    setSelectedSubjectIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+
+  const toggleBook = (id) =>
+    setSelectedBookIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+
+  const toggleAllForSubject = (sid, visibleBooks) => {
+    const ids = visibleBooks.map((b) => b.id);
+    const allSelected = ids.every((id) => selectedBookIds.includes(id));
+    setSelectedBookIds((prev) =>
+      allSelected ? prev.filter((id) => !ids.includes(id)) : [...new Set([...prev, ...ids])]
+    );
+  };
+
+  const handleSave = async () => {
+    if (!section?.id || !selectedBoardId) return;
+    setSaving(true);
+    try {
+      if (applyToAll && allSections?.length > 0) {
+        await libraryService.bulkAssignSections({
+          class_ids: allSections.map((s) => s.id),
+          board_id: selectedBoardId,
+          subject_ids: selectedSubjectIds,
+          book_ids: selectedBookIds,
+        });
+        toast.success(`Course applied to all ${allSections.length} sections.`);
+      } else {
+        await libraryService.setSectionSubjects(section.id, { board_id: selectedBoardId, subject_ids: selectedSubjectIds });
+        await libraryService.setSectionBooks(section.id, { book_ids: selectedBookIds });
+        toast.success("Course updated.");
+      }
+      onSaved?.();
+      onClose?.();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to update course.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
-    <div className="group flex items-center gap-3 px-4 py-2.5 rounded-xl bg-white border border-gray-100 hover:border-indigo-300 hover:shadow-sm cursor-pointer transition-all">
+    <Modal isOpen={isOpen} onClose={() => !saving && onClose?.()} title={`Assign Course — ${sectionLabel}`} wide>
+      {loading ? (
+        <div className="py-10 text-center text-sm text-gray-500">Loading…</div>
+      ) : boards.length === 0 ? (
+        <div className="py-6 text-center text-sm text-gray-500">
+          No boards configured. Contact your admin to set up the library.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {allSections?.length > 1 && (
+            <label className="flex items-center gap-2 p-3 bg-indigo-50 rounded-xl cursor-pointer border border-indigo-100">
+              <input type="checkbox" checked={applyToAll} onChange={(e) => setApplyToAll(e.target.checked)} className="rounded" />
+              <span className="text-sm font-medium text-indigo-700">
+                Apply to all sections in Class {section?.grade_level} ({allSections.length} sections)
+              </span>
+            </label>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Board</label>
+            <select
+              value={selectedBoardId}
+              onChange={(e) => setSelectedBoardId(e.target.value)}
+              className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              {boards.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Subjects</label>
+            <div className="grid grid-cols-2 gap-2">
+              {subjects.map((s) => (
+                <label key={s.id} className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors ${selectedSubjectIds.includes(s.id) ? "border-indigo-400 bg-indigo-50" : "border-gray-200 hover:border-indigo-200"}`}>
+                  <input type="checkbox" checked={selectedSubjectIds.includes(s.id)} onChange={() => toggleSubject(s.id)} className="rounded" />
+                  <span className="text-sm text-gray-700">{s.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          {selectedSubjectIds.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-700">Books</label>
+                <input
+                  value={bookSearch}
+                  onChange={(e) => setBookSearch(e.target.value)}
+                  placeholder="Search books…"
+                  className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-400 w-40"
+                />
+              </div>
+              {loadingBooks ? (
+                <div className="text-sm text-gray-400 py-3 text-center">Loading books…</div>
+              ) : (
+                <div className="space-y-3">
+                  {selectedSubjectIds.map((sid) => {
+                    const subj = subjects.find((s) => s.id === sid);
+                    const sBooks = (subjectBooks[sid] || []).filter((b) =>
+                      !bookSearch || b.title?.toLowerCase().includes(bookSearch.toLowerCase())
+                    );
+                    if (!subj) return null;
+                    return (
+                      <div key={sid} className="border border-gray-100 rounded-xl overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedSubjects((p) => ({ ...p, [sid]: !p[sid] }))}
+                          className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                        >
+                          <span>{subj.name}</span>
+                          <div className="flex items-center gap-2">
+                            {sBooks.length > 0 && (
+                              <span
+                                onClick={(e) => { e.stopPropagation(); toggleAllForSubject(sid, sBooks); }}
+                                className="text-xs text-indigo-600 hover:underline"
+                              >
+                                {sBooks.every((b) => selectedBookIds.includes(b.id)) ? "Deselect all" : "Select all"}
+                              </span>
+                            )}
+                            <ChevronDownIcon className={`h-3.5 w-3.5 text-gray-400 transition-transform ${expandedSubjects[sid] ? "rotate-180" : ""}`} />
+                          </div>
+                        </button>
+                        {expandedSubjects[sid] && (
+                          <div className="px-3 py-2 space-y-1.5">
+                            {sBooks.length === 0 ? (
+                              <p className="text-xs text-gray-400 px-1 py-2">No books match.</p>
+                            ) : sBooks.map((book) => (
+                              <label key={book.id} className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${selectedBookIds.includes(book.id) ? "border-indigo-400 bg-indigo-50" : "border-gray-100 hover:border-indigo-200"}`}>
+                                <input type="checkbox" checked={selectedBookIds.includes(book.id)} onChange={() => toggleBook(book.id)} className="rounded mt-0.5" />
+                                <div>
+                                  <p className="text-sm text-gray-800">{book.title}</p>
+                                  {book.author && <p className="text-xs text-gray-400">{book.author}</p>}
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} disabled={saving} className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-700 text-sm font-semibold hover:bg-gray-200 transition-colors">Cancel</button>
+            <button type="button" onClick={handleSave} disabled={saving || !selectedBoardId} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-60 transition-colors flex items-center justify-center gap-2">
+              {saving && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
+              {saving ? "Saving…" : "Save Course"}
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function ClassRow({ cls, onEdit, onDelete, onLinkSubjects, branchName }) {
+  const navigate = useNavigate();
+  const label = cls.section ? `Sec ${cls.section}` : "Main Section";
+
+  const handleClick = () => {
+    navigate(`/manager/sections/${cls.id}`, {
+      state: {
+        classId: cls.id,
+        returnToClassPath: `/manager/school`,
+        branchId: cls.branch_id,
+        gradeLevel: cls.grade_level,
+        branchName,
+      },
+    });
+  };
+
+  return (
+    <div
+      onClick={handleClick}
+      className="group flex items-center gap-3 px-4 py-2.5 rounded-xl bg-white border border-gray-100 hover:border-indigo-300 hover:shadow-sm cursor-pointer transition-all"
+      title="View section details"
+    >
       <div className="w-7 h-7 rounded-lg bg-amber-50 flex items-center justify-center flex-shrink-0">
         <AcademicCapIcon className="h-3.5 w-3.5 text-amber-600" />
       </div>
@@ -154,7 +414,15 @@ function ClassRow({ cls, onEdit, onDelete, branchName }) {
         <UsersIcon className="h-3.5 w-3.5" />
         {cls.student_count ?? 0}
       </span>
+      <span className="text-xs font-medium text-indigo-600 flex-shrink-0 hidden sm:inline">Open section</span>
       <div className="flex items-center gap-1 ml-1">
+        <button
+          onClick={(e) => { e.stopPropagation(); if (typeof onLinkSubjects === "function") onLinkSubjects(cls); }}
+          className="p-1.5 text-gray-400 hover:text-emerald-600 rounded-md hover:bg-emerald-50 transition-colors"
+          title="Link subjects"
+        >
+          <BookOpenIcon className="h-4 w-4" />
+        </button>
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -180,8 +448,9 @@ function ClassRow({ cls, onEdit, onDelete, branchName }) {
   );
 }
 
-function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onManageSections, branchName }) {
+function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onManageSections, onLinkSubjects, branchName }) {
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
 
   const groupStudentTotal = useMemo(() => {
     return classes.reduce((sum, c) => sum + (c.student_count || 0), 0);
@@ -211,6 +480,17 @@ function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onManageSectio
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const ref = classes[0];
+              if (ref) navigate(`/manager/classes/${ref.id}`, { state: { branchId: ref.branch_id, gradeLevel, branchName } });
+            }}
+            className="opacity-0 group-hover/classgroup:opacity-100 transition-opacity inline-flex items-center gap-1 px-2 py-1 rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-semibold"
+            title="See all sections for this class"
+          >
+            All Sections
+          </button>
+          <button
             onClick={(e) => { e.stopPropagation(); onManageSections(gradeLevel); }}
             className="opacity-0 group-hover/classgroup:opacity-100 transition-opacity inline-flex items-center gap-1 px-2 py-1 rounded-md bg-amber-50 text-amber-700 hover:bg-amber-100 text-xs font-semibold"
             title="Manage sections for this class"
@@ -236,6 +516,7 @@ function ClassGroupPanel({ gradeLevel, classes, onEdit, onDelete, onManageSectio
                 cls={cls}
                 onEdit={onEdit}
                 onDelete={onDelete}
+                onLinkSubjects={onLinkSubjects}
                 branchName={branchName}
               />
             ))}
@@ -250,6 +531,7 @@ function BranchPanel({ branch, branchClasses, onEdit, onDelete, onRefresh }) {
   const [open, setOpen] = useState(true);
   const [showClassModal, setShowClassModal] = useState(false);
   const [editingClass, setEditingClass] = useState(null);
+  const [linkSubjectsFor, setLinkSubjectsFor] = useState(null);
   const [creationMode, setCreationMode] = useState("single");
   const [classForm, setClassForm] = useState({ grade_level: "", section: "" });
   const [multiForm, setMultiForm] = useState({ grade_level: "", type: "alpha", from: "A", to: "C" });
@@ -487,6 +769,7 @@ function BranchPanel({ branch, branchClasses, onEdit, onDelete, onRefresh }) {
                   onEdit={openEditClass}
                   onDelete={setDeletingClass}
                   onManageSections={openManageSections}
+                  onLinkSubjects={(c) => setLinkSubjectsFor(c)}
                   branchName={branch.name}
                 />
               ))}
@@ -612,6 +895,14 @@ function BranchPanel({ branch, branchClasses, onEdit, onDelete, onRefresh }) {
         deleting={isDeleting}
         title="Delete Class"
         message={`Are you sure you want to delete this class? All associated enrollments and data will be lost.`}
+      />
+
+      <LinkSectionSubjectsModal
+        isOpen={!!linkSubjectsFor}
+        section={linkSubjectsFor}
+        allSections={linkSubjectsFor ? branchClasses.filter((c) => c.grade_level === linkSubjectsFor.grade_level) : []}
+        onClose={() => setLinkSubjectsFor(null)}
+        onSaved={() => { setLinkSubjectsFor(null); onRefresh(); }}
       />
     </div>
   );

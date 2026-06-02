@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import adminService from "../../services/adminService";
+import managerService from "../../services/managerService";
 import libraryService from "../../services/libraryService";
+import { useAuth } from "../../context/AuthContext";
 import Spinner from "../../components/common/Spinner";
 import toast from "react-hot-toast";
 import {
@@ -503,7 +505,11 @@ export default function AdminClassDetail() {
   const { classId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const stateData = location.state || {};
+  const isManager = user?.role === "manager";
+  const schoolsPath = isManager ? "/manager/schools" : "/admin/schools";
+  const sectionPath = (secId) => isManager ? `/manager/sections/${secId}` : `/admin/sections/${secId}`;
 
   const [sections, setSections] = useState([]);
   const [sectionCurricula, setSectionCurricula] = useState({});
@@ -546,10 +552,12 @@ export default function AdminClassDetail() {
       if (!bId) return;
       setLoading(true);
       try {
-        const res = await adminService.getBranchClasses(bId);
+        const res = isManager
+          ? await managerService.getClasses()
+          : await adminService.getBranchClasses(bId);
         const raw = res.data;
         const all = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : [];
-        const filtered = all.filter((c) => c.grade_level === gl);
+        const filtered = all.filter((c) => c.grade_level === gl && (isManager || c.branch_id === bId));
         setSections(filtered);
         loadCurricula(filtered);
       } catch {
@@ -686,7 +694,7 @@ export default function AdminClassDetail() {
     <div className="p-6 max-w-5xl mx-auto pb-24">
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-sm text-gray-400 mb-6 flex-wrap">
-        <Link to="/admin/schools" className="hover:text-gray-700 transition-colors">
+        <Link to={schoolsPath} className="hover:text-gray-700 transition-colors">
           Schools
         </Link>
         {schoolName && (
@@ -763,7 +771,7 @@ export default function AdminClassDetail() {
               onManageCurriculum={(s) => openCurriculumModal(s, false)}
               onEdit={openEdit}
               onDelete={setDeletingSection}
-              onView={(s) => navigate(`/admin/sections/${s.id}`, {
+              onView={(s) => navigate(sectionPath(s.id), {
                 state: { gradeLevel, branchName, schoolName, branchId },
               })}
             />

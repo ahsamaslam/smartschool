@@ -300,6 +300,15 @@ export default function App() {
             <Route path="/manager/students" element={<ManagerStudents />} />
             <Route path="/manager/settings" element={<ManagerSettings />} />
             <Route path="/manager/chat" element={<ManagerChat />} />
+            <Route
+              path="/manager/sections/:sectionId"
+              element={<AdminSectionDetail />}
+            />
+            <Route
+              path="/manager/classes/:classId"
+              element={<AdminClassDetail />}
+            />
+            <Route path="/manager/school" element={<ManagerSchools />} />
 
             {/* ── ADMIN ── */}
             <Route path="/admin/dashboard" element={<AdminDashboard />} />

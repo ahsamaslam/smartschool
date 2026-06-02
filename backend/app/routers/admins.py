@@ -2509,38 +2509,61 @@ async def delete_branch(branch_id: str, current_user: dict = Depends(require_adm
     return {"message": "Branch deleted successfully"}
 
 
-@router.get("/classes", dependencies=[Depends(require_super_admin)])
-async def get_all_classes():
-    """Get all classes across all branches"""
-    query = """
-        SELECT
-            c.id, c.branch_id, c.name, c.grade_level, c.section,
-            c.teacher_id, c.created_at,
-            COUNT(DISTINCT e.student_id) AS student_count,
-            u.full_name AS teacher_name,
-            b.name AS branch_name,
-            s.name AS school_name
-        FROM classes c
-        LEFT JOIN enrollments e ON e.class_id = c.id AND e.is_active = true
-        LEFT JOIN users u ON u.id = c.teacher_id
-        LEFT JOIN branches b ON b.id = c.branch_id
-        LEFT JOIN schools s ON s.id = b.school_id
-        GROUP BY c.id, u.full_name, b.name, s.name
-        ORDER BY c.grade_level, c.section, c.name
-    """
-    classes = await execute_query(query)
+@router.get("/classes")
+async def get_all_classes(current_user: dict = Depends(require_admin)):
+    """Get all classes — scoped to caller's tenant for admin/manager, all for super_admin."""
+    role = current_user.get("role")
+    tenant_id = current_user.get("tenant_id")
+    if role == "super_admin":
+        query = """
+            SELECT c.id, c.branch_id, c.name, c.grade_level, c.section,
+                   c.teacher_id, c.created_at,
+                   COUNT(DISTINCT e.student_id) AS student_count,
+                   u.full_name AS teacher_name,
+                   b.name AS branch_name, s.name AS school_name
+            FROM classes c
+            LEFT JOIN enrollments e ON e.class_id = c.id AND e.is_active = true
+            LEFT JOIN users u ON u.id = c.teacher_id
+            LEFT JOIN branches b ON b.id = c.branch_id
+            LEFT JOIN schools s ON s.id = b.school_id
+            GROUP BY c.id, u.full_name, b.name, s.name
+            ORDER BY c.grade_level, c.section, c.name
+        """
+        classes = await execute_query(query)
+    else:
+        query = """
+            SELECT c.id, c.branch_id, c.name, c.grade_level, c.section,
+                   c.teacher_id, c.created_at,
+                   COUNT(DISTINCT e.student_id) AS student_count,
+                   u.full_name AS teacher_name,
+                   b.name AS branch_name, s.name AS school_name
+            FROM classes c
+            LEFT JOIN enrollments e ON e.class_id = c.id AND e.is_active = true
+            LEFT JOIN users u ON u.id = c.teacher_id
+            LEFT JOIN branches b ON b.id = c.branch_id
+            LEFT JOIN schools s ON s.id = b.school_id
+            WHERE c.tenant_id = $1::uuid
+            GROUP BY c.id, u.full_name, b.name, s.name
+            ORDER BY c.grade_level, c.section, c.name
+        """
+        classes = await execute_query(query, tenant_id)
     return {"data": [dict(c) for c in classes]}
 
 
-@router.get("/branches/{branch_id}/classes", dependencies=[Depends(require_super_admin)])
-async def get_branch_classes(branch_id: str):
-    """Get all classes for a branch with section and student count"""
+@router.get("/branches/{branch_id}/classes")
+async def get_branch_classes(branch_id: str, current_user: dict = Depends(require_admin)):
+    """Get all classes for a branch — admin/manager scoped to own tenant."""
+    role = current_user.get("role")
+    tenant_id = current_user.get("tenant_id")
+    if role != "super_admin":
+        branch = await execute_one("SELECT tenant_id FROM branches WHERE id = $1::uuid", branch_id)
+        if not branch or str(branch["tenant_id"]) != str(tenant_id):
+            raise HTTPException(status_code=403, detail="Access denied")
     query = """
-        SELECT
-            c.id, c.branch_id, c.name, c.grade_level, c.section,
-            c.teacher_id, c.created_at,
-            COUNT(DISTINCT e.student_id) AS student_count,
-            u.full_name AS teacher_name
+        SELECT c.id, c.branch_id, c.name, c.grade_level, c.section,
+               c.teacher_id, c.created_at,
+               COUNT(DISTINCT e.student_id) AS student_count,
+               u.full_name AS teacher_name
         FROM classes c
         LEFT JOIN enrollments e ON e.class_id = c.id AND e.is_active = true
         LEFT JOIN users u ON u.id = c.teacher_id
@@ -2552,12 +2575,16 @@ async def get_branch_classes(branch_id: str):
     return [dict(c) for c in classes]
 
 
-@router.post("/classes", dependencies=[Depends(require_super_admin)])
-async def create_class(class_data: CreateClassRequest):
-    """Create a new class under a branch"""
+@router.post("/classes")
+async def create_class(class_data: CreateClassRequest, current_user: dict = Depends(require_admin)):
+    """Create a new class under a branch."""
     branch = await execute_one("SELECT id, tenant_id FROM branches WHERE id = $1::uuid", class_data.branch_id)
     if not branch:
         raise HTTPException(status_code=404, detail="Branch not found")
+    role = current_user.get("role")
+    tenant_id = current_user.get("tenant_id")
+    if role != "super_admin" and str(branch["tenant_id"]) != str(tenant_id):
+        raise HTTPException(status_code=403, detail="Access denied")
 
     query = """
         INSERT INTO classes (tenant_id, branch_id, name, grade_level, section)
@@ -2575,12 +2602,18 @@ async def create_class(class_data: CreateClassRequest):
     return {"message": "Class created successfully", "class": dict(cls)}
 
 
-@router.put("/classes/{class_id}", dependencies=[Depends(require_super_admin)])
-async def update_class(class_id: str, class_data: UpdateClassRequest):
-    """Update a class"""
+@router.put("/classes/{class_id}")
+async def update_class(class_id: str, class_data: UpdateClassRequest, current_user: dict = Depends(require_admin)):
+    """Update a class — admin scoped to own tenant."""
+    role = current_user.get("role")
+    tenant_id = current_user.get("tenant_id")
+    if role != "super_admin":
+        cls_check = await execute_one("SELECT tenant_id FROM classes WHERE id = $1::uuid", class_id)
+        if not cls_check or str(cls_check["tenant_id"]) != str(tenant_id):
+            raise HTTPException(status_code=403, detail="Access denied")
     query = """
-        UPDATE classes 
-        SET name = COALESCE($1, name), 
+        UPDATE classes
+        SET name = COALESCE($1, name),
             grade_level = COALESCE($2, grade_level),
             section = COALESCE($3, section),
             manual_student_count = COALESCE($4, manual_student_count)
@@ -2593,9 +2626,15 @@ async def update_class(class_id: str, class_data: UpdateClassRequest):
     return {"message": "Class updated successfully", "class": dict(cls)}
 
 
-@router.delete("/classes/{class_id}", dependencies=[Depends(require_super_admin)])
-async def delete_class(class_id: str):
-    """Delete a class"""
+@router.delete("/classes/{class_id}")
+async def delete_class(class_id: str, current_user: dict = Depends(require_admin)):
+    """Delete a class — admin scoped to own tenant."""
+    role = current_user.get("role")
+    tenant_id = current_user.get("tenant_id")
+    if role != "super_admin":
+        cls_check = await execute_one("SELECT tenant_id FROM classes WHERE id = $1::uuid", class_id)
+        if not cls_check or str(cls_check["tenant_id"]) != str(tenant_id):
+            raise HTTPException(status_code=403, detail="Access denied")
     query = "DELETE FROM classes WHERE id = $1 RETURNING id"
     deleted = await execute_one(query, class_id)
     if not deleted:
