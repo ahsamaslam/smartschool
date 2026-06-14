@@ -688,34 +688,42 @@ async def delete_library_class(class_id: str, current_user: dict = Depends(get_u
 # SUBJECTS (Global list)
 # ============================================
 
-def _tenant_board_filter(role: str, tenant_id, param_offset: int = 0) -> tuple[str, list]:
-    """Visibility filter for library_boards.
-    super_admin → master only (tenant_id IS NULL)
-    admin/manager → their tenant's boards OR master boards not yet copied to their tenant"""
+def _lib_visibility_filter(table: str, alias: str, role: str, tenant_id, user_id=None, param_offset: int = 0) -> tuple[str, list]:
+    """
+    Unified visibility filter for library tables.
+    super_admin  → only master items (tenant_id IS NULL)
+    admin        → master fallback + own tenant items where manager_id IS NULL
+    manager      → master fallback + own tenant admin items + own private items (manager_id = user_id)
+    others       → same as admin
+    """
     p = param_offset + 1
     if role == "super_admin" or not tenant_id:
-        return "AND b.tenant_id IS NULL", []
+        return f"AND {alias}.tenant_id IS NULL", []
+
+    master_fallback = (
+        f"({alias}.tenant_id IS NULL AND NOT EXISTS ("
+        f"SELECT 1 FROM {table} _x WHERE _x.source_id = {alias}.id AND _x.tenant_id = ${p}::uuid))"
+    )
+    admin_items = f"({alias}.tenant_id = ${p}::uuid AND {alias}.manager_id IS NULL)"
+
+    if role == "manager" and user_id:
+        manager_items = f"({alias}.tenant_id = ${p}::uuid AND {alias}.manager_id = ${p+1}::uuid)"
+        return (
+            f"AND ({master_fallback} OR {admin_items} OR {manager_items})",
+            [tenant_id, user_id],
+        )
     return (
-        f"AND (b.tenant_id = ${p}::uuid "
-        f"OR (b.tenant_id IS NULL AND NOT EXISTS ("
-        f"SELECT 1 FROM library_boards _b2 WHERE _b2.source_id = b.id AND _b2.tenant_id = ${p}::uuid"
-        f")))",
+        f"AND ({master_fallback} OR {admin_items})",
         [tenant_id],
     )
 
 
-def _tenant_subject_filter(role: str, tenant_id, param_offset: int = 0) -> tuple[str, list]:
-    """Visibility filter for library_subjects."""
-    p = param_offset + 1
-    if role == "super_admin" or not tenant_id:
-        return "AND s.tenant_id IS NULL", []
-    return (
-        f"AND (s.tenant_id = ${p}::uuid "
-        f"OR (s.tenant_id IS NULL AND NOT EXISTS ("
-        f"SELECT 1 FROM library_subjects _s2 WHERE _s2.source_id = s.id AND _s2.tenant_id = ${p}::uuid"
-        f")))",
-        [tenant_id],
-    )
+def _tenant_board_filter(role: str, tenant_id, user_id=None, param_offset: int = 0) -> tuple[str, list]:
+    return _lib_visibility_filter("library_boards", "b", role, tenant_id, user_id, param_offset)
+
+
+def _tenant_subject_filter(role: str, tenant_id, user_id=None, param_offset: int = 0) -> tuple[str, list]:
+    return _lib_visibility_filter("library_subjects", "s", role, tenant_id, user_id, param_offset)
 
 
 @router.get("/subjects")
@@ -724,7 +732,8 @@ async def get_all_subjects(current_user: dict = Depends(get_user_from_token)):
     await ensure_library_tables()
     role = current_user.get("role", "")
     tenant_id = current_user.get("tenant_id")
-    tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, param_offset=0)
+    user_id = current_user.get("user_id") or current_user.get("id")
+    tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, user_id, param_offset=0)
     subjects = await execute_query(
         f"SELECT s.* FROM library_subjects s WHERE 1=1 {tenant_sql} ORDER BY s.name",
         *tenant_params
@@ -764,7 +773,8 @@ async def get_all_boards(current_user: dict = Depends(get_user_from_token)):
     await ensure_library_tables()
     role = current_user.get("role", "")
     tenant_id = current_user.get("tenant_id")
-    tenant_sql, tenant_params = _tenant_board_filter(role, tenant_id, param_offset=0)
+    user_id = current_user.get("user_id") or current_user.get("id")
+    tenant_sql, tenant_params = _tenant_board_filter(role, tenant_id, user_id, param_offset=0)
     boards = await execute_query(
         f"""
         SELECT b.id, b.name, b.description, b.created_at,
@@ -824,7 +834,8 @@ async def get_board_subjects(board_id: str, current_user: dict = Depends(get_use
     await ensure_library_tables()
     role = current_user.get("role", "")
     tenant_id = current_user.get("tenant_id")
-    tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, param_offset=1)
+    user_id = current_user.get("user_id") or current_user.get("id")
+    tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, user_id, param_offset=1)
     rows = await execute_query(
         f"""
         SELECT s.id, s.name, s.description
@@ -1257,32 +1268,13 @@ async def remove_subject_from_class(class_id: str, subject_id: str, current_user
 # BOOKS
 # ============================================
 
-def _tenant_book_filter(user_role: str, tenant_id, param_offset: int = 0) -> tuple[str, list]:
-    """Return (sql_fragment, extra_params) for tenant-scoped book visibility.
-    param_offset: number of positional params already in the query before this filter."""
-    p = param_offset + 1
-    if user_role == "super_admin" or not tenant_id:
-        return "AND b.tenant_id IS NULL", []
-    return (
-        f"AND (b.tenant_id = ${p}::uuid "
-        f"OR (b.tenant_id IS NULL AND NOT EXISTS ("
-        f"SELECT 1 FROM library_books _b2 WHERE _b2.source_id = b.id AND _b2.tenant_id = ${p}::uuid"
-        f")))",
-        [tenant_id],
-    )
+def _tenant_book_filter(user_role: str, tenant_id, user_id=None, param_offset: int = 0) -> tuple[str, list]:
+    """Tenant-scoped book visibility — role+manager_id aware."""
+    return _lib_visibility_filter("library_books", "b", user_role, tenant_id, user_id, param_offset)
 
 
-def _tenant_chapter_filter(user_role: str, tenant_id, param_offset: int = 0) -> tuple[str, list]:
-    p = param_offset + 1
-    if user_role == "super_admin" or not tenant_id:
-        return "AND ch.tenant_id IS NULL", []
-    return (
-        f"AND (ch.tenant_id = ${p}::uuid "
-        f"OR (ch.tenant_id IS NULL AND NOT EXISTS ("
-        f"SELECT 1 FROM library_chapters _c2 WHERE _c2.source_id = ch.id AND _c2.tenant_id = ${p}::uuid"
-        f")))",
-        [tenant_id],
-    )
+def _tenant_chapter_filter(user_role: str, tenant_id, user_id=None, param_offset: int = 0) -> tuple[str, list]:
+    return _lib_visibility_filter("library_chapters", "ch", user_role, tenant_id, user_id, param_offset)
 
 
 @router.get("/library/{class_id}/{subject_id}/books")
@@ -1295,7 +1287,8 @@ async def get_books(
     await ensure_library_tables()
     user_role = current_user.get("role", "")
     tenant_id = current_user.get("tenant_id")
-    tenant_sql, tenant_params = _tenant_book_filter(user_role, tenant_id, param_offset=2)
+    user_id = current_user.get("user_id") or current_user.get("id")
+    tenant_sql, tenant_params = _tenant_book_filter(user_role, tenant_id, user_id, param_offset=2)
     books = await execute_query(
         f"""
         SELECT b.*, lc.name as class_name, s.name as subject_name
@@ -1325,7 +1318,8 @@ async def get_board_subject_books(
 
     user_role = current_user.get("role", "")
     tenant_id = current_user.get("tenant_id")
-    tenant_sql, tenant_params = _tenant_book_filter(user_role, tenant_id, param_offset=0)
+    user_id = current_user.get("user_id") or current_user.get("id")
+    tenant_sql, tenant_params = _tenant_book_filter(user_role, tenant_id, user_id, param_offset=0)
 
     rows = await execute_query(
         f"""
@@ -1589,12 +1583,13 @@ async def save_parsed_book(req: SaveParsedBookRequest, current_user: dict = Depe
         
         parse_user_role = current_user.get("role", "")
         parse_tenant_id = None if parse_user_role == "super_admin" else current_user.get("tenant_id")
+        parse_manager_id = (current_user.get("user_id") or current_user.get("id")) if parse_user_role == "manager" else None
 
         # Create book
         book = await execute_one(
             """
-            INSERT INTO library_books (class_id, subject_id, title, author, board_name, edition_year, pdf_url, tenant_id)
-            VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::uuid)
+            INSERT INTO library_books (class_id, subject_id, title, author, board_name, edition_year, pdf_url, tenant_id, manager_id)
+            VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::uuid, $9::uuid)
             RETURNING id, title
             """,
             req.class_id,
@@ -1605,6 +1600,7 @@ async def save_parsed_book(req: SaveParsedBookRequest, current_user: dict = Depe
             req.edition_year,
             req.pdf_url,
             parse_tenant_id,
+            parse_manager_id,
         )
 
         chapters_created = 0
@@ -1613,15 +1609,15 @@ async def save_parsed_book(req: SaveParsedBookRequest, current_user: dict = Depe
         # Create chapters and topics
         for chapter_data in req.chapters:
             chapter = await execute_one(
-                "INSERT INTO library_chapters (book_id, chapter_number, title, tenant_id) VALUES ($1, $2, $3, $4::uuid) RETURNING id",
-                book["id"], chapter_data.chapter_number, chapter_data.title, parse_tenant_id
+                "INSERT INTO library_chapters (book_id, chapter_number, title, tenant_id, manager_id) VALUES ($1, $2, $3, $4::uuid, $5::uuid) RETURNING id",
+                book["id"], chapter_data.chapter_number, chapter_data.title, parse_tenant_id, parse_manager_id
             )
             chapters_created += 1
 
             for topic_data in chapter_data.topics:
                 await execute_write(
-                    "INSERT INTO library_topics (chapter_id, title, content_body, tenant_id) VALUES ($1, $2, $3, $4::uuid)",
-                    chapter["id"], topic_data.get("title", "Untitled"), topic_data.get("content_body", ""), parse_tenant_id
+                    "INSERT INTO library_topics (chapter_id, title, content_body, tenant_id, manager_id) VALUES ($1, $2, $3, $4::uuid, $5::uuid)",
+                    chapter["id"], topic_data.get("title", "Untitled"), topic_data.get("content_body", ""), parse_tenant_id, parse_manager_id
                 )
                 topics_created += 1
         
