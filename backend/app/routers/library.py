@@ -508,11 +508,85 @@ async def ensure_library_tables():
     await execute_write(
         "CREATE INDEX IF NOT EXISTS idx_library_topics_tenant ON library_topics(tenant_id)"
     )
+    # Boards + subjects tenant scoping
+    await execute_write(
+        "ALTER TABLE library_boards ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE"
+    )
+    await execute_write(
+        "ALTER TABLE library_boards ADD COLUMN IF NOT EXISTS source_id UUID REFERENCES library_boards(id) ON DELETE SET NULL"
+    )
+    await execute_write(
+        "ALTER TABLE library_subjects ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE"
+    )
+    await execute_write(
+        "ALTER TABLE library_subjects ADD COLUMN IF NOT EXISTS source_id UUID REFERENCES library_subjects(id) ON DELETE SET NULL"
+    )
+    # manager_id: when set, item is only visible to that manager; NULL means all tenant users see it
+    await execute_write(
+        "ALTER TABLE library_boards ADD COLUMN IF NOT EXISTS manager_id UUID REFERENCES users(id) ON DELETE CASCADE"
+    )
+    await execute_write(
+        "ALTER TABLE library_subjects ADD COLUMN IF NOT EXISTS manager_id UUID REFERENCES users(id) ON DELETE CASCADE"
+    )
+    await execute_write(
+        "ALTER TABLE library_books ADD COLUMN IF NOT EXISTS manager_id UUID REFERENCES users(id) ON DELETE CASCADE"
+    )
+    await execute_write(
+        "ALTER TABLE library_chapters ADD COLUMN IF NOT EXISTS manager_id UUID REFERENCES users(id) ON DELETE CASCADE"
+    )
+    await execute_write(
+        "ALTER TABLE library_topics ADD COLUMN IF NOT EXISTS manager_id UUID REFERENCES users(id) ON DELETE CASCADE"
+    )
+    await execute_write(
+        "CREATE INDEX IF NOT EXISTS idx_library_boards_tenant ON library_boards(tenant_id)"
+    )
+    await execute_write(
+        "CREATE INDEX IF NOT EXISTS idx_library_subjects_tenant ON library_subjects(tenant_id)"
+    )
+    # Drop UNIQUE constraint on library_boards.name since names can repeat across tenants
+    await execute_write(
+        "ALTER TABLE library_boards DROP CONSTRAINT IF EXISTS library_boards_name_key"
+    )
+    await execute_write(
+        "ALTER TABLE library_subjects DROP CONSTRAINT IF EXISTS library_subjects_name_key"
+    )
 
 
 async def copy_super_admin_library_to_tenant(tenant_id: str) -> None:
     """Deep-copies the entire master library (tenant_id IS NULL) into a new tenant's scope."""
     await ensure_library_tables()
+
+    # Copy boards
+    master_boards = await execute_query(
+        "SELECT * FROM library_boards WHERE tenant_id IS NULL"
+    )
+    for board in master_boards:
+        existing = await execute_one(
+            "SELECT id FROM library_boards WHERE source_id = $1::uuid AND tenant_id = $2::uuid",
+            str(board["id"]), tenant_id
+        )
+        if not existing:
+            await execute_write(
+                "INSERT INTO library_boards (name, description, tenant_id, source_id) VALUES ($1,$2,$3::uuid,$4::uuid) ON CONFLICT DO NOTHING",
+                board["name"], board.get("description"), tenant_id, str(board["id"])
+            )
+
+    # Copy subjects
+    master_subjects = await execute_query(
+        "SELECT * FROM library_subjects WHERE tenant_id IS NULL"
+    )
+    for subj in master_subjects:
+        existing = await execute_one(
+            "SELECT id FROM library_subjects WHERE source_id = $1::uuid AND tenant_id = $2::uuid",
+            str(subj["id"]), tenant_id
+        )
+        if not existing:
+            await execute_write(
+                "INSERT INTO library_subjects (name, description, tenant_id, source_id) VALUES ($1,$2,$3::uuid,$4::uuid) ON CONFLICT DO NOTHING",
+                subj["name"], subj.get("description"), tenant_id, str(subj["id"])
+            )
+
+    # Copy books
     master_books = await execute_query(
         "SELECT * FROM library_books WHERE tenant_id IS NULL"
     )
@@ -614,26 +688,68 @@ async def delete_library_class(class_id: str, current_user: dict = Depends(get_u
 # SUBJECTS (Global list)
 # ============================================
 
+def _tenant_board_filter(role: str, tenant_id, param_offset: int = 0) -> tuple[str, list]:
+    """Visibility filter for library_boards.
+    super_admin → master only (tenant_id IS NULL)
+    admin/manager → their tenant's boards OR master boards not yet copied to their tenant"""
+    p = param_offset + 1
+    if role == "super_admin" or not tenant_id:
+        return "AND b.tenant_id IS NULL", []
+    return (
+        f"AND (b.tenant_id = ${p}::uuid "
+        f"OR (b.tenant_id IS NULL AND NOT EXISTS ("
+        f"SELECT 1 FROM library_boards _b2 WHERE _b2.source_id = b.id AND _b2.tenant_id = ${p}::uuid"
+        f")))",
+        [tenant_id],
+    )
+
+
+def _tenant_subject_filter(role: str, tenant_id, param_offset: int = 0) -> tuple[str, list]:
+    """Visibility filter for library_subjects."""
+    p = param_offset + 1
+    if role == "super_admin" or not tenant_id:
+        return "AND s.tenant_id IS NULL", []
+    return (
+        f"AND (s.tenant_id = ${p}::uuid "
+        f"OR (s.tenant_id IS NULL AND NOT EXISTS ("
+        f"SELECT 1 FROM library_subjects _s2 WHERE _s2.source_id = s.id AND _s2.tenant_id = ${p}::uuid"
+        f")))",
+        [tenant_id],
+    )
+
+
 @router.get("/subjects")
-async def get_all_subjects():
-    """Get all subjects (global list)"""
+async def get_all_subjects(current_user: dict = Depends(get_user_from_token)):
+    """Get subjects scoped to caller's tenant (master for super_admin, tenant copy for others)."""
     await ensure_library_tables()
-    subjects = await execute_query("SELECT * FROM library_subjects ORDER BY name")
+    role = current_user.get("role", "")
+    tenant_id = current_user.get("tenant_id")
+    tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, param_offset=0)
+    subjects = await execute_query(
+        f"SELECT s.* FROM library_subjects s WHERE 1=1 {tenant_sql} ORDER BY s.name",
+        *tenant_params
+    )
     return {"data": [dict(s) for s in subjects]}
 
 
 @router.post("/subjects")
 async def create_subject(req: CreateSubjectRequest, current_user: dict = Depends(get_user_from_token)):
-    """Create a new subject"""
+    """Create a new subject scoped to caller's tenant."""
     await ensure_library_tables()
-    
-    existing = await execute_one("SELECT id FROM library_subjects WHERE LOWER(name) = LOWER($1)", req.name)
+    role = current_user.get("role", "")
+    subject_tenant_id = None if role == "super_admin" else current_user.get("tenant_id")
+    manager_id = current_user.get("id") if role == "manager" else None
+
+    existing = await execute_one(
+        "SELECT id FROM library_subjects WHERE LOWER(name) = LOWER($1) AND (($2::uuid IS NULL AND tenant_id IS NULL) OR tenant_id = $2::uuid)",
+        req.name, subject_tenant_id
+    )
     if existing:
         raise HTTPException(status_code=400, detail="Subject already exists")
-    
+
     result = await execute_one(
-        "INSERT INTO library_subjects (name, description) VALUES ($1, $2) RETURNING *",
-        req.name, req.description
+        "INSERT INTO library_subjects (name, description, tenant_id, manager_id) VALUES ($1, $2, $3::uuid, $4::uuid) RETURNING *",
+        req.name, req.description, subject_tenant_id, manager_id
     )
     return {"data": result}
 
@@ -643,62 +759,81 @@ async def create_subject(req: CreateSubjectRequest, current_user: dict = Depends
 # ============================================
 
 @router.get("/boards")
-async def get_all_boards():
-    """Get all boards with subject count."""
+async def get_all_boards(current_user: dict = Depends(get_user_from_token)):
+    """Get boards scoped to caller's tenant."""
     await ensure_library_tables()
+    role = current_user.get("role", "")
+    tenant_id = current_user.get("tenant_id")
+    tenant_sql, tenant_params = _tenant_board_filter(role, tenant_id, param_offset=0)
     boards = await execute_query(
-        """
-        SELECT
-            b.id,
-            b.name,
-            b.description,
-            b.created_at,
-            COUNT(bs.subject_id) AS subject_count
+        f"""
+        SELECT b.id, b.name, b.description, b.created_at,
+               COUNT(bs.subject_id) AS subject_count
         FROM library_boards b
         LEFT JOIN library_board_subjects bs ON bs.board_id = b.id
+        WHERE 1=1 {tenant_sql}
         GROUP BY b.id
         ORDER BY b.name
-        """
+        """,
+        *tenant_params
     )
     return {"data": [dict(b) for b in boards]}
 
 
 @router.post("/boards")
 async def create_board(req: CreateBoardRequest, current_user: dict = Depends(get_user_from_token)):
-    """Create a new board."""
+    """Create a new board scoped to caller's tenant."""
     await ensure_library_tables()
-    existing = await execute_one("SELECT id FROM library_boards WHERE LOWER(name) = LOWER($1)", req.name)
+    role = current_user.get("role", "")
+    board_tenant_id = None if role == "super_admin" else current_user.get("tenant_id")
+    manager_id = current_user.get("id") if role == "manager" else None
+
+    existing = await execute_one(
+        "SELECT id FROM library_boards WHERE LOWER(name) = LOWER($1) AND (($2::uuid IS NULL AND tenant_id IS NULL) OR tenant_id = $2::uuid)",
+        req.name, board_tenant_id
+    )
     if existing:
         raise HTTPException(status_code=400, detail="Board already exists")
     row = await execute_one(
-        "INSERT INTO library_boards (name, description) VALUES ($1, $2) RETURNING *",
-        req.name.strip(),
-        req.description,
+        "INSERT INTO library_boards (name, description, tenant_id, manager_id) VALUES ($1, $2, $3::uuid, $4::uuid) RETURNING *",
+        req.name.strip(), req.description, board_tenant_id, manager_id,
     )
     return {"data": dict(row)}
 
 
 @router.delete("/boards/{board_id}")
 async def delete_board(board_id: str, current_user: dict = Depends(get_user_from_token)):
-    """Delete board and linked assignments."""
+    """Delete board — only owner can delete."""
     await ensure_library_tables()
+    role = current_user.get("role", "")
+    tenant_id = current_user.get("tenant_id")
+    board = await execute_one("SELECT tenant_id FROM library_boards WHERE id = $1::uuid", board_id)
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    if role == "super_admin" and board["tenant_id"] is not None:
+        raise HTTPException(status_code=403, detail="Super admin can only delete master boards")
+    if role != "super_admin" and str(board["tenant_id"]) != str(tenant_id):
+        raise HTTPException(status_code=403, detail="You can only delete your school's boards")
     await execute_write("DELETE FROM library_boards WHERE id = $1::uuid", board_id)
     return {"message": "Board deleted"}
 
 
 @router.get("/boards/{board_id}/subjects")
-async def get_board_subjects(board_id: str):
-    """Get board subject list."""
+async def get_board_subjects(board_id: str, current_user: dict = Depends(get_user_from_token)):
+    """Get subjects for a board scoped to caller's tenant."""
     await ensure_library_tables()
+    role = current_user.get("role", "")
+    tenant_id = current_user.get("tenant_id")
+    tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, param_offset=1)
     rows = await execute_query(
-        """
+        f"""
         SELECT s.id, s.name, s.description
         FROM library_board_subjects bs
         JOIN library_subjects s ON s.id = bs.subject_id
-        WHERE bs.board_id = $1::uuid
+        WHERE bs.board_id = $1::uuid {tenant_sql}
         ORDER BY s.name
         """,
-        board_id,
+        board_id, *tenant_params
     )
     return {"data": [dict(r) for r in rows]}
 
@@ -1259,6 +1394,7 @@ async def create_book(req: CreateBookRequest, current_user: dict = Depends(get_u
     
     user_role = current_user.get("role", "")
     book_tenant_id = None if user_role == "super_admin" else current_user.get("tenant_id")
+    book_manager_id = current_user.get("id") if user_role == "manager" else None
 
     # Check if book already exists within the same tenant scope
     existing = await execute_one(
@@ -1276,12 +1412,12 @@ async def create_book(req: CreateBookRequest, current_user: dict = Depends(get_u
 
     result = await execute_one(
         """
-        INSERT INTO library_books (class_id, subject_id, title, author, board_name, edition_year, pdf_url, tenant_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid)
+        INSERT INTO library_books (class_id, subject_id, title, author, board_name, edition_year, pdf_url, tenant_id, manager_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid, $9::uuid)
         RETURNING *
         """,
         req.class_id, req.subject_id, req.title, req.author, req.board_name, req.edition_year, req.pdf_url,
-        book_tenant_id
+        book_tenant_id, book_manager_id
     )
     return {"data": dict(result)}
 
