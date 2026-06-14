@@ -747,7 +747,7 @@ async def create_subject(req: CreateSubjectRequest, current_user: dict = Depends
     await ensure_library_tables()
     role = current_user.get("role", "")
     subject_tenant_id = None if role == "super_admin" else current_user.get("tenant_id")
-    manager_id = current_user.get("id") if role == "manager" else None
+    manager_id = (current_user.get("user_id") or current_user.get("id")) if role == "manager" else None
 
     existing = await execute_one(
         "SELECT id FROM library_subjects WHERE LOWER(name) = LOWER($1) AND (($2::uuid IS NULL AND tenant_id IS NULL) OR tenant_id = $2::uuid)",
@@ -796,7 +796,7 @@ async def create_board(req: CreateBoardRequest, current_user: dict = Depends(get
     await ensure_library_tables()
     role = current_user.get("role", "")
     board_tenant_id = None if role == "super_admin" else current_user.get("tenant_id")
-    manager_id = current_user.get("id") if role == "manager" else None
+    manager_id = (current_user.get("user_id") or current_user.get("id")) if role == "manager" else None
 
     existing = await execute_one(
         "SELECT id FROM library_boards WHERE LOWER(name) = LOWER($1) AND (($2::uuid IS NULL AND tenant_id IS NULL) OR tenant_id = $2::uuid)",
@@ -1388,7 +1388,7 @@ async def create_book(req: CreateBookRequest, current_user: dict = Depends(get_u
     
     user_role = current_user.get("role", "")
     book_tenant_id = None if user_role == "super_admin" else current_user.get("tenant_id")
-    book_manager_id = current_user.get("id") if user_role == "manager" else None
+    book_manager_id = (current_user.get("user_id") or current_user.get("id")) if user_role == "manager" else None
 
     # Check if book already exists within the same tenant scope
     existing = await execute_one(
