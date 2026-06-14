@@ -855,10 +855,33 @@ async def set_board_subjects(
     req: SetSubjectsRequest,
     current_user: dict = Depends(get_user_from_token),
 ):
-    """Replace board subject mapping."""
+    """Replace board subject mapping — only touches links visible to caller, preserving others."""
     await ensure_library_tables()
+    role = current_user.get("role", "")
+    tenant_id = current_user.get("tenant_id")
+    user_id = current_user.get("user_id") or current_user.get("id")
+
     subject_ids = list(dict.fromkeys(req.subject_ids or []))
-    await execute_write("DELETE FROM library_board_subjects WHERE board_id = $1::uuid", board_id)
+
+    # Find which existing board-subject links are visible to this caller.
+    # Only delete those — links to other roles' private subjects are preserved.
+    tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, user_id, param_offset=1)
+    visible_rows = await execute_query(
+        f"""
+        SELECT bs.subject_id FROM library_board_subjects bs
+        JOIN library_subjects s ON s.id = bs.subject_id
+        WHERE bs.board_id = $1::uuid {tenant_sql}
+        """,
+        board_id, *tenant_params,
+    )
+    visible_ids = [str(r["subject_id"]) for r in visible_rows]
+    if visible_ids:
+        placeholders = ",".join(f"${i + 2}::uuid" for i in range(len(visible_ids)))
+        await execute_write(
+            f"DELETE FROM library_board_subjects WHERE board_id = $1::uuid AND subject_id IN ({placeholders})",
+            board_id, *visible_ids,
+        )
+
     for sid in subject_ids:
         await execute_write(
             """
