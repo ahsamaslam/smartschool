@@ -2146,10 +2146,27 @@ async def delete_tenant(tenant_id: str):
     )
     affected_users = int((users_count or {}).get("total") or 0)
 
-    await execute_write(
-        "UPDATE users SET is_active = false, updated_at = NOW() WHERE tenant_id = $1::uuid",
-        tenant_id,
+    # Hard-delete users so their emails are freed for re-use
+    await execute_write("DELETE FROM users WHERE tenant_id = $1::uuid", tenant_id)
+
+    # Delete schools → branches → classes so nothing is left orphaned
+    school_ids = await execute_query(
+        "SELECT id FROM schools WHERE tenant_id = $1::uuid", tenant_id
     )
+    for school in school_ids:
+        branch_ids = await execute_query(
+            "SELECT id FROM branches WHERE school_id = $1::uuid", str(school["id"])
+        )
+        for branch in branch_ids:
+            await execute_write(
+                "DELETE FROM classes WHERE branch_id = $1::uuid", str(branch["id"])
+            )
+        await execute_write(
+            "DELETE FROM branches WHERE school_id = $1::uuid", str(school["id"])
+        )
+    await execute_write("DELETE FROM schools WHERE tenant_id = $1::uuid", tenant_id)
+
+    # Delete the tenant — library_* rows cascade automatically (ON DELETE CASCADE)
     await execute_write("DELETE FROM tenants WHERE id = $1::uuid", tenant_id)
 
     return {
