@@ -5,6 +5,21 @@ import lessonService from "../../services/lessonService";
 import teacherService from "../../services/teacherService";
 import { TopicSelector } from "./TopicSelector";
 
+function calcDuration(start, end) {
+  if (!start || !end) return 0;
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  return Math.max(0, (eh * 60 + em) - (sh * 60 + sm));
+}
+
+function formatDuration(mins) {
+  if (!mins || mins <= 0) return "—";
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m === 0 ? `${h} hr` : `${h} hr ${m} min`;
+}
+
 export function LessonPlanModal({
   open,
   onClose,
@@ -309,7 +324,10 @@ export function LessonPlanModal({
                   <input
                     type="time"
                     value={formData.startTime}
-                    onChange={(e) => setFormData((prev) => ({ ...prev, startTime: e.target.value }))}
+                    onChange={(e) => {
+                      const s = e.target.value;
+                      setFormData((prev) => ({ ...prev, startTime: s, duration: calcDuration(s, prev.endTime) || prev.duration }));
+                    }}
                     className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2"
                   />
                 </label>
@@ -320,20 +338,18 @@ export function LessonPlanModal({
                   <input
                     type="time"
                     value={formData.endTime}
-                    onChange={(e) => setFormData((prev) => ({ ...prev, endTime: e.target.value }))}
+                    onChange={(e) => {
+                      const en = e.target.value;
+                      setFormData((prev) => ({ ...prev, endTime: en, duration: calcDuration(prev.startTime, en) || prev.duration }));
+                    }}
                     className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2"
                   />
                 </label>
               </div>
 
-              {formData.startTime && formData.endTime && formData.startTime < formData.endTime && (
+              {formData.duration > 0 && formData.startTime < formData.endTime && (
                 <p className="text-xs text-indigo-600 font-medium">
-                  Duration: {(() => {
-                    const [sh, sm] = formData.startTime.split(":").map(Number);
-                    const [eh, em] = formData.endTime.split(":").map(Number);
-                    const mins = (eh * 60 + em) - (sh * 60 + sm);
-                    return mins >= 60 ? `${Math.floor(mins/60)}h ${mins%60 > 0 ? mins%60+"m" : ""}` : `${mins}m`;
-                  })()}
+                  Duration: {formatDuration(formData.duration)}
                 </p>
               )}
 
@@ -444,18 +460,23 @@ export function LessonPlanModal({
 
                 <label className="block">
                   <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                    Duration (minutes)
+                    Duration
                   </span>
-                  <input
-                    type="number"
-                    min="15"
-                    max="180"
-                    value={formData.duration}
-                    onChange={(e) => {
-                      setFormData((prev) => ({ ...prev, duration: e.target.value }));
-                    }}
-                    className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2 text-sm"
-                  />
+                  <div className="mt-1 flex items-center gap-2">
+                    <div className="flex-1 rounded-xl border border-gray-200 px-3 py-2 text-sm bg-gray-50 text-gray-800 font-medium">
+                      {formatDuration(parseInt(formData.duration, 10))}
+                    </div>
+                    <input
+                      type="number"
+                      min="15"
+                      max="480"
+                      value={formData.duration}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, duration: e.target.value }))}
+                      className="w-24 rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-500 text-center"
+                      title="Override minutes manually"
+                    />
+                    <span className="text-xs text-gray-400 whitespace-nowrap">min</span>
+                  </div>
                 </label>
 
                 <label className="block">
