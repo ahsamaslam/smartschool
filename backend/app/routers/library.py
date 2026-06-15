@@ -552,89 +552,208 @@ async def ensure_library_tables():
     )
 
 
+async def _copy_book_to_tenant(book: dict, tenant_id: str, subject_id_map: dict) -> None:
+    """Copy a single master book (with chapters+topics) into a tenant. subject_id_map maps master→tenant subject IDs."""
+    existing = await execute_one(
+        "SELECT id FROM library_books WHERE source_id = $1::uuid AND tenant_id = $2::uuid",
+        str(book["id"]), tenant_id,
+    )
+    if existing:
+        return
+    copy_subject_id = subject_id_map.get(str(book["subject_id"]), str(book["subject_id"]))
+    new_book = await execute_one(
+        """INSERT INTO library_books
+             (class_id, subject_id, title, author, board_name, edition_year, pdf_url, tenant_id, source_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid, $9::uuid)
+           RETURNING id""",
+        book["class_id"], copy_subject_id, book["title"], book["author"],
+        book["board_name"], book["edition_year"], book["pdf_url"],
+        tenant_id, str(book["id"]),
+    )
+    master_chapters = await execute_query(
+        "SELECT * FROM library_chapters WHERE book_id = $1::uuid AND tenant_id IS NULL AND teacher_id IS NULL",
+        str(book["id"]),
+    )
+    for ch in master_chapters:
+        new_ch = await execute_one(
+            """INSERT INTO library_chapters (book_id, chapter_number, title, tenant_id, source_id)
+               VALUES ($1::uuid, $2, $3, $4::uuid, $5::uuid) RETURNING id""",
+            str(new_book["id"]), ch["chapter_number"], ch["title"], tenant_id, str(ch["id"]),
+        )
+        master_topics = await execute_query(
+            "SELECT * FROM library_topics WHERE chapter_id = $1::uuid AND tenant_id IS NULL AND teacher_id IS NULL",
+            str(ch["id"]),
+        )
+        for tp in master_topics:
+            await execute_write(
+                """INSERT INTO library_topics
+                     (chapter_id, title, content_body, slides_json, slide_theme,
+                      lecture_video_url, lecture_metadata_json,
+                      lecture_saved_at, lecture_duration_seconds, tenant_id, source_id)
+                   VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10::uuid, $11::uuid)""",
+                str(new_ch["id"]), tp["title"], tp.get("content_body"),
+                tp.get("slides_json"), tp.get("slide_theme"),
+                tp.get("lecture_video_url"), tp.get("lecture_metadata_json"),
+                tp.get("lecture_saved_at"), tp.get("lecture_duration_seconds"),
+                tenant_id, str(tp["id"]),
+            )
+
+
 async def copy_super_admin_library_to_tenant(tenant_id: str) -> None:
-    """Deep-copies the entire master library (tenant_id IS NULL) into a new tenant's scope."""
+    """Deep-copies the entire master library (tenant_id IS NULL) into a new tenant's scope.
+    Also copies board-subject and class-subject junction links using the tenant copies."""
     await ensure_library_tables()
 
-    # Copy boards
+    board_id_map: dict = {}   # master_board_id  → tenant_copy_board_id
+    subject_id_map: dict = {} # master_subject_id → tenant_copy_subject_id
+
+    # ── 1. Boards ────────────────────────────────────────────────
     master_boards = await execute_query(
-        "SELECT * FROM library_boards WHERE tenant_id IS NULL"
+        "SELECT * FROM library_boards WHERE tenant_id IS NULL AND manager_id IS NULL"
     )
     for board in master_boards:
         existing = await execute_one(
             "SELECT id FROM library_boards WHERE source_id = $1::uuid AND tenant_id = $2::uuid",
-            str(board["id"]), tenant_id
+            str(board["id"]), tenant_id,
         )
-        if not existing:
-            await execute_write(
-                "INSERT INTO library_boards (name, description, tenant_id, source_id) VALUES ($1,$2,$3::uuid,$4::uuid) ON CONFLICT DO NOTHING",
-                board["name"], board.get("description"), tenant_id, str(board["id"])
+        if existing:
+            board_id_map[str(board["id"])] = str(existing["id"])
+        else:
+            new_b = await execute_one(
+                "INSERT INTO library_boards (name, description, tenant_id, source_id) VALUES ($1,$2,$3::uuid,$4::uuid) RETURNING id",
+                board["name"], board.get("description"), tenant_id, str(board["id"]),
             )
+            board_id_map[str(board["id"])] = str(new_b["id"])
 
-    # Copy subjects
+    # ── 2. Subjects ──────────────────────────────────────────────
     master_subjects = await execute_query(
-        "SELECT * FROM library_subjects WHERE tenant_id IS NULL"
+        "SELECT * FROM library_subjects WHERE tenant_id IS NULL AND manager_id IS NULL"
     )
     for subj in master_subjects:
         existing = await execute_one(
             "SELECT id FROM library_subjects WHERE source_id = $1::uuid AND tenant_id = $2::uuid",
-            str(subj["id"]), tenant_id
+            str(subj["id"]), tenant_id,
         )
-        if not existing:
+        if existing:
+            subject_id_map[str(subj["id"])] = str(existing["id"])
+        else:
+            new_s = await execute_one(
+                "INSERT INTO library_subjects (name, description, tenant_id, source_id) VALUES ($1,$2,$3::uuid,$4::uuid) RETURNING id",
+                subj["name"], subj.get("description"), tenant_id, str(subj["id"]),
+            )
+            subject_id_map[str(subj["id"])] = str(new_s["id"])
+
+    # ── 3. Board-subject links ───────────────────────────────────
+    master_bs_links = await execute_query(
+        """SELECT bs.board_id, bs.subject_id
+           FROM library_board_subjects bs
+           JOIN library_boards b ON b.id = bs.board_id
+           JOIN library_subjects s ON s.id = bs.subject_id
+           WHERE b.tenant_id IS NULL AND s.tenant_id IS NULL"""
+    )
+    for link in master_bs_links:
+        tb = board_id_map.get(str(link["board_id"]))
+        ts = subject_id_map.get(str(link["subject_id"]))
+        if tb and ts:
             await execute_write(
-                "INSERT INTO library_subjects (name, description, tenant_id, source_id) VALUES ($1,$2,$3::uuid,$4::uuid) ON CONFLICT DO NOTHING",
-                subj["name"], subj.get("description"), tenant_id, str(subj["id"])
+                "INSERT INTO library_board_subjects (board_id, subject_id) VALUES ($1::uuid, $2::uuid) ON CONFLICT DO NOTHING",
+                tb, ts,
             )
 
-    # Copy books
+    # ── 4. Class-subject links ───────────────────────────────────
+    master_cs_links = await execute_query(
+        """SELECT lcs.class_id, lcs.subject_id
+           FROM library_class_subjects lcs
+           JOIN library_subjects s ON s.id = lcs.subject_id
+           WHERE s.tenant_id IS NULL"""
+    )
+    for link in master_cs_links:
+        ts = subject_id_map.get(str(link["subject_id"]))
+        if ts:
+            await execute_write(
+                "INSERT INTO library_class_subjects (class_id, subject_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                str(link["class_id"]), ts,
+            )
+
+    # ── 5. Books (with chapters + topics) ───────────────────────
     master_books = await execute_query(
-        "SELECT * FROM library_books WHERE tenant_id IS NULL"
+        "SELECT * FROM library_books WHERE tenant_id IS NULL AND manager_id IS NULL"
     )
     for book in master_books:
-        new_book = await execute_one(
-            """
-            INSERT INTO library_books
-              (class_id, subject_id, title, author, board_name, edition_year, pdf_url, tenant_id, source_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid, $9::uuid)
-            RETURNING id
-            """,
-            book["class_id"], book["subject_id"], book["title"], book["author"],
-            book["board_name"], book["edition_year"], book["pdf_url"],
-            tenant_id, str(book["id"]),
-        )
-        master_chapters = await execute_query(
-            "SELECT * FROM library_chapters WHERE book_id = $1::uuid AND tenant_id IS NULL AND teacher_id IS NULL",
-            str(book["id"]),
-        )
-        for ch in master_chapters:
-            new_ch = await execute_one(
-                """
-                INSERT INTO library_chapters (book_id, chapter_number, title, tenant_id, source_id)
-                VALUES ($1::uuid, $2, $3, $4::uuid, $5::uuid)
-                RETURNING id
-                """,
-                str(new_book["id"]), ch["chapter_number"], ch["title"],
-                tenant_id, str(ch["id"]),
+        await _copy_book_to_tenant(book, tenant_id, subject_id_map)
+
+
+async def sync_new_master_item_to_all_tenants(item_type: str, master_id: str) -> None:
+    """Called after super admin creates a new master board/subject/book.
+    Pushes the new item to every existing tenant so their libraries stay current."""
+    tenants = await execute_query("SELECT id FROM tenants")
+    for tenant in tenants:
+        tid = str(tenant["id"])
+        if item_type == "board":
+            board = await execute_one("SELECT * FROM library_boards WHERE id = $1::uuid", master_id)
+            if not board:
+                continue
+            existing = await execute_one(
+                "SELECT id FROM library_boards WHERE source_id = $1::uuid AND tenant_id = $2::uuid",
+                master_id, tid,
             )
-            master_topics = await execute_query(
-                "SELECT * FROM library_topics WHERE chapter_id = $1::uuid AND tenant_id IS NULL AND teacher_id IS NULL",
-                str(ch["id"]),
-            )
-            for tp in master_topics:
-                await execute_write(
-                    """
-                    INSERT INTO library_topics
-                      (chapter_id, title, content_body, slides_json, slide_theme,
-                       lecture_video_url, lecture_metadata_json,
-                       lecture_saved_at, lecture_duration_seconds, tenant_id, source_id)
-                    VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10::uuid, $11::uuid)
-                    """,
-                    str(new_ch["id"]), tp["title"], tp.get("content_body"),
-                    tp.get("slides_json"), tp.get("slide_theme"),
-                    tp.get("lecture_video_url"), tp.get("lecture_metadata_json"),
-                    tp.get("lecture_saved_at"), tp.get("lecture_duration_seconds"),
-                    tenant_id, str(tp["id"]),
+            if not existing:
+                await execute_one(
+                    "INSERT INTO library_boards (name, description, tenant_id, source_id) VALUES ($1,$2,$3::uuid,$4::uuid) RETURNING id",
+                    board["name"], board.get("description"), tid, master_id,
                 )
+        elif item_type == "subject":
+            subj = await execute_one("SELECT * FROM library_subjects WHERE id = $1::uuid", master_id)
+            if not subj:
+                continue
+            existing = await execute_one(
+                "SELECT id FROM library_subjects WHERE source_id = $1::uuid AND tenant_id = $2::uuid",
+                master_id, tid,
+            )
+            if existing:
+                tenant_subject_id = str(existing["id"])
+            else:
+                new_s = await execute_one(
+                    "INSERT INTO library_subjects (name, description, tenant_id, source_id) VALUES ($1,$2,$3::uuid,$4::uuid) RETURNING id",
+                    subj["name"], subj.get("description"), tid, master_id,
+                )
+                tenant_subject_id = str(new_s["id"])
+            # Copy board-subject links for this subject
+            bs_links = await execute_query(
+                "SELECT board_id FROM library_board_subjects WHERE subject_id = $1::uuid", master_id
+            )
+            for link in bs_links:
+                tenant_board = await execute_one(
+                    "SELECT id FROM library_boards WHERE source_id = $1::uuid AND tenant_id = $2::uuid",
+                    str(link["board_id"]), tid,
+                )
+                if tenant_board:
+                    await execute_write(
+                        "INSERT INTO library_board_subjects (board_id, subject_id) VALUES ($1::uuid, $2::uuid) ON CONFLICT DO NOTHING",
+                        str(tenant_board["id"]), tenant_subject_id,
+                    )
+            # Copy class-subject links
+            cs_links = await execute_query(
+                "SELECT class_id FROM library_class_subjects WHERE subject_id = $1::uuid", master_id
+            )
+            for link in cs_links:
+                await execute_write(
+                    "INSERT INTO library_class_subjects (class_id, subject_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    str(link["class_id"]), tenant_subject_id,
+                )
+        elif item_type == "book":
+            book = await execute_one("SELECT * FROM library_books WHERE id = $1::uuid", master_id)
+            if not book:
+                continue
+            # Build subject_id_map for this tenant
+            tenant_subject = await execute_one(
+                "SELECT id FROM library_subjects WHERE source_id = $1::uuid AND tenant_id = $2::uuid",
+                str(book["subject_id"]), tid,
+            )
+            subject_id_map = {}
+            if tenant_subject:
+                subject_id_map[str(book["subject_id"])] = str(tenant_subject["id"])
+            await _copy_book_to_tenant(dict(book), tid, subject_id_map)
 
 
 # ============================================
@@ -760,6 +879,8 @@ async def create_subject(req: CreateSubjectRequest, current_user: dict = Depends
         "INSERT INTO library_subjects (name, description, tenant_id, manager_id) VALUES ($1, $2, $3::uuid, $4::uuid) RETURNING *",
         req.name, req.description, subject_tenant_id, manager_id
     )
+    if role == "super_admin":
+        await sync_new_master_item_to_all_tenants("subject", str(result["id"]))
     return {"data": result}
 
 
@@ -808,6 +929,8 @@ async def create_board(req: CreateBoardRequest, current_user: dict = Depends(get
         "INSERT INTO library_boards (name, description, tenant_id, manager_id) VALUES ($1, $2, $3::uuid, $4::uuid) RETURNING *",
         req.name.strip(), req.description, board_tenant_id, manager_id,
     )
+    if role == "super_admin":
+        await sync_new_master_item_to_all_tenants("board", str(row["id"]))
     return {"data": dict(row)}
 
 
@@ -1436,6 +1559,8 @@ async def create_book(req: CreateBookRequest, current_user: dict = Depends(get_u
         req.class_id, req.subject_id, req.title, req.author, req.board_name, req.edition_year, req.pdf_url,
         book_tenant_id, book_manager_id
     )
+    if user_role == "super_admin":
+        await sync_new_master_item_to_all_tenants("book", str(result["id"]))
     return {"data": dict(result)}
 
 
