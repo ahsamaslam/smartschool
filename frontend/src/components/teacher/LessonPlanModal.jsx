@@ -44,7 +44,7 @@ export function LessonPlanModal({
     classIds: [],
     title: "",
     description: "",
-    duration: 45,
+    duration: calcDuration("09:00", "10:00"),
   });
 
   // Available options
@@ -166,7 +166,7 @@ export function LessonPlanModal({
         topics: formData.topics,
         title: formData.title || null,
         description: formData.description || null,
-        duration_minutes: parseInt(formData.duration, 10),
+        duration_minutes: parseInt(formData.duration, 10) || calcDuration(formData.startTime, formData.endTime),
       };
 
       const response = await lessonService.createLessonPlan(payload);
@@ -188,7 +188,7 @@ export function LessonPlanModal({
         classIds: [],
         title: "",
         description: "",
-        duration: 45,
+        duration: calcDuration("09:00", "10:00"),
       });
     } catch (error) {
       toast.error(error?.response?.data?.detail || error?.message || "Failed to create lesson");
@@ -470,8 +470,14 @@ export function LessonPlanModal({
                       type="number"
                       min="15"
                       max="480"
-                      value={formData.duration}
-                      onChange={(e) => setFormData((prev) => ({ ...prev, duration: e.target.value }))}
+                      value={formData.duration || ""}
+                      onChange={(e) => {
+                        const n = parseInt(e.target.value, 10);
+                        setFormData((prev) => ({
+                          ...prev,
+                          duration: isNaN(n) ? calcDuration(prev.startTime, prev.endTime) : n,
+                        }));
+                      }}
                       className="w-24 rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-500 text-center"
                       title="Override minutes manually"
                     />
