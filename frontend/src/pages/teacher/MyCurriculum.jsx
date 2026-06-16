@@ -11,7 +11,7 @@ import {
 } from "@heroicons/react/24/outline";
 
 // ── Book Card ─────────────────────────────────────────────────────────────────
-function BookCard({ book, onOpenBook }) {
+function BookCard({ book, onOpenBook, classId, className }) {
   return (
     <button
       type="button"
@@ -40,7 +40,7 @@ function BookCard({ book, onOpenBook }) {
 }
 
 // ── Subject Section ───────────────────────────────────────────────────────────
-function SubjectSection({ subject, onBookClick }) {
+function SubjectSection({ subject, onBookClick, classId, className }) {
   const [open, setOpen] = useState(true);
   return (
     <div className="mb-3">
@@ -66,7 +66,9 @@ function SubjectSection({ subject, onBookClick }) {
             <BookCard
               key={book.book_id}
               book={book}
-              onOpenBook={() => onBookClick(book.book_id)}
+              onOpenBook={() => onBookClick(book.book_id, classId, className)}
+              classId={classId}
+              className={className}
             />
           ))}
         </div>
@@ -76,7 +78,7 @@ function SubjectSection({ subject, onBookClick }) {
 }
 
 // ── Class Accordion ───────────────────────────────────────────────────────────
-function ClassAccordion({ cls, onBookClick, forceOpen }) {
+function ClassAccordion({ cls, onBookClick, forceOpen, classId, className }) {
   const [open, setOpen] = useState(false);
   const isOpen = forceOpen || open;
   const label = cls.section
@@ -116,6 +118,8 @@ function ClassAccordion({ cls, onBookClick, forceOpen }) {
                 key={sub.subject_id}
                 subject={sub}
                 onBookClick={onBookClick}
+                classId={cls.class_id}
+                className={cls.class_name}
               />
             ))
           )}
@@ -146,8 +150,10 @@ export default function TeacherMyCurriculum() {
 
   useEffect(() => { load(); }, [load]);
 
-  const handleBookClick = (bookId) => {
-    navigate(`/admin/library/books/${bookId}`);
+  const handleBookClick = (bookId, classId, className) => {
+    navigate(`/admin/library/books/${bookId}`, {
+      state: { classId, className },
+    });
   };
 
   const q = search.toLowerCase().trim();
@@ -230,6 +236,8 @@ export default function TeacherMyCurriculum() {
               cls={cls}
               onBookClick={handleBookClick}
               forceOpen={q.length > 0}
+              classId={cls.class_id}
+              className={cls.class_name}
             />
           ))}
         </div>

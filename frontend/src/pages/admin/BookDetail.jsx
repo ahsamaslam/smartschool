@@ -51,6 +51,8 @@ export default function BookDetail() {
   const boardId = location.state?.boardId;
   const boardName = location.state?.boardName;
   const subjectName = location.state?.subjectName;
+  const curriculumClassId = location.state?.classId;
+  const curriculumClassName = location.state?.className;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -89,12 +91,17 @@ export default function BookDetail() {
       setBook(processedData);
       setContentStatus(statusRes?.data ?? {});
 
-      // Build homework count map: { topic_id: count, chapter_id: count }
+      // Build homework status map: { `topic_${id}`: { draft: n, published: n }, `chapter_${id}`: total }
       const counts = {};
       (homeworkRes?.data?.data || []).forEach(item => {
-        if (item.topic_id) counts[`topic_${item.topic_id}`] = item.count;
+        if (item.topic_id) {
+          const key = `topic_${item.topic_id}`;
+          if (!counts[key]) counts[key] = { draft: 0, published: 0 };
+          counts[key][item.status] = (counts[key][item.status] || 0) + item.count;
+        }
         if (item.chapter_id) {
-          counts[`chapter_${item.chapter_id}`] = (counts[`chapter_${item.chapter_id}`] || 0) + item.count;
+          const chKey = `chapter_${item.chapter_id}`;
+          counts[chKey] = (counts[chKey] || 0) + item.count;
         }
       });
       setHomeworkCounts(counts);
@@ -439,8 +446,11 @@ export default function BookDetail() {
                                 {contentStatus[topic.id]?.has_lecture && (
                                   <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Lecture</span>
                                 )}
-                                {homeworkCounts[`topic_${topic.id}`] > 0 && (
-                                  <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-green-100 text-green-700">📚 {homeworkCounts[`topic_${topic.id}`]}</span>
+                                {homeworkCounts[`topic_${topic.id}`]?.published > 0 && (
+                                  <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-green-100 text-green-700">HW Published</span>
+                                )}
+                                {homeworkCounts[`topic_${topic.id}`]?.draft > 0 && (
+                                  <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">HW Draft</span>
                                 )}
                               </span>
                             )}
@@ -590,8 +600,11 @@ export default function BookDetail() {
                                   {contentStatus[topic.id]?.has_lecture && (
                                     <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Lecture</span>
                                   )}
-                                  {homeworkCounts[`topic_${topic.id}`] > 0 && (
-                                    <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-green-100 text-green-700">📚 {homeworkCounts[`topic_${topic.id}`]}</span>
+                                  {homeworkCounts[`topic_${topic.id}`]?.published > 0 && (
+                                    <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-green-100 text-green-700">HW Published</span>
+                                  )}
+                                  {homeworkCounts[`topic_${topic.id}`]?.draft > 0 && (
+                                    <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">HW Draft</span>
                                   )}
                                 </span>
                               </button>
@@ -638,6 +651,26 @@ export default function BookDetail() {
 
                 {/* Action buttons — behaviour depends on whether this user has personal slides */}
                 <div className="flex gap-2 mt-4 flex-wrap items-center">
+                  {curriculumClassId && (
+                    <button
+                      onClick={() =>
+                        navigate(
+                          `/teacher/classes/${curriculumClassId}/homework/new?prefill_topic_id=${selectedTopic.id}&prefill_book_id=${bookId}`,
+                          {
+                            state: {
+                              prefillTopicTitle: selectedTopic.title,
+                              prefillChapterTitle: selectedChapter?.title,
+                              prefillClassName: curriculumClassName,
+                            },
+                          }
+                        )
+                      }
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors"
+                    >
+                      <DocumentTextIcon className="h-3.5 w-3.5" />
+                      Add Homework
+                    </button>
+                  )}
                   {hasMySlides ? (
                     <>
                       {/* Present */}
@@ -744,20 +777,6 @@ export default function BookDetail() {
                       >
                         <SparklesIcon className="h-3.5 w-3.5" />
                         Create Slides
-                      </button>
-                      <button
-                        onClick={() =>
-                          navigate("/teacher/homework", {
-                            state: {
-                              topic: selectedTopic,
-                              libraryContext: { book, chapter: selectedChapter },
-                            },
-                          })
-                        }
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors"
-                      >
-                        <DocumentTextIcon className="h-3.5 w-3.5" />
-                        Add Homework
                       </button>
                     </>
                   )}

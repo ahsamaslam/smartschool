@@ -1829,29 +1829,29 @@ async def get_homework_counts(
     teacher_id = str(current_user.get("user_id"))
     book_id = (book_id or "").strip()
 
-    # Query homework counts grouped by chapter and topic
+    # Query homework counts grouped by chapter, topic, and status
     rows = await execute_query(
         """
         SELECT
           library_chapter_id,
           library_topic_id,
+          status,
           COUNT(*) as homework_count
         FROM homeworks
         WHERE teacher_id = $1::uuid
           AND library_book_id = $2::uuid
-          AND status = 'published'
-        GROUP BY library_chapter_id, library_topic_id
+        GROUP BY library_chapter_id, library_topic_id, status
         """,
         teacher_id,
         book_id,
     )
 
-    # Transform to list format with string UUIDs
     result = []
     for row in rows:
         result.append({
             "chapter_id": str(row["library_chapter_id"]) if row["library_chapter_id"] else None,
             "topic_id": str(row["library_topic_id"]) if row["library_topic_id"] else None,
+            "status": row["status"],
             "count": row["homework_count"],
         })
 

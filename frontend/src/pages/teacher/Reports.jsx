@@ -147,23 +147,25 @@ export default function TeacherReports() {
   const preselectedClassId = searchParams.get("class_id");
   const isLocked = searchParams.get("locked") === "true";
 
-  // Load teacher's classes
+  // Load teacher's classes once
   useEffect(() => {
     if (!user?.id) return;
     teacherService
       .getClasses(user.id)
-      .then((res) => {
-        const cls = res.data || [];
-        setClasses(cls);
-        if (preselectedClassId && cls.some(c => c.id === preselectedClassId)) {
-          setSelectedClass(preselectedClassId);
-        } else if (cls.length) {
-          setSelectedClass(cls[0].id);
-        }
-      })
+      .then((res) => setClasses(res.data || []))
       .catch(() => setError("Failed to load classes."))
       .finally(() => setLoadingClasses(false));
-  }, [user?.id, preselectedClassId]);
+  }, [user?.id]);
+
+  // Apply class selection whenever classes load or URL class_id changes
+  useEffect(() => {
+    if (!classes.length) return;
+    if (preselectedClassId && classes.some((c) => c.id === preselectedClassId)) {
+      setSelectedClass(preselectedClassId);
+    } else if (!selectedClass) {
+      setSelectedClass(classes[0].id);
+    }
+  }, [classes, preselectedClassId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load students + CVI analytics when class changes
   const loadClassData = useCallback(() => {
@@ -211,7 +213,7 @@ export default function TeacherReports() {
           <p className="text-sm text-gray-500 mt-0.5">Class Vitality Index · Student performance breakdown</p>
         </div>
         <div className="max-w-xs w-full">
-          {isLocked ? (
+          {(isLocked || !!preselectedClassId) ? (
             <div className="px-3 py-2 rounded-lg border border-gray-300 bg-gray-100 text-gray-700 text-sm font-medium">
               {selectedClassName}
             </div>

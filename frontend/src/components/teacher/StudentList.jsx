@@ -8,7 +8,7 @@ import toast from "react-hot-toast";
  * StudentList — composite score = video view rate + attendance + quiz avg
  * per business guide requirement
  */
-export default function StudentList({ students = [], classId }) {
+export default function StudentList({ students = [], classId, simple = false }) {
   const navigate = useNavigate();
 
   const handlePasswordReset = async (studentId, name) => {
@@ -49,6 +49,37 @@ export default function StudentList({ students = [], classId }) {
       <p className="text-sm text-gray-400 text-center py-8">
         No students enrolled.
       </p>
+    );
+  }
+
+  if (simple) {
+    return (
+      <div className="divide-y divide-gray-100">
+        {students.map((s, i) => (
+          <div
+            key={s.id}
+            className="flex items-center justify-between px-4 py-3 hover:bg-indigo-50 cursor-pointer transition-colors group"
+            onClick={() => navigate(`/teacher/classes/${classId}/student/${s.id}`)}
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-gray-400 w-5 text-right shrink-0">{i + 1}</span>
+              <div>
+                <p className="text-sm font-medium text-gray-900">{s.full_name}</p>
+                <p className="text-xs text-gray-400">{s.email}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+              <button
+                onClick={() => handlePasswordReset(s.id, s.full_name)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                title="Send password reset"
+              >
+                <KeyIcon className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
     );
   }
 

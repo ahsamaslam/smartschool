@@ -141,7 +141,6 @@ const NAV_BY_ROLE = {
       icon: "DocumentTextIcon",
     },
     { label: "Messages", to: "/teacher/chat", icon: "ChatBubbleLeftIcon" },
-    { label: "Reports", to: "/teacher/reports", icon: "ChartBarIcon" },
   ],
   manager: [
     { label: "Dashboard", to: "/manager/dashboard", icon: "HomeIcon" },

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import toast from "react-hot-toast";
 import homeworkService from "../../services/homeworkService";
 import examService from "../../services/examService";
@@ -13,6 +13,13 @@ import Dropdown from "../../components/common/Dropdown";
 export default function TeacherHomeworkEditor() {
   const { classId, homeworkId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const prefillTopicId = searchParams.get("prefill_topic_id");
+  const prefillBookId = searchParams.get("prefill_book_id");
+  const prefillTopicTitle = location.state?.prefillTopicTitle || "";
+  const prefillChapterTitle = location.state?.prefillChapterTitle || "";
+  const prefillClassName = location.state?.prefillClassName || "";
   const { user } = useAuth();
   const isNew = !homeworkId;
 
@@ -53,12 +60,37 @@ export default function TeacherHomeworkEditor() {
     setScopeLoading(true);
     homeworkService
       .getTeacherCurriculum(teacherIdForScope, classId)
-      .then((res) => setScope(res.data))
+      .then((res) => {
+        setScope(res.data);
+        // Auto-select cascade if coming from curriculum topic
+        if (prefillTopicId && prefillBookId && res.data?.boards) {
+          for (const board of res.data.boards) {
+            for (const subj of board.subjects || []) {
+              const bk = (subj.books || []).find((b) => String(b.id) === String(prefillBookId));
+              if (bk) {
+                setBoardId(String(board.id));
+                setSubjectId(String(subj.id));
+                setBookId(String(bk.id));
+                for (const ch of bk.chapters || []) {
+                  const tp = (ch.topics || []).find((t) => String(t.id) === String(prefillTopicId));
+                  if (tp) {
+                    setChapterId(String(ch.id));
+                    setTopicId(String(tp.id));
+                    break;
+                  }
+                }
+                break;
+              }
+            }
+            if (bookId) break;
+          }
+        }
+      })
       .catch(() =>
         examService.getClassExamScope(classId).then((res) => setScope(res.data)),
       )
       .finally(() => setScopeLoading(false));
-  }, [isNew, classId, teacherIdForScope]);
+  }, [isNew, classId, teacherIdForScope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (isNew) return;
@@ -246,7 +278,7 @@ export default function TeacherHomeworkEditor() {
       await homeworkService.publish(homeworkId);
       setStatus("published");
       toast.success("Published to this class");
-      navigate(`/teacher/classes/${classId}/homework`);
+      navigate(`/teacher/homework?class_id=${classId}`);
     } catch (e) {
       const msg = e?.response?.data?.detail;
       toast.error(typeof msg === "string" ? msg : "Publish failed");
@@ -261,7 +293,7 @@ export default function TeacherHomeworkEditor() {
       await homeworkService.unpublish(homeworkId);
       setStatus("draft");
       toast.success("Unpublished — moved to draft");
-      navigate(`/teacher/classes/${classId}/homework`);
+      navigate(`/teacher/homework?class_id=${classId}`);
     } catch (e) {
       const msg = e?.response?.data?.detail;
       toast.error(typeof msg === "string" ? msg : "Unpublish failed");
@@ -279,15 +311,22 @@ export default function TeacherHomeworkEditor() {
     <div className="p-6 max-w-3xl mx-auto pb-20">
       <button
         type="button"
-        onClick={() => navigate(`/teacher/classes/${classId}/homework`)}
+        onClick={() => navigate(-1)}
         className="text-sm text-gray-500 mb-6"
       >
-        ← Homework list
+        ← Back
       </button>
 
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">
-        {isNew ? "New homework" : "Edit homework"}
+      <h1 className="text-2xl font-bold text-gray-900 mb-1">
+        {isNew ? "New Homework" : "Edit Homework"}
       </h1>
+      {isNew && prefillTopicId && (prefillClassName || prefillChapterTitle || prefillTopicTitle) && (
+        <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          <span className="font-semibold">Context: </span>
+          {[prefillClassName, prefillChapterTitle, prefillTopicTitle].filter(Boolean).join(" → ")}
+        </div>
+      )}
+      {!isNew && <div className="mb-6" />}
 
       <div className="space-y-4">
         <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} required />

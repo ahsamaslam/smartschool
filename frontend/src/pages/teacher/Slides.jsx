@@ -699,69 +699,7 @@ export default function TeacherSlides() {
                 />
               </div>
 
-              <div data-search-box className="relative">
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
-                  Search your curriculum
-                </label>
-                <input
-                  type="text"
-                  placeholder="Search topics, chapters, books…"
-                  value={curriculumSearch}
-                  onChange={(e) => {
-                    setCurriculumSearch(e.target.value);
-                    setShowSearchDropdown(true);
-                  }}
-                  onFocus={() => setShowSearchDropdown(true)}
-                  className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
-                />
-                {showSearchDropdown && searchResults.length > 0 && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-10 max-h-64 overflow-y-auto">
-                    {searchResults.map((result, idx) => (
-                      <button
-                        key={`${result.id}-${result.className}-${result.bookTitle}-${idx}`}
-                        type="button"
-                        onClick={() => {
-                          handleSelectTopic(result);
-                          setCurriculumSearch("");
-                          setShowSearchDropdown(false);
-                        }}
-                        className="w-full text-left px-3 py-2.5 hover:bg-indigo-50 text-xs border-b border-gray-100 last:border-b-0 transition-colors"
-                      >
-                        <div className="text-gray-600 text-xs mb-0.5">
-                          {result.className} · {result.subjectName}
-                        </div>
-                        <div className="font-medium text-gray-900 truncate">
-                          {result.bookTitle} › Ch. {result.chapterNum}: {result.name}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {showSearchDropdown && curriculumSearch && searchResults.length === 0 && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 px-3 py-2 text-xs text-gray-500">
-                    No matching topics found
-                  </div>
-                )}
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setCreateTopicModalOpen(true)}
-                  className="flex-1 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-semibold hover:bg-indigo-100 transition-colors"
-                >
-                  + New Topic
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCreateChapterModalOpen(true)}
-                  className="flex-1 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-700 text-xs font-semibold hover:bg-amber-100 transition-colors"
-                >
-                  + New Chapter
-                </button>
-              </div>
-
-              <div>
+<div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
                   Content / notes
                 </label>

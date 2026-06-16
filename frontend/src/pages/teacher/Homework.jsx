@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import { useAuth } from "../../hooks/useAuth";
 import teacherService from "../../services/teacherService";
@@ -31,6 +31,8 @@ const TYPE_COLORS = {
 export default function TeacherHomework() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const preselectedClassId = searchParams.get("class_id");
   const [classes, setClasses] = useState([]);
   const [allHomework, setAllHomework] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -40,7 +42,7 @@ export default function TeacherHomework() {
 
   // "New homework" class picker modal state
   const [showClassPicker, setShowClassPicker] = useState(false);
-  const [filterClass, setFilterClass] = useState("all");
+  const [filterClass, setFilterClass] = useState(preselectedClassId || "all");
 
   const loadData = async () => {
     if (!user?.id) return;
@@ -72,6 +74,9 @@ export default function TeacherHomework() {
       setAllHomework(
         allHw.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)),
       );
+      if (preselectedClassId && classList.some((c) => c.id === preselectedClassId)) {
+        setFilterClass(preselectedClassId);
+      }
       setError("");
     } catch {
       setError("Failed to load homework.");
