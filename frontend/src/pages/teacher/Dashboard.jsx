@@ -303,7 +303,7 @@ export default function TeacherDashboard() {
                 {analytics.classes.map((cls) => (
                   <Link
                     key={cls.class_id}
-                    to={`/teacher/classes/${cls.class_id}`}
+                    to={`/teacher/reports?class_id=${cls.class_id}`}
                   >
                     <CVICard data={cls} />
                   </Link>
