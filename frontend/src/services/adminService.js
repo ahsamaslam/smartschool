@@ -270,6 +270,9 @@ const adminService = {
       params: { period, ...(start && { start }), ...(end && { end }) },
     }),
 
+  getBranchLiveAnalytics: (schoolId, branchId) =>
+    api.get(`${API_ROUTES.ADMINS}/analytics/school/${schoolId}/branches/${branchId}/live`),
+
   getStudentAnalytics: (studentId, period = "last_month", start, end) =>
     api.get(`${API_ROUTES.ADMINS}/analytics/student/${studentId}`, {
       params: { period, ...(start && { start }), ...(end && { end }) },

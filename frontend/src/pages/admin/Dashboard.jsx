@@ -283,7 +283,7 @@ export default function AdminDashboard() {
               const summary = preds.executive_summary;
               return (
                 <div key={school.school_id} className="flex flex-col gap-2">
-                  <Link to={`/admin/schools/${school.school_id}`}>
+                  <Link to={`/admin/schools/${school.school_id}/performance`}>
                     <SPICard
                       data={{
                         school_name: school.school_name,

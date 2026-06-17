@@ -120,6 +120,9 @@ const managerService = {
       params: { period, ...(start && { start }), ...(end && { end }) },
     }),
 
+  getBranchLiveAnalytics: (branchId) =>
+    api.get(`${API_ROUTES.MANAGERS}/analytics/branches/${branchId}/live`),
+
   getTeacherAnalytics: (period = "last_month", start, end) =>
     api.get(`${API_ROUTES.MANAGERS}/analytics/teachers`, {
       params: { period, ...(start && { start }), ...(end && { end }) },

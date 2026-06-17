@@ -77,6 +77,8 @@ const TeacherLessonPlanning = lazy(() => import("./pages/teacher/LessonPlanning"
 // Manager
 const ManagerDashboard = lazy(() => import("./pages/manager/Dashboard"));
 const ManagerSchools = lazy(() => import("./pages/manager/Schools"));
+const ManagerSchoolPerformance = lazy(() => import("./pages/manager/SchoolPerformance"));
+const ManagerBranchPerformance = lazy(() => import("./pages/manager/BranchPerformance"));
 const SchoolBranches = lazy(() => import("./pages/manager/SchoolBranches"));
 const BranchView = lazy(() => import("./pages/manager/BranchDetail"));
 const StudentReports = lazy(() => import("./pages/manager/StudentReports"));
@@ -117,6 +119,12 @@ const AdminBookDetail = lazy(() => import("./pages/admin/BookDetail"));
 const AdminSectionDetail = lazy(() => import("./pages/admin/SectionDetail"));
 const AdminTeacherSectionsPreview = lazy(
   () => import("./pages/admin/AdminTeacherSectionsPreview"),
+);
+const AdminSchoolPerformance = lazy(
+  () => import("./pages/admin/SchoolPerformance"),
+);
+const AdminBranchPerformance = lazy(
+  () => import("./pages/admin/BranchPerformance"),
 );
 
 // Chat
@@ -263,6 +271,8 @@ export default function App() {
 
             {/* ── MANAGER ── */}
             <Route path="/manager/dashboard" element={<ManagerDashboard />} />
+            <Route path="/manager/performance" element={<ManagerSchoolPerformance />} />
+            <Route path="/manager/branches/:branchId/performance" element={<ManagerBranchPerformance />} />
             <Route path="/manager/schools" element={<ManagerSchools />} />
             <Route
               path="/manager/schools/:schoolId"
@@ -321,6 +331,14 @@ export default function App() {
             <Route
               path="/admin/classes/:classId"
               element={<AdminClassDetail />}
+            />
+            <Route
+              path="/admin/schools/:schoolId/branches/:branchId/performance"
+              element={<AdminBranchPerformance />}
+            />
+            <Route
+              path="/admin/schools/:schoolId/performance"
+              element={<AdminSchoolPerformance />}
             />
             <Route
               path="/admin/schools/:schoolId/branches/:branchId"

@@ -4275,7 +4275,95 @@ from app.utils.score_calculator import (
     get_school_rating as _get_school_rating,
     calculate_spi as _calculate_spi,
     calculate_cvi as _a_calculate_cvi,
+    get_teacher_grade as _a_teacher_grade,
 )
+
+# Live SHS SQL for admin scope — $1=class_id (identical formula to manager's _MGR_SHS_SQL)
+_ADMIN_SHS_SQL = """
+WITH class_topics AS (
+    SELECT DISTINCT lt.id AS topic_id
+    FROM teacher_topic_content ttc
+    JOIN library_topics lt ON lt.id = ttc.library_topic_id
+    JOIN library_chapters ch ON ch.id = lt.chapter_id
+    JOIN library_books b ON b.id = ch.book_id
+    JOIN teacher_class_subject_assignments tcsa
+        ON tcsa.teacher_id = ttc.teacher_id
+        AND tcsa.library_book_id = b.id
+        AND tcsa.class_id = $1::uuid
+    WHERE ttc.lecture_video_url IS NOT NULL AND trim(ttc.lecture_video_url) != ''
+),
+base AS (
+    SELECT
+        u.id AS student_id,
+        u.full_name,
+        COALESCE((
+            SELECT CASE WHEN COUNT(tt.topic_id) = 0 THEN 0 ELSE
+                ROUND(100.0 * COUNT(CASE WHEN COALESCE(stp.lecture_watch_percent,0) >= 75 THEN 1 END)
+                / COUNT(tt.topic_id), 2) END
+            FROM class_topics tt
+            LEFT JOIN student_topic_progress stp ON stp.topic_id = tt.topic_id AND stp.student_id = u.id
+        ), 0) AS video_rate,
+        COALESCE(att.attendance_rate, 0) AS attendance_rate,
+        COALESCE(hw.homework_rate, 0) AS homework_rate,
+        LEAST(COALESCE((
+            SELECT COUNT(DISTINCT stp2.topic_id) / 5.0 * 100
+            FROM student_topic_progress stp2
+            JOIN class_topics ct ON ct.topic_id = stp2.topic_id
+            WHERE stp2.student_id = u.id
+              AND stp2.lecture_watch_percent > 0
+        ), 0), 100) AS topic_revisit_score,
+        LEAST(COALESCE((
+            SELECT COUNT(*) / 3.0 * 100
+            FROM (
+                SELECT hs2.homework_id
+                FROM homework_submissions hs2
+                JOIN homeworks h2 ON h2.id = hs2.homework_id
+                WHERE hs2.student_id = u.id AND h2.class_id = $1::uuid
+                GROUP BY hs2.homework_id
+                HAVING COUNT(*) > 1
+            ) retakes_q
+        ), 0), 100) AS hw_retake_score
+    FROM enrollments e
+    JOIN users u ON e.student_id = u.id
+    LEFT JOIN (
+        SELECT student_id, class_id,
+            ROUND(100.0 * SUM(CASE WHEN is_present THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS attendance_rate
+        FROM attendance GROUP BY student_id, class_id
+    ) att ON att.student_id = u.id AND att.class_id = e.class_id
+    LEFT JOIN (
+        SELECT e2.student_id,
+            ROUND(COALESCE(AVG(CASE
+                WHEN best.marks_awarded IS NOT NULL AND h.total_marks > 0
+                    THEN (best.marks_awarded / h.total_marks * 100)
+                WHEN best.submission_status IN ('submitted','late','in_progress')
+                    THEN 75
+                ELSE 0
+            END), 0), 2) AS homework_rate
+        FROM enrollments e2
+        JOIN homeworks h ON h.class_id = e2.class_id AND h.status = 'published'
+        LEFT JOIN (
+            SELECT DISTINCT ON (homework_id, student_id)
+                homework_id, student_id, marks_awarded, submission_status
+            FROM homework_submissions
+            ORDER BY homework_id, student_id,
+                     marks_awarded DESC NULLS LAST, submitted_at DESC
+        ) best ON best.homework_id = h.id AND best.student_id = e2.student_id
+        WHERE e2.class_id = $1::uuid AND e2.is_active = true
+        GROUP BY e2.student_id
+    ) hw ON hw.student_id = u.id
+    WHERE e.class_id = $1 AND e.is_active = true
+)
+SELECT *,
+    ROUND((topic_revisit_score * 0.50 + hw_retake_score * 0.50), 2) AS behavioral_rate,
+    ROUND((
+        video_rate * 0.25
+        + homework_rate * 0.40
+        + attendance_rate * 0.20
+        + (topic_revisit_score * 0.50 + hw_retake_score * 0.50) * 0.15
+    ), 2) AS shs_score,
+    (video_rate = 0 AND attendance_rate = 0 AND homework_rate = 0) AS is_inactive
+FROM base
+"""
 
 
 @router.get("/analytics/overview")
@@ -4466,9 +4554,10 @@ async def get_admin_school_analytics(
             b.id AS branch_id,
             b.name AS branch_name,
             COALESCE(AVG(dsm.daily_shs), 0) AS avg_shs,
-            COUNT(DISTINCT dsm.student_id) AS student_count
+            COUNT(DISTINCT e.student_id) AS student_count
         FROM branches b
-        JOIN classes c ON c.branch_id = b.id
+        LEFT JOIN classes c ON c.branch_id = b.id
+        LEFT JOIN enrollments e ON e.class_id = c.id AND e.is_active = true
         LEFT JOIN daily_student_metrics dsm ON dsm.class_id = c.id AND dsm.date BETWEEN $2 AND $3
         WHERE b.school_id = $1::uuid
         GROUP BY b.id, b.name
@@ -4560,20 +4649,22 @@ async def get_admin_school_classes_analytics(
             c.name AS class_name,
             c.grade_level,
             c.section,
+            b.id AS branch_id,
             b.name AS branch_name,
             u.full_name AS teacher_name,
             COALESCE(AVG(cvi.cvi_score), 0) AS avg_cvi,
             COALESCE(AVG(cvi.avg_shs), 0) AS avg_shs,
-            COALESCE(SUM(cvi.total_students), 0) AS total_students,
+            COUNT(DISTINCT e.student_id) AS total_students,
             COALESCE(SUM(cvi.struggling_count), 0) AS struggling_count,
             COALESCE(SUM(cvi.excelling_count), 0) AS excelling_count,
             MAX(cvi.teacher_grade) AS teacher_grade
         FROM classes c
         JOIN branches b ON b.id = c.branch_id
         LEFT JOIN users u ON u.id = c.teacher_id
+        LEFT JOIN enrollments e ON e.class_id = c.id AND e.is_active = true
         LEFT JOIN class_vitality_index cvi ON cvi.class_id = c.id AND cvi.date BETWEEN $2 AND $3
         WHERE b.school_id = $1::uuid
-        GROUP BY c.id, c.name, c.grade_level, c.section, b.name, u.full_name
+        GROUP BY c.id, c.name, c.grade_level, c.section, b.id, b.name, u.full_name
         ORDER BY avg_cvi DESC NULLS LAST
         """,
         school_id, date_from, date_to,
@@ -4585,6 +4676,152 @@ async def get_admin_school_classes_analytics(
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
         "classes": [dict(c) for c in classes],
+    }
+
+
+@router.get("/analytics/school/{school_id}/branches/{branch_id}/live")
+async def get_admin_branch_live_analytics(
+    school_id: str,
+    branch_id: str,
+    current_user: dict = Depends(require_admin),
+):
+    """Live branch analytics — computes CVI from source tables (same approach as manager dashboard)."""
+    tenant_id = current_user.get("tenant_id")
+
+    school = await execute_one(
+        "SELECT name, tenant_id FROM schools WHERE id = $1::uuid", school_id
+    )
+    if not school or str(school["tenant_id"]) != str(tenant_id):
+        raise HTTPException(status_code=404, detail="School not found in your tenant")
+
+    branch = await execute_one(
+        "SELECT name FROM branches WHERE id = $1::uuid AND school_id = $2::uuid",
+        branch_id, school_id,
+    )
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found in this school")
+
+    classes_rows = await execute_query(
+        """SELECT c.id, c.name, c.grade_level, c.section,
+                  COALESCE(c.teacher_id, tcsa_t.teacher_id) AS teacher_id,
+                  u.full_name AS teacher_name,
+                  COUNT(DISTINCT e.student_id) AS enrolled_count
+           FROM classes c
+           LEFT JOIN (
+               SELECT DISTINCT ON (class_id) class_id, teacher_id
+               FROM teacher_class_subject_assignments ORDER BY class_id
+           ) tcsa_t ON tcsa_t.class_id = c.id
+           LEFT JOIN users u ON u.id = COALESCE(c.teacher_id, tcsa_t.teacher_id)
+           LEFT JOIN enrollments e ON e.class_id = c.id AND e.is_active = true
+           WHERE c.branch_id = $1::uuid
+           GROUP BY c.id, c.name, c.grade_level, c.section, tcsa_t.teacher_id, u.full_name
+           ORDER BY c.name""",
+        branch_id,
+    )
+
+    class_analytics = []
+    teacher_cvi_map: dict = {}
+
+    for cls in classes_rows:
+        cid = str(cls["id"])
+        rows = await execute_query(_ADMIN_SHS_SQL, cid)
+
+        active_rows = [r for r in rows if not r["is_inactive"]]
+        inactive_count = len(rows) - len(active_rows)
+
+        shs_vals = [float(r["shs_score"] or 0) for r in active_rows]
+        hw_vals  = [float(r["homework_rate"] or 0) for r in active_rows]
+        att_vals = [float(r["attendance_rate"] or 0) for r in active_rows]
+        vid_vals = [float(r["video_rate"] or 0) for r in active_rows]
+
+        if shs_vals:
+            avg_shs   = _a_statistics.mean(shs_vals)
+            variance  = _a_statistics.stdev(shs_vals) if len(shs_vals) > 1 else 0.0
+            hw_eff    = _a_statistics.mean(hw_vals) if hw_vals else 0.0
+            avg_video = _a_statistics.mean(vid_vals) if vid_vals else 0.0
+
+            vel_row = await execute_one(
+                "SELECT AVG(weekly_shs) AS avg_weekly, AVG(monthly_shs) AS avg_monthly FROM student_health_scores WHERE class_id = $1::uuid",
+                cid,
+            )
+            avg_monthly = float(vel_row["avg_monthly"] or 0) if vel_row else 0.0
+            if avg_monthly > 0:
+                raw_vel = float(vel_row["avg_weekly"] or 0) - avg_monthly
+                learning_velocity = min(max((raw_vel + 10) / 20.0 * 100, 0), 100)
+            else:
+                learning_velocity = 50.0
+
+            cvi = _a_calculate_cvi(avg_shs, learning_velocity, variance, hw_eff)
+            grade = _a_teacher_grade(cvi)
+            struggling = sum(1 for v in shs_vals if v < 50)
+            excelling  = sum(1 for v in shs_vals if v >= 80)
+        else:
+            avg_shs = cvi = variance = hw_eff = avg_video = learning_velocity = 0.0
+            grade = "No data"
+            struggling = excelling = 0
+
+        tid = str(cls["teacher_id"]) if cls["teacher_id"] else None
+        if tid:
+            if tid not in teacher_cvi_map:
+                teacher_cvi_map[tid] = {"name": cls["teacher_name"], "scores": [], "struggling": 0, "excelling": 0}
+            teacher_cvi_map[tid]["scores"].append(cvi)
+            teacher_cvi_map[tid]["struggling"] += struggling
+            teacher_cvi_map[tid]["excelling"]  += excelling
+
+        class_analytics.append({
+            "class_id":        cid,
+            "class_name":      cls["name"],
+            "grade_level":     cls["grade_level"],
+            "section":         cls["section"],
+            "teacher_name":    cls["teacher_name"],
+            "avg_shs":         round(avg_shs, 2),
+            "avg_cvi":         round(cvi, 2),
+            "total_students":  int(cls["enrolled_count"] or 0),
+            "active_students": len(shs_vals),
+            "inactive_students": inactive_count,
+            "struggling_count": struggling,
+            "excelling_count":  excelling,
+            "teacher_grade":    grade,
+        })
+
+    teacher_analytics = []
+    for tid, info in teacher_cvi_map.items():
+        scores = info["scores"]
+        t_avg_cvi = _a_statistics.mean(scores) if scores else 0.0
+        teacher_analytics.append({
+            "teacher_id":    tid,
+            "teacher_name":  info["name"],
+            "class_count":   len(scores),
+            "avg_cvi":       round(t_avg_cvi, 2),
+            "teacher_grade": _a_teacher_grade(t_avg_cvi),
+            "struggling":    info["struggling"],
+            "excelling":     info["excelling"],
+        })
+    teacher_analytics.sort(key=lambda x: x["avg_cvi"], reverse=True)
+
+    active_shs  = [c["avg_shs"] for c in class_analytics if c["avg_shs"] > 0]
+    active_cvi  = [c["avg_cvi"] for c in class_analytics if c["avg_cvi"] > 0]
+    total_students    = sum(c["total_students"] for c in class_analytics)
+    total_struggling  = sum(c["struggling_count"] for c in class_analytics)
+    total_excelling   = sum(c["excelling_count"] for c in class_analytics)
+    total_active_stu  = sum(c["active_students"] for c in class_analytics)
+    bpi = _a_statistics.mean(active_cvi) if active_cvi else 0.0
+
+    return {
+        "school_id":      school_id,
+        "branch_id":      branch_id,
+        "branch_name":    branch["name"],
+        "bpi":            round(bpi, 2),
+        "total_students": total_students,
+        "active_students": total_active_stu,
+        "total_classes":  len(class_analytics),
+        "total_teachers": len(teacher_analytics),
+        "avg_shs":        round(_a_statistics.mean(active_shs), 2) if active_shs else 0.0,
+        "avg_cvi":        round(bpi, 2),
+        "at_risk_pct":    round(total_struggling / max(total_active_stu, 1) * 100, 1),
+        "excelling_pct":  round(total_excelling / max(total_active_stu, 1) * 100, 1),
+        "classes":        class_analytics,
+        "teachers":       teacher_analytics,
     }
 
 

@@ -2723,6 +2723,145 @@ async def get_manager_class_analytics(
     return {"classes": results}
 
 
+@router.get("/analytics/branches/{branch_id}/live")
+async def get_manager_branch_live_analytics(
+    branch_id: str,
+    current_user: dict = Depends(require_manager),
+):
+    """Live branch analytics for manager — same computation as manager overview, scoped to one branch."""
+    school_id = str(current_user.get("school_id") or "")
+
+    branch = await execute_one(
+        "SELECT name FROM branches WHERE id = $1::uuid AND school_id = $2::uuid",
+        branch_id, school_id,
+    )
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    classes_rows = await execute_query(
+        """SELECT c.id, c.name, c.grade_level, c.section,
+                  COALESCE(c.teacher_id, tcsa_t.teacher_id) AS teacher_id,
+                  u.full_name AS teacher_name,
+                  COUNT(DISTINCT e.student_id) AS enrolled_count
+           FROM classes c
+           LEFT JOIN (
+               SELECT DISTINCT ON (class_id) class_id, teacher_id
+               FROM teacher_class_subject_assignments ORDER BY class_id
+           ) tcsa_t ON tcsa_t.class_id = c.id
+           LEFT JOIN users u ON u.id = COALESCE(c.teacher_id, tcsa_t.teacher_id)
+           LEFT JOIN enrollments e ON e.class_id = c.id AND e.is_active = true
+           WHERE c.branch_id = $1::uuid
+           GROUP BY c.id, c.name, c.grade_level, c.section, tcsa_t.teacher_id, u.full_name
+           ORDER BY c.name""",
+        branch_id,
+    )
+
+    class_analytics = []
+    teacher_cvi_map: dict = {}
+
+    for cls in classes_rows:
+        cid = str(cls["id"])
+        rows = await execute_query(_MGR_SHS_SQL, cid)
+
+        active_rows = [r for r in rows if not r["is_inactive"]]
+        inactive_count = len(rows) - len(active_rows)
+
+        shs_vals = [float(r["shs_score"] or 0) for r in active_rows]
+        hw_vals  = [float(r["homework_rate"] or 0) for r in active_rows]
+        att_vals = [float(r["attendance_rate"] or 0) for r in active_rows]
+        vid_vals = [float(r["video_rate"] or 0) for r in active_rows]
+
+        if shs_vals:
+            avg_shs   = _mgr_stats.mean(shs_vals)
+            variance  = _mgr_stats.stdev(shs_vals) if len(shs_vals) > 1 else 0.0
+            hw_eff    = _mgr_stats.mean(hw_vals) if hw_vals else 0.0
+            avg_video = _mgr_stats.mean(vid_vals) if vid_vals else 0.0
+
+            vel_row = await execute_one(
+                "SELECT AVG(weekly_shs) AS avg_weekly, AVG(monthly_shs) AS avg_monthly FROM student_health_scores WHERE class_id = $1::uuid",
+                cid,
+            )
+            avg_monthly = float(vel_row["avg_monthly"] or 0) if vel_row else 0.0
+            if avg_monthly > 0:
+                raw_vel = float(vel_row["avg_weekly"] or 0) - avg_monthly
+                learning_velocity = min(max((raw_vel + 10) / 20.0 * 100, 0), 100)
+            else:
+                learning_velocity = 50.0
+
+            cvi = _mgr_calc_cvi(avg_shs, learning_velocity, variance, hw_eff)
+            grade = _mgr_teacher_grade(cvi)
+            struggling = sum(1 for v in shs_vals if v < 50)
+            excelling  = sum(1 for v in shs_vals if v >= 80)
+        else:
+            avg_shs = cvi = variance = hw_eff = avg_video = learning_velocity = 0.0
+            grade = "No data"
+            struggling = excelling = 0
+
+        tid = str(cls["teacher_id"]) if cls["teacher_id"] else None
+        if tid:
+            if tid not in teacher_cvi_map:
+                teacher_cvi_map[tid] = {"name": cls["teacher_name"], "scores": [], "struggling": 0, "excelling": 0}
+            teacher_cvi_map[tid]["scores"].append(cvi)
+            teacher_cvi_map[tid]["struggling"] += struggling
+            teacher_cvi_map[tid]["excelling"]  += excelling
+
+        class_analytics.append({
+            "class_id":          cid,
+            "class_name":        cls["name"],
+            "grade_level":       cls["grade_level"],
+            "section":           cls["section"],
+            "teacher_name":      cls["teacher_name"],
+            "avg_shs":           round(avg_shs, 2),
+            "avg_cvi":           round(cvi, 2),
+            "total_students":    int(cls["enrolled_count"] or 0),
+            "active_students":   len(shs_vals),
+            "inactive_students": inactive_count,
+            "struggling_count":  struggling,
+            "excelling_count":   excelling,
+            "teacher_grade":     grade,
+        })
+
+    teacher_analytics = []
+    for tid, info in teacher_cvi_map.items():
+        scores = info["scores"]
+        t_avg = _mgr_stats.mean(scores) if scores else 0.0
+        teacher_analytics.append({
+            "teacher_id":    tid,
+            "teacher_name":  info["name"],
+            "class_count":   len(scores),
+            "avg_cvi":       round(t_avg, 2),
+            "teacher_grade": _mgr_teacher_grade(t_avg),
+            "struggling":    info["struggling"],
+            "excelling":     info["excelling"],
+        })
+    teacher_analytics.sort(key=lambda x: x["avg_cvi"], reverse=True)
+
+    active_shs = [c["avg_shs"] for c in class_analytics if c["avg_shs"] > 0]
+    active_cvi = [c["avg_cvi"] for c in class_analytics if c["avg_cvi"] > 0]
+    total_students   = sum(c["total_students"] for c in class_analytics)
+    total_struggling = sum(c["struggling_count"] for c in class_analytics)
+    total_excelling  = sum(c["excelling_count"] for c in class_analytics)
+    total_active_stu = sum(c["active_students"] for c in class_analytics)
+    bpi = _mgr_stats.mean(active_cvi) if active_cvi else 0.0
+
+    return {
+        "school_id":       school_id,
+        "branch_id":       branch_id,
+        "branch_name":     branch["name"],
+        "bpi":             round(bpi, 2),
+        "total_students":  total_students,
+        "active_students": total_active_stu,
+        "total_classes":   len(class_analytics),
+        "total_teachers":  len(teacher_analytics),
+        "avg_shs":         round(_mgr_stats.mean(active_shs), 2) if active_shs else 0.0,
+        "avg_cvi":         round(bpi, 2),
+        "at_risk_pct":     round(total_struggling / max(total_active_stu, 1) * 100, 1),
+        "excelling_pct":   round(total_excelling / max(total_active_stu, 1) * 100, 1),
+        "classes":         class_analytics,
+        "teachers":        teacher_analytics,
+    }
+
+
 @router.get("/analytics/students")
 async def get_manager_students_analytics(
     current_user: dict = Depends(require_manager),
