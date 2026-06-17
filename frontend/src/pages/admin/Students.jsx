@@ -868,12 +868,12 @@ export default function AdminStudents() {
                     className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                   />
                 </th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Student</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden sm:table-cell">Email</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Class</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Branch</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">Session</th>
-                <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Student</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden sm:table-cell">Email</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Class</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Branch</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">Session</th>
+                <th className="px-3 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -904,44 +904,44 @@ export default function AdminStudents() {
                       className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                     />
                   </td>
-                  <td className="px-5 py-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-sm">
+                  <td className="px-3 py-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-xs flex-shrink-0">
                         {student.full_name?.[0] || "S"}
                       </div>
-                      <span className="text-sm font-medium text-gray-900">{student.full_name}</span>
+                      <span className="text-sm font-medium text-gray-900 truncate max-w-[120px]">{student.full_name}</span>
                     </div>
                   </td>
-                  <td className="px-5 py-3 hidden sm:table-cell">
-                    <span className="inline-flex items-center gap-1.5 text-sm text-gray-500">
-                      <EnvelopeIcon className="h-3.5 w-3.5" />
-                      {student.email}
+                  <td className="px-3 py-3 hidden sm:table-cell">
+                    <span className="inline-flex items-center gap-1 text-xs text-gray-500">
+                      <EnvelopeIcon className="h-3 w-3 flex-shrink-0" />
+                      <span className="truncate max-w-[180px]">{student.email}</span>
                     </span>
                   </td>
-                  <td className="px-5 py-3">
-                    <span className="inline-flex items-center bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full text-xs font-medium">
+                  <td className="px-3 py-3">
+                    <span className="inline-flex items-center bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded-full text-xs font-medium whitespace-nowrap">
                       {student.class_name
                         ? [student.grade_level && `Grade ${student.grade_level}`, student.section && `Sec ${student.section}`].filter(Boolean).join(" · ") || student.class_name
                         : "—"}
                     </span>
                   </td>
-                  <td className="px-5 py-3 text-sm text-gray-500 hidden md:table-cell">
+                  <td className="px-3 py-3 text-xs text-gray-500 hidden md:table-cell">
                     {student.branch_name || "—"}
                   </td>
-                  <td className="px-5 py-3 text-sm text-gray-500 hidden lg:table-cell">
+                  <td className="px-3 py-3 text-xs text-gray-500 hidden lg:table-cell">
                     {student.academic_session || "—"}
                   </td>
-                  <td className="px-5 py-3 text-right">
-                    <div className="flex items-center justify-end gap-1.5">
+                  <td className="px-3 py-3 text-right">
+                    <div className="flex items-center justify-end gap-1">
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           openEditFromRow(student);
                         }}
-                        className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-indigo-200 text-indigo-700 hover:bg-indigo-50 bg-white"
+                        className="inline-flex items-center gap-0.5 text-xs px-2 py-1 rounded-lg border border-indigo-200 text-indigo-700 hover:bg-indigo-50 bg-white whitespace-nowrap"
                       >
-                        <PencilSquareIcon className="h-3.5 w-3.5" />
+                        <PencilSquareIcon className="h-3 w-3" />
                         Edit
                       </button>
                       <button
@@ -950,9 +950,9 @@ export default function AdminStudents() {
                           e.stopPropagation();
                           archiveStudentDirect(student);
                         }}
-                        className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 bg-white"
+                        className="inline-flex items-center gap-0.5 text-xs px-2 py-1 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 bg-white whitespace-nowrap"
                       >
-                        <TrashIcon className="h-3.5 w-3.5" />
+                        <TrashIcon className="h-3 w-3" />
                         Delete
                       </button>
                       <button
@@ -961,9 +961,9 @@ export default function AdminStudents() {
                           e.stopPropagation();
                           openDetail(student);
                         }}
-                        className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 bg-white"
+                        className="inline-flex items-center gap-0.5 text-xs px-2 py-1 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 bg-white whitespace-nowrap"
                       >
-                        <EyeIcon className="h-3.5 w-3.5" />
+                        <EyeIcon className="h-3 w-3" />
                         Manage
                       </button>
                     </div>
