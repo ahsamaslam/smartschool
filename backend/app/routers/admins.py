@@ -2664,34 +2664,46 @@ async def delete_class(class_id: str, current_user: dict = Depends(require_admin
 # ============================================
 
 @router.get("/subjects")
-async def get_all_subjects():
-    """Get all subjects"""
-    query = """
-        SELECT id, name, description, grade_level
-        FROM subjects
-        ORDER BY grade_level, name
-    """
-    subjects = await execute_query(query)
+async def get_all_subjects(current_user: dict = Depends(require_admin)):
+    """Get subjects scoped to this admin's tenant."""
+    tenant_id = current_user.get("tenant_id")
+    role = current_user.get("role")
+    if role == "super_admin" or not tenant_id:
+        # Super admin sees only global master subjects
+        subjects = await execute_query(
+            "SELECT id, name, description, grade_level FROM subjects WHERE tenant_id IS NULL ORDER BY grade_level, name"
+        )
+    else:
+        # Admin sees their own subjects + global master subjects from super admin
+        subjects = await execute_query(
+            "SELECT id, name, description, grade_level FROM subjects WHERE tenant_id = $1::uuid OR tenant_id IS NULL ORDER BY grade_level, name",
+            tenant_id,
+        )
     return [dict(s) for s in subjects]
 
 
 @router.post("/subjects")
-async def create_subject(subject_data: CreateSubjectRequest):
-    """Create new subject"""
-    
-    query = """
-        INSERT INTO subjects (name, description, grade_level)
-        VALUES ($1, $2, $3)
-        RETURNING id, name, description, grade_level
-    """
-    
+async def create_subject(subject_data: CreateSubjectRequest, current_user: dict = Depends(require_admin)):
+    """Create new subject scoped to this admin's tenant."""
+    tenant_id = current_user.get("tenant_id")
+    role = current_user.get("role")
+    subject_tenant_id = None if role == "super_admin" else tenant_id
+
+    existing = await execute_one(
+        "SELECT id FROM subjects WHERE LOWER(name) = LOWER($1) AND (($2::uuid IS NULL AND tenant_id IS NULL) OR tenant_id = $2::uuid)",
+        subject_data.name, subject_tenant_id,
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail="Subject already exists")
+
     subject = await execute_one(
-        query,
+        "INSERT INTO subjects (name, description, grade_level, tenant_id) VALUES ($1, $2, $3, $4::uuid) RETURNING id, name, description, grade_level",
         subject_data.name,
         subject_data.description,
-        subject_data.grade_level
+        subject_data.grade_level,
+        subject_tenant_id,
     )
-    
+
     return {
         "message": "Subject created successfully",
         "subject": dict(subject)
@@ -2723,9 +2735,14 @@ async def create_topic(topic_data: CreateTopicRequest):
 
 
 @router.delete("/subjects/{subject_id}")
-async def delete_subject(subject_id: str):
-    """Delete a subject and all its topics (+ any associated video templates)."""
-    subject = await execute_one("SELECT id, name FROM subjects WHERE id = $1", subject_id)
+async def delete_subject(subject_id: str, current_user: dict = Depends(require_admin)):
+    """Delete a subject — admin can only delete subjects belonging to their tenant."""
+    tenant_id = current_user.get("tenant_id")
+    role = current_user.get("role")
+    if role == "super_admin" or not tenant_id:
+        subject = await execute_one("SELECT id, name FROM subjects WHERE id = $1 AND tenant_id IS NULL", subject_id)
+    else:
+        subject = await execute_one("SELECT id, name FROM subjects WHERE id = $1 AND tenant_id = $2::uuid", subject_id, tenant_id)
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
 

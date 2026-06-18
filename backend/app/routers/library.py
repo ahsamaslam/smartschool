@@ -638,8 +638,8 @@ async def copy_super_admin_library_to_tenant(tenant_id: str) -> None:
             subject_id_map[str(subj["id"])] = str(existing["id"])
         else:
             new_s = await execute_one(
-                "INSERT INTO library_subjects (name, description, tenant_id, source_id) VALUES ($1,$2,$3::uuid,$4::uuid) RETURNING id",
-                subj["name"], subj.get("description"), tenant_id, str(subj["id"]),
+                "INSERT INTO library_subjects (name, description, tenant_id, source_id, origin_role) VALUES ($1,$2,$3::uuid,$4::uuid,$5) RETURNING id",
+                subj["name"], subj.get("description"), tenant_id, str(subj["id"]), "super_admin",
             )
             subject_id_map[str(subj["id"])] = str(new_s["id"])
 
@@ -714,8 +714,8 @@ async def sync_new_master_item_to_all_tenants(item_type: str, master_id: str) ->
                 tenant_subject_id = str(existing["id"])
             else:
                 new_s = await execute_one(
-                    "INSERT INTO library_subjects (name, description, tenant_id, source_id) VALUES ($1,$2,$3::uuid,$4::uuid) RETURNING id",
-                    subj["name"], subj.get("description"), tid, master_id,
+                    "INSERT INTO library_subjects (name, description, tenant_id, source_id, origin_role) VALUES ($1,$2,$3::uuid,$4::uuid,$5) RETURNING id",
+                    subj["name"], subj.get("description"), tid, master_id, "super_admin",
                 )
                 tenant_subject_id = str(new_s["id"])
             # Copy board-subject links for this subject
@@ -854,7 +854,7 @@ async def get_all_subjects(current_user: dict = Depends(get_user_from_token)):
     user_id = current_user.get("user_id") or current_user.get("id")
     tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, user_id, param_offset=0)
     subjects = await execute_query(
-        f"SELECT s.* FROM library_subjects s WHERE 1=1 {tenant_sql} ORDER BY s.name",
+        f"SELECT s.id, s.name, s.description, s.tenant_id, s.source_id, s.manager_id, s.origin_role, s.created_at FROM library_subjects s WHERE 1=1 {tenant_sql} ORDER BY s.name",
         *tenant_params
     )
     return {"data": [dict(s) for s in subjects]}
@@ -864,20 +864,37 @@ async def get_all_subjects(current_user: dict = Depends(get_user_from_token)):
 async def create_subject(req: CreateSubjectRequest, current_user: dict = Depends(get_user_from_token)):
     """Create a new subject scoped to caller's tenant."""
     await ensure_library_tables()
+    if not req.name or not req.name.strip():
+        raise HTTPException(status_code=400, detail="Subject name is required")
+    req.name = req.name.strip()
     role = current_user.get("role", "")
     subject_tenant_id = None if role == "super_admin" else current_user.get("tenant_id")
     manager_id = (current_user.get("user_id") or current_user.get("id")) if role == "manager" else None
 
-    existing = await execute_one(
-        "SELECT id FROM library_subjects WHERE LOWER(name) = LOWER($1) AND (($2::uuid IS NULL AND tenant_id IS NULL) OR tenant_id = $2::uuid)",
-        req.name, subject_tenant_id
-    )
+    # Duplicate check scoped tightly by origin so same-name subjects from different
+    # roles can coexist (e.g. admin can create "Maths" even if super_admin synced one).
+    if role == "super_admin":
+        existing = await execute_one(
+            "SELECT id FROM library_subjects WHERE LOWER(name) = LOWER($1) AND tenant_id IS NULL",
+            req.name,
+        )
+    elif role == "manager":
+        existing = await execute_one(
+            "SELECT id FROM library_subjects WHERE LOWER(name) = LOWER($1) AND tenant_id = $2::uuid AND manager_id = $3::uuid",
+            req.name, subject_tenant_id, manager_id,
+        )
+    else:
+        # admin: only block duplicate admin-originals (source_id IS NULL = not a synced copy)
+        existing = await execute_one(
+            "SELECT id FROM library_subjects WHERE LOWER(name) = LOWER($1) AND tenant_id = $2::uuid AND source_id IS NULL AND manager_id IS NULL",
+            req.name, subject_tenant_id,
+        )
     if existing:
         raise HTTPException(status_code=400, detail="Subject already exists")
 
     result = await execute_one(
-        "INSERT INTO library_subjects (name, description, tenant_id, manager_id) VALUES ($1, $2, $3::uuid, $4::uuid) RETURNING *",
-        req.name, req.description, subject_tenant_id, manager_id
+        "INSERT INTO library_subjects (name, description, tenant_id, manager_id, origin_role) VALUES ($1, $2, $3::uuid, $4::uuid, $5) RETURNING *",
+        req.name, req.description, subject_tenant_id, manager_id, role,
     )
     if role == "super_admin":
         await sync_new_master_item_to_all_tenants("subject", str(result["id"]))
@@ -953,22 +970,113 @@ async def delete_board(board_id: str, current_user: dict = Depends(get_user_from
 
 @router.get("/boards/{board_id}/subjects")
 async def get_board_subjects(board_id: str, current_user: dict = Depends(get_user_from_token)):
-    """Get subjects for a board scoped to caller's tenant."""
+    """Get subjects for a board, resolving master subjects to tenant copies.
+
+    Works for both cases:
+    - Admin viewing the master board directly (no synced copy in their tenant)
+    - Admin viewing their own synced board copy
+    In both cases, master subjects linked to the master board are resolved to tenant copies.
+    """
     await ensure_library_tables()
     role = current_user.get("role", "")
     tenant_id = current_user.get("tenant_id")
     user_id = current_user.get("user_id") or current_user.get("id")
-    tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, user_id, param_offset=1)
-    rows = await execute_query(
-        f"""
-        SELECT s.id, s.name, s.description
-        FROM library_board_subjects bs
-        JOIN library_subjects s ON s.id = bs.subject_id
-        WHERE bs.board_id = $1::uuid {tenant_sql}
-        ORDER BY s.name
-        """,
-        board_id, *tenant_params
+
+    board_meta = await execute_one(
+        "SELECT source_id, tenant_id FROM library_boards WHERE id = $1::uuid", board_id
     )
+    if not board_meta:
+        return {"data": []}
+
+    board_source_id = board_meta.get("source_id")
+    board_tenant_id = board_meta.get("tenant_id")
+
+    # Determine which board holds the "master" subject links.
+    # If admin views master board directly → master_board_id = board_id, own_board_id = None
+    # If admin views their synced copy      → master_board_id = source_id, own_board_id = board_id
+    is_master_board = board_tenant_id is None
+
+    if role == "super_admin" or not tenant_id:
+        # Super admin: just return subjects directly linked, filtered to master subjects
+        tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, user_id, param_offset=1)
+        rows = await execute_query(
+            f"""
+            SELECT s.id, s.name, s.description, s.tenant_id, s.source_id, s.manager_id, s.origin_role
+            FROM library_board_subjects bs
+            JOIN library_subjects s ON s.id = bs.subject_id
+            WHERE bs.board_id = $1::uuid {tenant_sql}
+            ORDER BY s.name
+            """,
+            board_id, *tenant_params,
+        )
+        return {"data": [dict(r) for r in rows]}
+
+    # For admin/manager: determine the master board ID and (optionally) their own board copy
+    if is_master_board:
+        master_board_id = board_id
+        own_board_id = None
+    else:
+        master_board_id = str(board_source_id) if board_source_id else None
+        own_board_id = board_id
+
+    if master_board_id:
+        if own_board_id:
+            # $1=own_board_id, $2=master_board_id, $3+=tenant filter
+            tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, user_id, param_offset=2)
+            rows = await execute_query(
+                f"""
+                SELECT DISTINCT s.id, s.name, s.description, s.tenant_id, s.source_id, s.manager_id, s.origin_role
+                FROM library_subjects s
+                WHERE 1=1 {tenant_sql}
+                  AND (
+                    EXISTS (SELECT 1 FROM library_board_subjects WHERE board_id = $1::uuid AND subject_id = s.id)
+                    OR (s.source_id IS NOT NULL AND EXISTS (
+                      SELECT 1 FROM library_board_subjects WHERE board_id = $2::uuid AND subject_id = s.source_id
+                    ))
+                    OR (s.tenant_id IS NULL AND EXISTS (
+                      SELECT 1 FROM library_board_subjects WHERE board_id = $2::uuid AND subject_id = s.id
+                    ))
+                  )
+                ORDER BY s.name
+                """,
+                own_board_id, master_board_id, *tenant_params,
+            )
+        else:
+            # Admin viewing master board directly; $1=master_board_id, $2+=tenant filter
+            tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, user_id, param_offset=1)
+            rows = await execute_query(
+                f"""
+                SELECT DISTINCT s.id, s.name, s.description, s.tenant_id, s.source_id, s.manager_id, s.origin_role
+                FROM library_subjects s
+                WHERE 1=1 {tenant_sql}
+                  AND (
+                    (s.source_id IS NOT NULL AND EXISTS (
+                      SELECT 1 FROM library_board_subjects WHERE board_id = $1::uuid AND subject_id = s.source_id
+                    ))
+                    OR (s.tenant_id IS NULL AND EXISTS (
+                      SELECT 1 FROM library_board_subjects WHERE board_id = $1::uuid AND subject_id = s.id
+                    ))
+                    OR EXISTS (
+                      SELECT 1 FROM library_board_subjects WHERE board_id = $1::uuid AND subject_id = s.id
+                    )
+                  )
+                ORDER BY s.name
+                """,
+                master_board_id, *tenant_params,
+            )
+    else:
+        # Tenant board with no master link — just show directly linked subjects
+        tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, user_id, param_offset=1)
+        rows = await execute_query(
+            f"""
+            SELECT s.id, s.name, s.description, s.tenant_id, s.source_id, s.manager_id, s.origin_role
+            FROM library_board_subjects bs
+            JOIN library_subjects s ON s.id = bs.subject_id
+            WHERE bs.board_id = $1::uuid {tenant_sql}
+            ORDER BY s.name
+            """,
+            board_id, *tenant_params,
+        )
     return {"data": [dict(r) for r in rows]}
 
 
@@ -986,23 +1094,31 @@ async def set_board_subjects(
 
     subject_ids = list(dict.fromkeys(req.subject_ids or []))
 
-    # Find which existing board-subject links are visible to this caller.
-    # Only delete those — links to other roles' private subjects are preserved.
-    tenant_sql, tenant_params = _tenant_subject_filter(role, tenant_id, user_id, param_offset=1)
-    visible_rows = await execute_query(
-        f"""
-        SELECT bs.subject_id FROM library_board_subjects bs
-        JOIN library_subjects s ON s.id = bs.subject_id
-        WHERE bs.board_id = $1::uuid {tenant_sql}
-        """,
-        board_id, *tenant_params,
-    )
-    visible_ids = [str(r["subject_id"]) for r in visible_rows]
-    if visible_ids:
-        placeholders = ",".join(f"${i + 2}::uuid" for i in range(len(visible_ids)))
+    # Only delete links to subjects the caller OWNS — never touch SA or other roles' subjects.
+    if role == "super_admin":
+        own_rows = await execute_query(
+            "SELECT bs.subject_id FROM library_board_subjects bs JOIN library_subjects s ON s.id = bs.subject_id WHERE bs.board_id = $1::uuid AND s.tenant_id IS NULL",
+            board_id,
+        )
+    elif role == "admin":
+        own_rows = await execute_query(
+            "SELECT bs.subject_id FROM library_board_subjects bs JOIN library_subjects s ON s.id = bs.subject_id WHERE bs.board_id = $1::uuid AND s.tenant_id = $2::uuid AND s.origin_role = 'admin' AND s.source_id IS NULL AND s.manager_id IS NULL",
+            board_id, tenant_id,
+        )
+    elif role == "manager":
+        own_rows = await execute_query(
+            "SELECT bs.subject_id FROM library_board_subjects bs JOIN library_subjects s ON s.id = bs.subject_id WHERE bs.board_id = $1::uuid AND s.manager_id = $2::uuid",
+            board_id, user_id,
+        )
+    else:
+        own_rows = []
+
+    own_ids = [str(r["subject_id"]) for r in own_rows]
+    if own_ids:
+        placeholders = ",".join(f"${i + 2}::uuid" for i in range(len(own_ids)))
         await execute_write(
             f"DELETE FROM library_board_subjects WHERE board_id = $1::uuid AND subject_id IN ({placeholders})",
-            board_id, *visible_ids,
+            board_id, *own_ids,
         )
 
     for sid in subject_ids:
@@ -1332,8 +1448,40 @@ async def bulk_assign_sections(
 
 @router.delete("/subjects/{subject_id}")
 async def delete_subject(subject_id: str, current_user: dict = Depends(get_user_from_token)):
-    """Delete a subject"""
-    await execute_write("DELETE FROM library_subjects WHERE id = $1", subject_id)
+    """Delete a subject — only the owner may delete it."""
+    role = current_user.get("role", "")
+    tenant_id = current_user.get("tenant_id")
+    user_id = current_user.get("user_id") or current_user.get("id")
+
+    subject = await execute_one("SELECT * FROM library_subjects WHERE id = $1::uuid", subject_id)
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    if role == "super_admin":
+        if subject.get("tenant_id") is not None:
+            raise HTTPException(status_code=403, detail="Cannot delete a tenant subject as super admin")
+    elif role == "admin":
+        if subject.get("origin_role") != "admin":
+            raise HTTPException(status_code=403, detail="Cannot delete a super admin subject")
+        if subject.get("source_id") is not None:
+            raise HTTPException(status_code=403, detail="Cannot delete a synced super admin subject")
+        if subject.get("manager_id") is not None:
+            raise HTTPException(status_code=403, detail="Cannot delete a manager-owned subject")
+    elif role == "manager":
+        if str(subject.get("tenant_id") or "") != str(tenant_id or ""):
+            raise HTTPException(status_code=403, detail="Cannot delete a subject belonging to another tenant")
+        if subject.get("manager_id") is None or str(subject.get("manager_id")) != str(user_id):
+            raise HTTPException(status_code=403, detail="You can only delete your own subjects")
+    else:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # When super_admin deletes a master subject, cascade to all synced tenant copies
+    if role == "super_admin":
+        await execute_write(
+            "DELETE FROM library_subjects WHERE source_id = $1::uuid",
+            subject_id,
+        )
+    await execute_write("DELETE FROM library_subjects WHERE id = $1::uuid", subject_id)
     return {"message": "Subject deleted"}
 
 
@@ -1345,18 +1493,18 @@ async def delete_subject(subject_id: str, current_user: dict = Depends(get_user_
 async def get_class_subjects(class_id: str):
     """Get subjects available for a specific library class"""
     await ensure_library_tables()
-    
+
     subjects = await execute_query("""
-        SELECT s.id, s.name, s.description, 
+        SELECT s.id, s.name, s.description, s.source_id, s.origin_role, s.manager_id, s.tenant_id,
                COUNT(DISTINCT b.id) as book_count
         FROM library_subjects s
         JOIN library_class_subjects lcs ON lcs.subject_id = s.id
         LEFT JOIN library_books b ON b.subject_id = s.id AND b.class_id = $1
         WHERE lcs.class_id = $1
-        GROUP BY s.id, s.name, s.description
+        GROUP BY s.id, s.name, s.description, s.source_id, s.origin_role, s.manager_id, s.tenant_id
         ORDER BY s.name
     """, class_id)
-    
+
     return {"data": [dict(s) for s in subjects]}
 
 
@@ -1397,16 +1545,83 @@ async def add_subject_to_class(class_id: str, req: CreateSubjectRequest, current
 
 
 @router.delete("/classes/{class_id}/subjects/{subject_id}")
-async def remove_subject_from_class(class_id: str, subject_id: str, current_user: dict = Depends(get_user_from_token)):
-    """Remove a subject from a class (unlinks it; also deletes books for this class+subject)"""
-    await execute_write(
-        "DELETE FROM library_books WHERE class_id = $1 AND subject_id = $2",
-        class_id, subject_id
+async def remove_subject_from_class(
+    class_id: str,
+    subject_id: str,
+    board_name: Optional[str] = None,
+    current_user: dict = Depends(get_user_from_token),
+):
+    """Remove a subject from a class — only the subject owner may do this."""
+    role = current_user.get("role", "")
+    tenant_id = current_user.get("tenant_id")
+    user_id = current_user.get("user_id") or current_user.get("id")
+
+    subject = await execute_one(
+        "SELECT id, tenant_id, source_id, manager_id, origin_role FROM library_subjects WHERE id = $1::uuid",
+        subject_id,
     )
-    await execute_write(
-        "DELETE FROM library_class_subjects WHERE class_id = $1 AND subject_id = $2",
-        class_id, subject_id
-    )
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    if role == "super_admin":
+        if subject.get("tenant_id") is not None:
+            raise HTTPException(status_code=403, detail="Cannot remove a tenant subject as super admin")
+    elif role == "admin":
+        if subject.get("origin_role") != "admin":
+            raise HTTPException(status_code=403, detail="Cannot remove a super admin subject")
+        if subject.get("manager_id") is not None:
+            raise HTTPException(status_code=403, detail="Cannot remove a manager-owned subject")
+    elif role == "manager":
+        if subject.get("manager_id") is None or str(subject.get("manager_id")) != str(user_id):
+            raise HTTPException(status_code=403, detail="You can only remove your own subjects")
+    else:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if board_name:
+        # Only delete books that belong to this specific board and that the caller owns
+        if role == "super_admin":
+            book_filter = "AND tenant_id IS NULL"
+            book_params: list = [class_id, subject_id, board_name]
+        elif role == "manager":
+            book_filter = "AND manager_id = $4::uuid"
+            book_params = [class_id, subject_id, board_name, user_id]
+        else:
+            book_filter = "AND tenant_id = $4::uuid AND source_id IS NULL AND manager_id IS NULL"
+            book_params = [class_id, subject_id, board_name, tenant_id]
+        await execute_write(
+            f"DELETE FROM library_books WHERE class_id = $1 AND subject_id = $2 AND LOWER(board_name) = LOWER($3) {book_filter}",
+            *book_params,
+        )
+        remaining = await execute_one(
+            "SELECT id FROM library_books WHERE class_id = $1 AND subject_id = $2 LIMIT 1",
+            class_id, subject_id,
+        )
+        if not remaining:
+            await execute_write(
+                "DELETE FROM library_class_subjects WHERE class_id = $1 AND subject_id = $2",
+                class_id, subject_id,
+            )
+    else:
+        # Delete only books the caller owns for this class+subject
+        if role == "super_admin":
+            await execute_write(
+                "DELETE FROM library_books WHERE class_id = $1 AND subject_id = $2 AND tenant_id IS NULL",
+                class_id, subject_id,
+            )
+        elif role == "manager":
+            await execute_write(
+                "DELETE FROM library_books WHERE class_id = $1 AND subject_id = $2 AND manager_id = $3::uuid",
+                class_id, subject_id, user_id,
+            )
+        else:
+            await execute_write(
+                "DELETE FROM library_books WHERE class_id = $1 AND subject_id = $2 AND tenant_id = $3::uuid AND source_id IS NULL AND manager_id IS NULL",
+                class_id, subject_id, tenant_id,
+            )
+        await execute_write(
+            "DELETE FROM library_class_subjects WHERE class_id = $1 AND subject_id = $2",
+            class_id, subject_id,
+        )
     return {"message": "Subject removed from class"}
 
 
@@ -1610,18 +1825,42 @@ async def get_book_details(
 
 @router.delete("/library/books/{book_id}")
 async def delete_book(book_id: str, current_user: dict = Depends(get_user_from_token)):
-    """Delete a book — super admin deletes master items; admin/manager deletes their tenant's items."""
+    """Delete a book — strict ownership:
+    - super_admin: only master books (tenant_id IS NULL), cascade deletes tenant copies
+    - admin: only books they created (tenant matches AND source_id IS NULL AND manager_id IS NULL)
+    - manager: only their own books (manager_id = their id)
+    """
     user_role = current_user.get("role", "")
     tenant_id = current_user.get("tenant_id")
-    book = await execute_one("SELECT id, tenant_id FROM library_books WHERE id = $1::uuid", book_id)
+    user_id = current_user.get("user_id") or current_user.get("id")
+
+    book = await execute_one(
+        "SELECT id, tenant_id, source_id, manager_id FROM library_books WHERE id = $1::uuid",
+        book_id,
+    )
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
+
     if user_role == "super_admin":
         if book["tenant_id"] is not None:
             raise HTTPException(status_code=403, detail="Super admin can only delete master library books")
-    else:
-        if str(book["tenant_id"] or "") != str(tenant_id or ""):
+    elif user_role == "admin":
+        if str(book.get("tenant_id") or "") != str(tenant_id or ""):
             raise HTTPException(status_code=403, detail="You can only delete your school's books")
+        if book.get("source_id") is not None:
+            raise HTTPException(status_code=403, detail="Cannot delete a book synced from super admin")
+        if book.get("manager_id") is not None:
+            raise HTTPException(status_code=403, detail="Cannot delete a manager-owned book")
+    elif user_role == "manager":
+        if str(book.get("tenant_id") or "") != str(tenant_id or ""):
+            raise HTTPException(status_code=403, detail="You can only delete your school's books")
+        if book.get("manager_id") is None or str(book.get("manager_id")) != str(user_id):
+            raise HTTPException(status_code=403, detail="You can only delete your own books")
+    else:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if user_role == "super_admin":
+        await execute_write("DELETE FROM library_books WHERE source_id = $1::uuid", book_id)
     await execute_write("DELETE FROM library_books WHERE id = $1::uuid", book_id)
     return {"message": "Book deleted"}
 

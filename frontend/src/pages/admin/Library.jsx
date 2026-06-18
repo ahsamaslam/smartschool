@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 import { PageSpinner } from "../../components/common/Spinner";
 import Button from "../../components/common/Button";
 import Modal from "../../components/common/Modal";
@@ -555,6 +556,9 @@ function ClassesView({ onSelectClass }) {
 // ============================================
 
 function SubjectsView({ classData, onSelectSubject, onBack }) {
+  const { user } = useAuth();
+  const userRole = user?.role || "";
+  const userId = user?.id || "";
   const [subjects, setSubjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -562,6 +566,14 @@ function SubjectsView({ classData, onSelectSubject, onBack }) {
   const [subjectForm, setSubjectForm] = useState({ name: "", description: "" });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  const canDeleteSubject = (subject) => {
+    if (userRole === "super_admin") return !subject.tenant_id;
+    if (userRole === "admin")
+      return subject.origin_role === "admin" && !subject.source_id && !subject.manager_id;
+    if (userRole === "manager") return subject.manager_id === userId;
+    return false;
+  };
 
   const loadData = useCallback(async () => {
     if (!classData?.id) return;
@@ -681,12 +693,14 @@ function SubjectsView({ classData, onSelectSubject, onBack }) {
                       </p>
                     )}
                   </div>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setShowDeleteModal(subject); }}
-                    className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
-                  >
-                    <TrashIcon className="h-4 w-4" />
-                  </button>
+                  {canDeleteSubject(subject) && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setShowDeleteModal(subject); }}
+                      className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
                 <div className="text-xs text-gray-500 pt-3 border-t border-gray-100">
                   <span>{subject.book_count || 0} book{subject.book_count !== 1 ? 's' : ''}</span>
@@ -774,10 +788,21 @@ function SubjectsView({ classData, onSelectSubject, onBack }) {
 
 function BooksView({ classData, subjectData, onSelectBook, onBack }) {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const userRole = user?.role || "";
+  const userId = user?.id || "";
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(null);
+
+  const canDeleteBook = (book) => {
+    if (userRole === "super_admin") return !book.tenant_id;
+    if (userRole === "admin")
+      return book.tenant_id && !book.source_id && !book.manager_id;
+    if (userRole === "manager") return book.manager_id === userId;
+    return false;
+  };
   const [pdfTab, setPdfTab] = useState("url"); // "url" | "upload"
   const [pdfFile, setPdfFile] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -918,12 +943,14 @@ function BooksView({ classData, subjectData, onSelectBook, onBack }) {
                   )}
                 </div>
               </div>
-              <button
-                onClick={(e) => { e.stopPropagation(); setShowDeleteModal(book); }}
-                className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
-              >
-                <TrashIcon className="h-4 w-4" />
-              </button>
+              {canDeleteBook(book) && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowDeleteModal(book); }}
+                  className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
+                >
+                  <TrashIcon className="h-4 w-4" />
+                </button>
+              )}
             </div>
           </div>
         ))}

@@ -6,6 +6,7 @@ import Modal from "../../components/common/Modal";
 import Button from "../../components/common/Button";
 import Input from "../../components/common/Input";
 import toast from "react-hot-toast";
+import { useAuth } from "../../context/AuthContext";
 import {
   BookOpenIcon,
   PlusIcon,
@@ -14,10 +15,35 @@ import {
   MagnifyingGlassIcon,
 } from "@heroicons/react/24/outline";
 
+function OriginBadge({ subject, userRole }) {
+  const origin = subject.origin_role;
+  if (!origin) return null;
+  if (origin === "super_admin")
+    return <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 whitespace-nowrap">Super Admin</span>;
+  if (origin === "admin")
+    return userRole === "admin"
+      ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 whitespace-nowrap">You Created</span>
+      : <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 whitespace-nowrap">Admin Created</span>;
+  if (origin === "manager")
+    return <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 whitespace-nowrap">You Created</span>;
+  return null;
+}
+
 export default function BoardSubjects() {
   const { boardId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const userRole = user?.role || "";
+  const userId = user?.id || "";
+
+  const canUnlink = (subject) => {
+    if (userRole === "super_admin") return !subject.tenant_id;
+    if (userRole === "admin")
+      return subject.origin_role === "admin" && !subject.source_id && !subject.manager_id;
+    if (userRole === "manager") return subject.manager_id === userId;
+    return false;
+  };
 
   const [board, setBoard] = useState(
     location.state?.board || null
@@ -33,6 +59,8 @@ export default function BoardSubjects() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [subjectForm, setSubjectForm] = useState({ name: "", description: "" });
   const [saving, setSaving] = useState(false);
+  const [allSubjects, setAllSubjects] = useState([]);
+  const [suggestions, setSuggestions] = useState([]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -61,45 +89,98 @@ export default function BoardSubjects() {
   }, [loadData]);
 
 
-  const handleCreate = async (e) => {
-    e.preventDefault();
-    if (!subjectForm.name.trim()) return toast.error("Subject name is required.");
+  const openAddModal = async () => {
+    setSubjectForm({ name: "", description: "" });
+    setSuggestions([]);
+    setShowCreateModal(true);
+    try {
+      const res = await libraryService.getAllSubjects();
+      const all = res?.data?.data || res?.data || [];
+      setAllSubjects(Array.isArray(all) ? all : []);
+    } catch {
+      setAllSubjects([]);
+    }
+  };
+
+  const handleNameChange = (value) => {
+    setSubjectForm((f) => ({ ...f, name: value }));
+    if (!value.trim()) { setSuggestions([]); return; }
+    const lower = value.trim().toLowerCase();
+    const linkedIds = new Set(subjects.map((s) => s.id));
+    const matches = allSubjects.filter(
+      (s) => s.name.toLowerCase().includes(lower) && !linkedIds.has(s.id)
+    ).slice(0, 5);
+    setSuggestions(matches);
+  };
+
+  const linkExisting = async (subject) => {
     setSaving(true);
     try {
-      // Always fetch all subjects first to check if it already exists
-      const allRes = await libraryService.getAllSubjects();
-      const all = allRes?.data?.data || allRes?.data || [];
-      const trimmedName = subjectForm.name.trim().toLowerCase();
-      let existing = all.find((s) => s.name.toLowerCase() === trimmedName);
+      const currentIds = subjects.map((s) => s.id);
+      await libraryService.setBoardSubjects(boardId, {
+        subject_ids: [...currentIds, subject.id],
+      });
+      toast.success(`"${subject.name}" added to ${board?.name || "board"}.`);
+      setSubjectForm({ name: "", description: "" });
+      setSuggestions([]);
+      setShowCreateModal(false);
+      loadData();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to link subject.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
-      if (!existing) {
-        // Subject doesn't exist yet — create it
-        await libraryService.createSubject({
-          name: subjectForm.name.trim(),
+  const handleCreate = async (e) => {
+    e.preventDefault();
+    const trimmedName = subjectForm.name.trim();
+    if (!trimmedName) return toast.error("Subject name is required.");
+
+    // If an exact match exists in suggestions, link it instead of creating
+    const exact = allSubjects.find(
+      (s) => s.name.toLowerCase() === trimmedName.toLowerCase() && !subjects.some((ls) => ls.id === s.id)
+    );
+    if (exact && !exact.source_id) {
+      // Exact match that the user owns (no source_id) or is a master → link it
+      return linkExisting(exact);
+    }
+
+    setSaving(true);
+    try {
+      let subjectIdToLink;
+      try {
+        const res = await libraryService.createSubject({
+          name: trimmedName,
           description: subjectForm.description.trim() || null,
         });
-        // Re-fetch to get the new subject's id
-        const refetch = await libraryService.getAllSubjects();
-        const refetchAll = refetch?.data?.data || refetch?.data || [];
-        existing = refetchAll.find((s) => s.name.toLowerCase() === trimmedName);
-      }
-
-      if (existing) {
-        // Link it to this board (merge with already-linked subjects)
-        const currentIds = subjects.map((s) => s.id);
-        if (!currentIds.includes(existing.id)) {
-          await libraryService.setBoardSubjects(boardId, {
-            subject_ids: [...currentIds, existing.id],
-          });
+        subjectIdToLink = res?.data?.data?.id;
+      } catch (err) {
+        if (err?.response?.status === 400 && err?.response?.data?.detail === "Subject already exists") {
+          const own = allSubjects.find(
+            (s) => s.name.toLowerCase() === trimmedName.toLowerCase() && !s.source_id
+          );
+          if (own) subjectIdToLink = own.id;
+          else throw err;
         } else {
-          toast("This subject is already linked to this board.");
-          setShowCreateModal(false);
-          return;
+          throw err;
         }
       }
 
-      toast.success(`"${subjectForm.name.trim()}" linked to ${board?.name || "board"}.`);
+      if (subjectIdToLink) {
+        const currentIds = subjects.map((s) => s.id);
+        if (!currentIds.includes(subjectIdToLink)) {
+          await libraryService.setBoardSubjects(boardId, {
+            subject_ids: [...currentIds, subjectIdToLink],
+          });
+          toast.success(`"${trimmedName}" added to ${board?.name || "board"}.`);
+        } else {
+          toast("This subject is already linked to this board.");
+        }
+      }
+
       setSubjectForm({ name: "", description: "" });
+      setSuggestions([]);
       setShowCreateModal(false);
       loadData();
     } catch (err) {
@@ -171,7 +252,7 @@ export default function BoardSubjects() {
           </div>
         </div>
         <button
-          onClick={() => { setSubjectForm({ name: "", description: "" }); setShowCreateModal(true); }}
+          onClick={openAddModal}
           className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors shadow-sm flex-shrink-0"
         >
           <PlusIcon className="h-4 w-4" />
@@ -204,7 +285,7 @@ export default function BoardSubjects() {
           </p>
           {subjects.length === 0 && (
             <button
-              onClick={() => setShowCreateModal(true)}
+              onClick={openAddModal}
               className="mt-4 text-sm text-indigo-600 hover:underline"
             >
               Add the first subject →
@@ -226,20 +307,25 @@ export default function BoardSubjects() {
                   <BookOpenIcon className="h-5 w-5 text-blue-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-gray-900 truncate">{subject.name}</p>
+                  <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                    <p className="font-semibold text-gray-900 truncate">{subject.name}</p>
+                    <OriginBadge subject={subject} userRole={userRole} />
+                  </div>
                   {subject.description && (
-                    <p className="text-xs text-gray-400 mt-0.5 line-clamp-2">
+                    <p className="text-xs text-gray-400 line-clamp-2">
                       {subject.description}
                     </p>
                   )}
                 </div>
-                <button
-                  onClick={() => handleUnlink(subject)}
-                  className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
-                  title="Remove from board"
-                >
-                  <TrashIcon className="h-4 w-4" />
-                </button>
+                {canUnlink(subject) && (
+                  <button
+                    onClick={() => handleUnlink(subject)}
+                    className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
+                    title="Remove from board"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -310,13 +396,34 @@ export default function BoardSubjects() {
         title={`Add Subject — ${board?.name || "Board"}`}
       >
         <form onSubmit={handleCreate} className="space-y-4">
-          <Input
-            label="Subject Name *"
-            value={subjectForm.name}
-            onChange={(e) => setSubjectForm((f) => ({ ...f, name: e.target.value }))}
-            placeholder="e.g., Biology, Computer Science, Urdu"
-            required
-          />
+          <div>
+            <Input
+              label="Subject Name *"
+              value={subjectForm.name}
+              onChange={(e) => handleNameChange(e.target.value)}
+              placeholder="e.g., Biology, Computer Science, Urdu"
+              autoComplete="off"
+              required
+            />
+            {suggestions.length > 0 && (
+              <div className="mt-1 border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                <p className="text-[10px] text-gray-400 px-3 pt-2 pb-1 font-medium uppercase tracking-wide">
+                  Existing — click to add to this board
+                </p>
+                {suggestions.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => linkExisting(s)}
+                    className="w-full flex items-center justify-between px-3 py-2 hover:bg-indigo-50 text-left text-sm transition-colors"
+                  >
+                    <span className="text-gray-800 font-medium">{s.name}</span>
+                    <OriginBadge subject={s} userRole={userRole} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Description (optional)
